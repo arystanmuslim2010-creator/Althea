@@ -1,0 +1,17 @@
+#!/bin/sh
+# Block commit if staged files contain API keys. Hook is in repo; enable with:
+#   git config core.hooksPath .githooks
+set -e
+ROOT="$(git rev-parse --show-toplevel)"
+SCRIPT="$ROOT/scripts/pre-commit-check-secrets.py"
+
+if command -v py >/dev/null 2>&1; then
+  py -3 "$SCRIPT" || exit 1
+elif command -v python3 >/dev/null 2>&1; then
+  python3 "$SCRIPT" || exit 1
+elif command -v python >/dev/null 2>&1; then
+  python "$SCRIPT" || exit 1
+else
+  echo "No Python interpreter found for pre-commit check." >&2
+  exit 1
+fi

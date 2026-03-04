@@ -1,0 +1,8 @@
+# Field mapping: source column -> canonical name (optional; ingestion_service has built-in aliases)
+# Leave empty or omit to use built-in aliases only.
+mapping: {}
+# Idempotency: dedupe by (alert_id + tx_ref) per run and optionally global
+idempotency:
+  dedupe_per_run: true
+  dedupe_global: false
+  key_fields: ["alert_id", "tx_ref"]

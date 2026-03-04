@@ -1,0 +1,4 @@
+alert_id,entity_id,user_id,created_at,source_system,typology,vendor_risk_score,amount,country,segment,channel,vendor_metadata
+BA-001,ENT-001,U001,2024-01-15T10:00:00Z,CORE_AML,structuring,72,15000,US,retail,wire,"{}"
+BA-002,ENT-002,U002,2024-01-15T11:30:00Z,CORE_AML,rapid_withdraw,,8500,GB,corporate,atm,"{}"
+BA-003,ENT-003,U003,2024-01-16T09:00:00Z,VENDOR_X,dormant,45,2000,DE,retail,pos,"{}"

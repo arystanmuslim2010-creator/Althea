@@ -1,0 +1,76 @@
+# ML training configuration for AML alert governance overlay.
+# Used by backend/src/ml/labels.py, train_model.py, etc.
+
+random_seed: 42
+
+# Time-based split (required: no random split)
+time_split:
+  time_column: "alert_created_at"  # or alert_date, created_at, timestamp
+  time_column_candidates:
+    - alert_created_at
+    - alert_date
+    - created_at
+    - timestamp
+    - event_time
+  validation_window_months: 1
+  test_window_months: 1
+
+# Label mapping: disposition/outcome -> y_sar, y_escalated
+labels:
+  disposition_column: null  # auto-detect from candidates
+  sar_values:
+    - SAR
+    - STR
+    - CONFIRMED
+    - CONFIRMED_TP
+    - ESCALATED_CONFIRMED
+    - Yes
+    - true
+    - 1
+    - TP
+  escalated_values:
+    - ESCALATED
+    - IN_REVIEW
+    - PENDING
+    - OPEN
+    - ASSIGNED
+  negative_values:
+    - FP
+    - CLOSED_FP
+    - FALSE_POSITIVE
+    - No
+    - false
+    - 0
+
+# Two-stage training (optional)
+two_stage:
+  stage1_target: y_escalated
+  stage2_target: y_sar
+  stage2_train_on_escalated_only: true
+
+# Class imbalance
+imbalance:
+  use_scale_pos_weight: true
+
+# Model (LightGBM preferred)
+model:
+  type: lightgbm
+  monotonic_constraints: {}  # feature_name -> 1 (positive) or -1 (negative) or 0 (none)
+  # Example: { "source_risk_score": 1, "amount_dev": 1 }
+
+# Calibration (on validation set only)
+calibration:
+  method: isotonic  # or platt
+  fit_on: validation
+
+# Metrics
+metrics:
+  primary: pr_auc
+  tp_retention_target: 0.98
+  suppression_rates: [0.1, 0.2, 0.3, 0.5]
+
+# Artifacts
+artifacts:
+  dir: backend/artifacts/models
+  save_feature_list: true
+  feature_version_prefix: "v1"

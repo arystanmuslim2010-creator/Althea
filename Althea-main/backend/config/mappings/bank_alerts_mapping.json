@@ -1,0 +1,29 @@
+{
+  "description": "Map common vendor CSV columns to canonical overlay fields for Bank Alerts (Overlay Mode)",
+  "required_columns": ["alert_id", "entity_id", "created_at", "source_system", "typology"],
+  "optional_columns": ["vendor_risk_score", "amount", "country", "vendor_metadata", "user_id", "segment", "channel"],
+  "column_mapping": {
+    "alert_id": ["alert_id", "alertid", "id", "alert_ref", "case_id"],
+    "entity_id": ["entity_id", "entityid", "user_id", "userid", "customer_id", "account_id"],
+    "user_id": ["user_id", "userid", "customer_id", "entity_id"],
+    "created_at": ["created_at", "timestamp_utc", "timestamp", "event_time", "tx_time", "datetime"],
+    "source_system": ["source_system", "sourcesystem", "origin", "vendor"],
+    "typology": ["typology", "alert_type", "scenario", "rule_name", "scenario_name"],
+    "vendor_risk_score": ["vendor_risk_score", "risk_score", "vendor_score", "external_score"],
+    "amount": ["amount", "transaction_amount", "txn_amount", "amt", "volume"],
+    "country": ["country", "country_code", "jurisdiction", "residence_country"],
+    "vendor_metadata": ["vendor_metadata", "metadata", "extra_data"],
+    "segment": ["segment", "customer_segment", "cust_segment"],
+    "channel": ["channel", "tx_channel", "transaction_channel"]
+  },
+  "defaults": {
+    "source_system": "external_csv",
+    "typology": "bank_alert",
+    "vendor_risk_score": null,
+    "amount": 0,
+    "country": "XX",
+    "vendor_metadata": "{}",
+    "segment": "unknown",
+    "channel": "unknown"
+  }
+}

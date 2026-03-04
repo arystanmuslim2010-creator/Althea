@@ -1,0 +1,13 @@
+{
+  "as_of_date": "2025-01-01",
+  "records": [
+    {"country_code": "AE", "risk_level": "HIGH"},
+    {"country_code": "TR", "risk_level": "HIGH"},
+    {"country_code": "PA", "risk_level": "CRITICAL"},
+    {"country_code": "CY", "risk_level": "HIGH"},
+    {"country_code": "RU", "risk_level": "CRITICAL"},
+    {"country_code": "IR", "risk_level": "CRITICAL"},
+    {"country_code": "KP", "risk_level": "CRITICAL"},
+    {"country_code": "SY", "risk_level": "CRITICAL"}
+  ]
+}
