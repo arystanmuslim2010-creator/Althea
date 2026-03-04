@@ -38,6 +38,7 @@ def main() -> int:
 
     with open(config_path, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
+    col = (cfg.get("labels", {}) or {}).get("disposition_column") or "disposition"
 
     data_path = args.data
     if not data_path or not Path(data_path).exists():
@@ -194,11 +195,12 @@ def main() -> int:
 
     # Artifacts
     out_dir = args.out_dir or str(_backend / "artifacts" / "models" / pd.Timestamp.now().strftime("%Y%m%d_%H%M%S"))
-    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    out_dir_path = Path(out_dir)
+    out_dir_path.mkdir(parents=True, exist_ok=True)
     feature_version = cfg.get("artifacts", {}).get("feature_version_prefix", "v1") + "_time_safe"
     save_artifact(
         model,
-        out_dir,
+        out_dir_path,
         feature_names=available,
         feature_version=feature_version,
         monotonic_constraints=monotonic,
@@ -214,8 +216,78 @@ def main() -> int:
     # Save calibrator (pickle) for serving
     if calibrator is not None:
         import pickle
-        with open(Path(out_dir) / "calibrator.pkl", "wb") as f:
+        with open(out_dir_path / "calibrator.pkl", "wb") as f:
             pickle.dump(calibrator, f)
+
+    # -- Two-stage cascade (optional, controlled by ml.yaml two_stage config) --
+    two_stage_cfg = cfg.get("two_stage", {})
+    if two_stage_cfg.get("enabled", False):
+        print("\n-- Two-stage cascade training --")
+
+        # Stage 1: Escalation model (trained on all data)
+        from src.ml.labels import compute_labels
+
+        df_labeled, _ = compute_labels(df, config_path=config_path, disposition_column=col)
+        y_escalated_train = (
+            df_labeled.loc[train_df.index, "y_escalated"] if "y_escalated" in df_labeled.columns else None
+        )
+
+        if y_escalated_train is not None and y_escalated_train.nunique() > 1:
+            from src.ml.imbalance import compute_scale_pos_weight
+
+            spw_stage1 = compute_scale_pos_weight(y_escalated_train)
+            model_stage1 = train_lgbm(
+                X_train,
+                y_escalated_train,
+                X_val=X_val,
+                y_val=df_labeled.loc[val_df.index, "y_escalated"] if len(val_df) > 0 else None,
+                feature_names=available,
+                scale_pos_weight=spw_stage1,
+                random_state=seed,
+            )
+            print(
+                f"  Stage 1 (escalation): scale_pos_weight={spw_stage1:.2f}, "
+                f"pos_rate={y_escalated_train.mean():.3f}"
+            )
+
+            # Stage 2: SAR model - trained only on escalated alerts
+            if two_stage_cfg.get("stage2_train_on_escalated_only", True):
+                escalated_mask_train = y_escalated_train >= 0.5
+                if escalated_mask_train.sum() >= 50:
+                    X_train_s2 = X_train.loc[escalated_mask_train]
+                    y_sar_train_s2 = df_labeled.loc[train_df.index[escalated_mask_train], "y_sar"]
+                    spw_stage2 = compute_scale_pos_weight(y_sar_train_s2)
+                    model_stage2 = train_lgbm(
+                        X_train_s2,
+                        y_sar_train_s2,
+                        feature_names=available,
+                        scale_pos_weight=spw_stage2,
+                        random_state=seed,
+                    )
+                    print(
+                        f"  Stage 2 (SAR on escalated): n_train={escalated_mask_train.sum()}, "
+                        f"scale_pos_weight={spw_stage2:.2f}"
+                    )
+                    # Save stage 2 artifact
+                    import joblib
+
+                    joblib.dump(model_stage2, out_dir_path / "model_stage2_sar.joblib")
+                    print(f"  Stage 2 model saved to: {out_dir_path / 'model_stage2_sar.joblib'}")
+                else:
+                    print(
+                        f"  Stage 2 skipped: only {escalated_mask_train.sum()} escalated "
+                        f"training samples (need >= 50)"
+                    )
+
+            # Save stage 1 artifact
+            import joblib
+
+            joblib.dump(model_stage1, out_dir_path / "model_stage1_escalation.joblib")
+            print(f"  Stage 1 model saved to: {out_dir_path / 'model_stage1_escalation.joblib'}")
+        else:
+            print("  Stage 1 skipped: y_escalated not available or single-class")
+    else:
+        print("\nTwo-stage cascade disabled (set two_stage.enabled: true in ml.yaml to enable)")
     print("\nArtifacts saved to:", out_dir)
     return 0
 

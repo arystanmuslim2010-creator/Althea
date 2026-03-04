@@ -1,100 +1,143 @@
-# Project Overview
+﻿# ALTHEA - AML Alert Prioritization Platform
 
-This is a full-stack web application built with Next.js 14 (App Router) and TypeScript. Users can create accounts, manage data through a dashboard, and interact with a backend API. The system handles authentication, data storage, and user interactions through a modern web interface.
+## Project Overview
 
-The architecture is modular: UI components, business logic, and API functionality are intentionally separated for maintainability and scalability.
+ALTHEA is a B2B enterprise platform for banks and financial institutions. It sits between existing AML detection systems and human compliance analysts, prioritizing which alerts are most likely to lead to a SAR (Suspicious Activity Report) filing. The goal is to reduce manual review volume while ensuring SAR-worthy cases always reach analysts.
+
+**Key principle:** ALTHEA does not detect crime. It optimizes the order in which humans investigate alerts that existing detection systems have already flagged.
 
 ---
 
-# Tech Stack
+## Architecture
 
-- **Language:** TypeScript (strict typing required everywhere)
-- **Framework:** Next.js 14 — App Router only (no Pages Router)
-- **Database:** PostgreSQL via Prisma ORM
-- **Authentication:** NextAuth.js
+```
+AML Detection System -> [ALTHEA] -> Analyst Queue
+                           |
+                    ingest -> normalize -> enrich -> rules -> score -> governance -> explain -> persist -> metrics
+```
+
+### Backend (`backend/`)
+- **Language:** Python 3.11+
+- **Framework:** FastAPI with uvicorn
+- **ML Stack:** pandas, numpy, scikit-learn, LightGBM, SHAP
+- **Storage:** SQLite (development) / PostgreSQL (production)
+- **Config:** `backend/src/config.py` - single source of truth for all constants
+
+### Frontend (`frontend/`)
+- **Framework:** React 18 + Vite
 - **Styling:** Tailwind CSS
-- **State Management:** React Context and/or Zustand
-- **Key Libraries:**
-  - `axios` — all HTTP requests
-  - `zod` — schema validation for all external data
-  - `prisma` — database ORM and migrations
-  - `next-auth` — authentication sessions and providers
-  - `react-hook-form` — all form handling
+- **API:** `frontend/src/services/api.js`
 
 ---
 
-# Project Structure
+## Backend Module Map
 
-/src
-  /app          → Next.js App Router pages and layouts
-  /components   → Reusable UI components (buttons, forms, modals, layout)
-  /api          → Backend API route handlers
-  /lib          → Shared utilities, helpers, API client config
-  /services     → Business logic and service layer
-  /hooks        → Custom React hooks
-  /types        → TypeScript types and interfaces
-
-/prisma         → Prisma schema and database migrations
-/public         → Static assets (images, icons)
-
----
-
-# Coding Conventions
-
-### General
-- TypeScript everywhere — type all functions, components, props, and return values
-- Use async/await only — never .then() or .catch() chains
-- Use camelCase for variables and functions
-- Use PascalCase for React components and TypeScript interfaces/types
-
-### React & Components
-- Functional components only — no class components
-- Keep components small and single-purpose
-- No heavy logic inside components — move it to /src/services or /src/hooks
-- Validate form inputs with react-hook-form + zod resolver
-
-### Data & API
-- All API requests must go through the central client at /src/lib/api.ts — never use raw axios elsewhere
-- Validate all external/untrusted data with Zod schemas before using it
-- Define shared types in /src/types — never inline complex types in components
-
-### Business Logic
-- Service layer lives in /src/services — UI components should call services, not implement logic
-- Keep API route handlers thin — delegate to services for processing
+| Module | Purpose |
+|--------|---------|
+| `src/pipeline/` | Stage-based orchestration (ingest -> persist) |
+| `src/rules/` | Modular AML typology rules (structuring, dormant, flow_through, rapid_withdraw, high_risk_country, low_buyer_diversity) |
+| `src/rule_engine.py` | Canonical rule orchestrator - imports from `src/rules/` |
+| `src/risk_engine.py` | Log-odds meta-risk scoring (ML prob + segment + country + rule severity priors) |
+| `src/risk_governance.py` | Distribution control, uncertainty penalty, baseline confidence |
+| `src/scoring.py` | Full ML training + inference pipeline (behavioral/structural/temporal models) |
+| `src/features.py` | Feature engineering (behavioral baselines, winsorization, one-hot segment) |
+| `src/ml/` | LightGBM training, time-based split, calibration, metrics, active learning |
+| `src/evaluation_service.py` | Production-grade metrics (analyst disposition labels, PR-AUC, temporal holdout) |
+| `src/suppression.py` | Vectorized alert suppression (signature dedup, per-user daily cap) |
+| `src/hard_constraints.py` | Sanctions / mandatory overrides (never suppressed) |
+| `src/governance/` | Performance monitoring, PSI drift detection |
+| `src/storage.py` | SQLite/Postgres abstraction |
+| `src/ai_summary.py` | AI narrative generation (Gemini) for case summaries |
 
 ---
 
-# Critical Rules (Never Break These)
+## ML Pipeline
 
-- Never modify /prisma/schema.prisma without immediately running: npx prisma migrate dev
-- Never commit .env or any file containing secrets or API keys
-- Never bypass /src/lib/api.ts for API requests — all calls go through the central client
-- Never put business logic directly in React components — use /src/services or /src/hooks
-- Never use .then() — always use async/await
-- Auth is fully managed by NextAuth.js — do not build custom auth logic
+### Training (scripts/train_model.py)
+1. Time-based split: train -> validation -> test (calendar month windows, never random)
+2. Labels: `compute_labels()` maps analyst dispositions to `y_sar` and `y_escalated`
+3. Model: LightGBM with monotonic constraints and imbalance weighting
+4. Calibration: Isotonic regression fitted on **validation set only**
+5. Metrics: PR-AUC (primary), TP retention @ suppression rate, suppression @ 98% TP retention
+6. Config: `backend/config/ml.yaml`
 
----
-
-# Data Flow
-
-User Interaction (UI Component)
-  → Custom Hook (/src/hooks)
-    → Service Layer (/src/services)
-      → API Client (/src/lib/api.ts)
-        → API Route Handler (/src/api)
-          → Prisma ORM (/prisma)
-            → PostgreSQL Database
-
-Authentication flows through NextAuth.js session management. All incoming data is validated with Zod before entering the service layer.
+### Inference
+`scoring.py -> risk_engine.compute_risk() -> risk_governance.apply_risk_governance()`
 
 ---
 
-# Grounding Instruction (Run at Start of Every Session)
+## Critical Rules (Never Break These)
 
-Before doing anything, read this CLAUDE.md file and the relevant files in /src.
-Then summarize:
-1. The overall architecture and how data flows through the application
-2. Which modules are involved in the task at hand
-3. Any constraints or rules that apply to this task
+- **All config values come from `src/config.py`** - never hardcode weights, thresholds, or flags
+- **Risk weights must sum to 1.0** - enforced by assertion in config.py
+- **No debug file writes in production code** - use `logging.getLogger(__name__)` only
+- **No random train/test splits** - always use `src/ml/split.py` time-based split
+- **Evaluation labels** - never use `synthetic_true_suspicious` as ground truth for production metrics
+- **Hard constraints override everything** - sanctions hits must never be suppressed
+- **Suppression is vectorized** - never use Python for-loops over user/signature combinations
 
-Do not write any code until you have confirmed your understanding.
+---
+
+## Key Config Constants
+
+```python
+# src/config.py - canonical values
+RISK_RULE_WEIGHT        = 0.25
+RISK_BEHAVIORAL_WEIGHT  = 0.35
+RISK_STRUCTURAL_WEIGHT  = 0.15
+RISK_TEMPORAL_ML_WEIGHT = 0.25
+# Sum must equal 1.0 (enforced by assertion)
+
+OVERLAY_MODE = True   # Run as post-detection overlay (no raw transaction ML)
+RISK_BAND_T1 = 40     # LOW/MEDIUM threshold
+RISK_BAND_T2 = 70     # MEDIUM/HIGH threshold
+RISK_BAND_T3 = 90     # HIGH/CRITICAL threshold
+```
+
+---
+
+## Running the System
+
+```bash
+# Backend
+cd backend
+pip install -r requirements.txt
+uvicorn main:app --reload
+
+# Train ML model
+python scripts/train_model.py --data data/bank_alerts_1000.csv
+
+# Run tests
+python -m pytest tests/ -v
+
+# Frontend
+cd frontend
+npm install && npm run dev
+```
+
+---
+
+## Testing
+
+```bash
+# All tests
+cd backend && python -m pytest tests/ -v
+
+# Specific suites
+python -m pytest tests/test_rules_module.py -v          # Rule engine
+python -m pytest tests/test_technical_review_fixes.py -v # Pipeline regression
+python -m pytest tests/ml/ -v                            # ML pipeline
+```
+
+---
+
+## Grounding Instruction
+
+Before writing any code, read:
+1. `backend/src/config.py` - all constants and their purpose
+2. The relevant module(s) listed in the module map above
+3. The existing tests in `backend/tests/` for the area you are changing
+
+Do not modify `scoring.py` or `features.py` feature columns without also updating the test suite.
+Do not add new rule logic to `services/rule_engine.py` - add it to `src/rules/` instead.
+Do not add new weight constants to config.py without updating the sum assertion.

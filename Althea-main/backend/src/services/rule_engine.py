@@ -1,93 +1,52 @@
-"""AML Typology Rule Engine for deterministic risk detection."""
+﻿"""AML Typology Rule Engine - delegates to canonical src/rule_engine.
+
+This class is a thin wrapper for backward compatibility.
+All rule logic lives in src/rules/ (modular) and is orchestrated by src/rule_engine.py.
+Do not add new rule logic here - add it to src/rules/ instead.
+"""
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 from .. import config
+from .. import rule_engine as _canonical_rule_engine
 
 
 class RuleEngine:
-    """Applies AML typology rules to detect suspicious patterns."""
-    
-    def __init__(self, cfg):
+    """Thin wrapper around the canonical AML rule engine for backward compatibility.
+
+    Delegates all rule execution to src/rule_engine.run_all_rules() which orchestrates
+    the modular rules in src/rules/ (structuring, dormant, flow_through, rapid_withdraw,
+    high_risk_country, low_buyer_diversity).
+    """
+
+    def __init__(self, cfg=None):
         """
-        Initialize Rule Engine.
-        
         Args:
-            cfg: Config object with rule parameters
+            cfg: Config object (unused - canonical engine reads from src/config directly).
+                 Kept for backward-compatible call signatures.
         """
-        self.cfg = cfg
-    
+        self.cfg = cfg or config
+
     def apply_rules(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Apply AML typology rules to dataframe.
-        
-        Adds columns:
-        - typology: Detected typology name
-        - rule_score: Rule-based risk score (0-1)
-        - rule_flags: List of triggered rule flags (semicolon-separated)
-        
+        Apply all AML typology rules via the canonical modular rule engine.
+
+        Delegates to rule_engine.run_all_rules() which runs all six modular rules
+        (structuring, dormant, flow_through, rapid_withdraw, high_risk_country,
+        low_buyer_diversity) and produces rules_json, rule_evidence_json,
+        rule_R001_hit..R005_hit, rule_score_total, and rule_{id}_result columns.
+
         Args:
-            df: DataFrame with amount, num_transactions, time_gap columns
-            
+            df: DataFrame with alert data. Required columns depend on rules:
+                - user_id, ts/alert_created_at (all rules)
+                - direction, amount (structuring, flow_through, rapid_withdraw)
+                - country (high_risk_country)
+                - segment, counterparty_id (low_buyer_diversity)
+
         Returns:
-            DataFrame with rule columns added
+            DataFrame with all rule output columns added.
         """
-        df = df.copy()
-        
-        # Ensure required columns exist with safe defaults
-        amount = pd.to_numeric(df.get("amount", 0.0), errors="coerce").fillna(0.0)
-        num_transactions = pd.to_numeric(df.get("num_transactions", 1.0), errors="coerce").fillna(1.0)
-        time_gap = pd.to_numeric(df.get("time_gap", 60.0), errors="coerce").fillna(60.0)
-        
-        # Initialize rule columns
-        df["typology"] = "behavioral_anomaly"
-        df["rule_score"] = 0.4
-        df["rule_flags"] = ""
-        
-        # 1️⃣ STRUCTURING / SMURFING
-        # Trigger if: many transactions, medium size, short time gap
-        cond_smurf = (
-            (num_transactions > num_transactions.quantile(0.85)) &
-            (amount < amount.quantile(0.7)) &
-            (time_gap < time_gap.quantile(0.3))
-        )
-        df.loc[cond_smurf, "typology"] = "smurfing"
-        df.loc[cond_smurf, "rule_score"] = 0.8
-        df.loc[cond_smurf, "rule_flags"] = "smurfing"
-        
-        # 2️⃣ RAPID VELOCITY
-        cond_velocity = time_gap < time_gap.quantile(0.1)
-        # Only apply if not already smurfing (priority order)
-        cond_velocity = cond_velocity & ~cond_smurf
-        df.loc[cond_velocity, "typology"] = "rapid_velocity"
-        df.loc[cond_velocity, "rule_score"] = 0.7
-        df.loc[cond_velocity, "rule_flags"] = df.loc[cond_velocity, "rule_flags"].apply(
-            lambda x: "rapid_velocity" if not x else x + "; rapid_velocity"
-        )
-        
-        # 3️⃣ HIGH AMOUNT OUTLIER
-        cond_amount = amount > amount.quantile(0.98)
-        # Only apply if not already smurfing or rapid_velocity
-        cond_amount = cond_amount & ~cond_smurf & ~cond_velocity
-        df.loc[cond_amount, "typology"] = "high_amount_outlier"
-        df.loc[cond_amount, "rule_score"] = 0.75
-        df.loc[cond_amount, "rule_flags"] = df.loc[cond_amount, "rule_flags"].apply(
-            lambda x: "high_amount_outlier" if not x else x + "; high_amount_outlier"
-        )
-        
-        # 4️⃣ BURST ACTIVITY
-        cond_burst = num_transactions > num_transactions.quantile(0.95)
-        # Only apply if not already matched by higher priority rules
-        cond_burst = cond_burst & ~cond_smurf & ~cond_velocity & ~cond_amount
-        df.loc[cond_burst, "typology"] = "burst_activity"
-        df.loc[cond_burst, "rule_score"] = 0.65
-        df.loc[cond_burst, "rule_flags"] = df.loc[cond_burst, "rule_flags"].apply(
-            lambda x: "burst_activity" if not x else x + "; burst_activity"
-        )
-        
-        # Ensure rule_score is in [0, 1] range
-        df["rule_score"] = df["rule_score"].clip(0.0, 1.0)
-        
+        df = _canonical_rule_engine.run_all_rules(df, self.cfg, policy_params=None)
+        df = _canonical_rule_engine.aggregate_rule_score(df, self.cfg)
         return df

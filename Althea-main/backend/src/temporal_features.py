@@ -346,34 +346,11 @@ def compute_temporal_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]
     Returns:
         Tuple of (DataFrame with temporal features added, list of temporal feature column names)
     """
-    # #region agent log
-    import os, json, time
-    _log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), '.cursor')
-    os.makedirs(_log_dir, exist_ok=True)
-    _log_path = os.path.join(_log_dir, 'debug.log')
-    try:
-        with open(_log_path, 'a', encoding='utf-8') as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"init","hypothesisId":"B","location":"temporal_features.py:333","message":"compute_temporal_features entry","data":{"df_len":len(df),"df_cols":list(df.columns)[:10]},"timestamp":int(time.time()*1000)}) + "\n")
-    except: pass
-    # #endregion
-    
     original_len = len(df)
     df = df.copy()
     
     # Ensure timestamp exists
-    # #region agent log
-    try:
-        with open(_log_path, 'a', encoding='utf-8') as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"init","hypothesisId":"B","location":"temporal_features.py:348","message":"Before ensure_timestamp","data":{},"timestamp":int(time.time()*1000)}) + "\n")
-    except: pass
-    # #endregion
     df = ensure_timestamp(df, time_col="timestamp")
-    # #region agent log
-    try:
-        with open(_log_path, 'a', encoding='utf-8') as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"init","hypothesisId":"B","location":"temporal_features.py:350","message":"After ensure_timestamp","data":{"has_timestamp":"timestamp" in df.columns},"timestamp":int(time.time()*1000)}) + "\n")
-    except: pass
-    # #endregion
     
     # Required columns
     if "user_id" not in df.columns:
@@ -416,27 +393,12 @@ def compute_temporal_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]
     eps = getattr(config, "EPS", 1e-9)
     
     # Process per user (row-based rolling, not time-based for simplicity)
-    # #region agent log
-    try:
-        with open(_log_path, 'a', encoding='utf-8') as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"init","hypothesisId":"B","location":"temporal_features.py:411","message":"Before user loop","data":{"df_sorted_len":len(df_sorted),"unique_users":df_sorted["user_id"].nunique()},"timestamp":int(time.time()*1000)}) + "\n")
-    except: pass
-    # #endregion
-    
     user_count = 0
     for user_id, group in df_sorted.groupby("user_id", sort=False):
         if len(group) == 0:
             continue
         
         user_count += 1
-        if user_count == 1:
-            # #region agent log
-            try:
-                with open(_log_path, 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({"sessionId":"debug-session","runId":"init","hypothesisId":"B","location":"temporal_features.py:424","message":"First user processing","data":{"user_id":str(user_id),"group_len":len(group)},"timestamp":int(time.time()*1000)}) + "\n")
-            except: pass
-            # #endregion
-        
         group = group.sort_values("timestamp").copy()
         orig_indices = group["_orig_index"].values  # Get original DataFrame indices
         
@@ -541,25 +503,11 @@ def compute_temporal_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]
                 df[col] = np.clip(df[col], 0.0, 10.0)
     
     # Validation
-    # #region agent log
-    try:
-        with open(_log_path, 'a', encoding='utf-8') as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"init","hypothesisId":"B","location":"temporal_features.py:497","message":"Before validation","data":{"original_len":original_len,"current_len":len(df),"cols_created":sum(1 for c in temporal_feature_cols if c in df.columns)},"timestamp":int(time.time()*1000)}) + "\n")
-    except: pass
-    # #endregion
-    
     if len(df) != original_len:
         raise ValueError(f"DataFrame length changed: {original_len} -> {len(df)}")
     
     missing_cols = [col for col in temporal_feature_cols if col not in df.columns]
     if missing_cols:
         raise ValueError(f"Temporal feature columns missing: {missing_cols}")
-    
-    # #region agent log
-    try:
-        with open(_log_path, 'a', encoding='utf-8') as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"init","hypothesisId":"B","location":"temporal_features.py:505","message":"compute_temporal_features exit","data":{"temporal_cols_count":len(temporal_feature_cols)},"timestamp":int(time.time()*1000)}) + "\n")
-    except: pass
-    # #endregion
     
     return df, temporal_feature_cols

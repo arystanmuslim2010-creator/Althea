@@ -138,11 +138,18 @@ RISK_BAND_T3: int = 90   # HIGH if score < t3, else CRITICAL
 # SINGLE SOURCE OF TRUTH FOR ALL RISK WEIGHTS.
 # Never hardcode these values anywhere else — always import from this module.
 # =============================================================================
-RISK_RULE_WEIGHT: float = 0.30
-RISK_BEHAVIORAL_WEIGHT: float = 0.40
+RISK_RULE_WEIGHT: float = 0.25
+RISK_BEHAVIORAL_WEIGHT: float = 0.35
 RISK_STRUCTURAL_WEIGHT: float = 0.15
-RISK_TEMPORAL_WEIGHT: float = 0.10
-RISK_META_WEIGHT: float = 0.05
+RISK_TEMPORAL_ML_WEIGHT: float = 0.25
+# Enforce that risk component weights sum to 1.0
+assert abs(
+    RISK_RULE_WEIGHT + RISK_BEHAVIORAL_WEIGHT +
+    RISK_STRUCTURAL_WEIGHT + RISK_TEMPORAL_ML_WEIGHT - 1.0
+) < 0.001, (
+    f"Risk weights must sum to 1.0, got "
+    f"{RISK_RULE_WEIGHT + RISK_BEHAVIORAL_WEIGHT + RISK_STRUCTURAL_WEIGHT + RISK_TEMPORAL_ML_WEIGHT}"
+)
 RISK_SIGMOID_TEMP: float = 1.6
 RISK_WINSOR_PCT: float = 0.005
 MAX_TRAIN_ROWS: int = 50000
@@ -320,7 +327,6 @@ SCORE_TEMPERATURE: float = 1.8  # Temperature for logit_stretch (1.6-2.2 range)
 SHOW_SCORE_DEBUG: bool = False  # Set to True to print score distribution debug info
 
 # Temporal Behavior Modeling Weights (Step 2C)
-RISK_TEMPORAL_ML_WEIGHT: float = 0.25  # Weight for temporal behavior ML model
 SHOW_TEMPORAL_DEBUG: bool = False  # Set to True to print temporal feature debug info
 
 # Model Caching Configuration

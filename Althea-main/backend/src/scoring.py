@@ -662,6 +662,7 @@ def score_with_risk_engine(
 
     from . import calibration
     from .risk_engine import compute_risk
+    from .risk_governance import apply_risk_governance
 
     df["risk_score_raw"] = ml_component_raw.astype(float)
     ml_calibrator = models.get("ml_calibrator", None)
@@ -675,6 +676,7 @@ def score_with_risk_engine(
     # Single canonical pipeline: meta-risk (segment/country/rules + external priors) + anti-saturation mapping + bands + rank
     policy_params = None  # use config defaults (RISK_BAND_T1/T2/T3, SCORE_MAPPING_KIND)
     df = compute_risk(df, policy_params=policy_params, external_sources=external_sources)
+    df = apply_risk_governance(df)  # Distribution control, uncertainty penalty, baseline confidence
     df["risk_score_final"] = df["risk_score"]
 
     # Update explainability: If rule_score > 0.7 → Top_Driver = typology

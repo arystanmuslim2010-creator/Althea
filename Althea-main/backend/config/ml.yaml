@@ -44,6 +44,7 @@ labels:
 
 # Two-stage training (optional)
 two_stage:
+  enabled: false          # Set true to run two-stage cascade training
   stage1_target: y_escalated
   stage2_target: y_sar
   stage2_train_on_escalated_only: true

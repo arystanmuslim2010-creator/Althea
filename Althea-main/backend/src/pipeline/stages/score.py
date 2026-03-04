@@ -117,14 +117,6 @@ def run_score(
     In OVERLAY_MODE: score from rules + ENRICH context only (no transaction-level ML).
     Otherwise: legacy path with features + anomaly detection + risk engine.
     """
-    # #region agent log
-    try:
-        _dl = __import__("pathlib").Path(__file__).resolve().parents[3] / ".cursor" / "debug.log"
-        with open(_dl, "a", encoding="utf-8") as _f:
-            _f.write('{"id":"score_entry","timestamp":' + str(__import__("time").time_ns() // 1000000) + ',"location":"score.py:run_score","message":"run_score entered","data":{"run_id":' + __import__("json").dumps(str(run_id)) + ',"has_config_overrides":' + str(config_overrides is not None) + '},"hypothesisId":"H1"}\n')
-    except Exception:
-        pass
-    # #endregion
     overlay_mode = getattr(config, "OVERLAY_MODE", False)
     if overlay_mode and dataset_type != "alert":
         raise OverlayInputError("Transaction-level behavioral analysis not supported.")

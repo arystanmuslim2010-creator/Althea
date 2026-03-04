@@ -101,11 +101,12 @@ def get_shap_values(
     model: Any,
     X: Union[pd.DataFrame, np.ndarray],
 ) -> Tuple[np.ndarray, List[str]]:
-    """Return (shap_values array, feature_names)."""
-    try:
-        import shap
-    except ImportError:
-        return np.zeros((len(X), X.shape[1] if hasattr(X, "shape") else 0)), []
+    """Return (shap_values array, feature_names).
+
+    Requires shap>=0.43.0 (hard dependency in requirements.txt).
+    SHAP TreeExplainer is used for LightGBM models.
+    """
+    import shap  # Hard dependency - install with: pip install shap>=0.43.0
 
     X = np.asarray(X) if not isinstance(X, pd.DataFrame) else X
     explainer = shap.TreeExplainer(model)

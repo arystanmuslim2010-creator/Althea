@@ -130,3 +130,100 @@ def ingest_labels(
     out["y_sar"] = disp.isin(sar_vals).astype(int)
     out["y_escalated"] = disp.isin(esc_vals).astype(int)
     return out
+
+
+def ingest_labeled_batch(
+    labeled_csv_path: Union[str, Path],
+    training_data_path: Union[str, Path],
+    label_col: str = "disposition",
+    alert_id_col: str = "alert_id",
+    output_path: Optional[Union[str, Path]] = None,
+    dedup: bool = True,
+) -> str:
+    """
+    Ingest a human-labeled CSV batch back into the training dataset.
+
+    Workflow:
+        1. export_label_batch() -> analysts label the CSV
+        2. ingest_labeled_batch() -> labeled CSV merged into training data
+        3. scripts/train_model.py -> retrain on updated dataset
+
+    Args:
+        labeled_csv_path: Path to the CSV exported by export_label_batch() and labeled
+                          by analysts. Must contain alert_id and label_col columns.
+        training_data_path: Path to the existing training dataset CSV.
+        label_col: Column name that analysts filled with dispositions
+                   (e.g. "SAR", "FP", "ESCALATED"). Default: "disposition".
+        alert_id_col: Column used to match labeled alerts to training data.
+        output_path: Where to save the updated training dataset. If None, overwrites
+                     training_data_path.
+        dedup: If True, de-duplicate by alert_id (keep most recent label).
+
+    Returns:
+        Path to the updated training dataset.
+
+    Raises:
+        ValueError: If labeled_csv has no valid labels or alert_id column is missing.
+        FileNotFoundError: If labeled_csv_path or training_data_path do not exist.
+    """
+    labeled_csv_path = Path(labeled_csv_path)
+    training_data_path = Path(training_data_path)
+
+    if not labeled_csv_path.exists():
+        raise FileNotFoundError(f"Labeled CSV not found: {labeled_csv_path}")
+    if not training_data_path.exists():
+        raise FileNotFoundError(f"Training data not found: {training_data_path}")
+
+    labeled = pd.read_csv(labeled_csv_path)
+    training = pd.read_csv(training_data_path)
+
+    if alert_id_col not in labeled.columns:
+        raise ValueError(
+            f"alert_id column '{alert_id_col}' not found in labeled CSV. "
+            f"Available columns: {list(labeled.columns)}"
+        )
+    if label_col not in labeled.columns:
+        raise ValueError(
+            f"Label column '{label_col}' not found in labeled CSV. "
+            f"Available columns: {list(labeled.columns)}. "
+            f"Analysts must fill the '{label_col}' column before ingesting."
+        )
+
+    # Drop rows where analyst left the label blank
+    labeled = labeled.dropna(subset=[label_col])
+    labeled = labeled[labeled[label_col].astype(str).str.strip() != ""]
+    if len(labeled) == 0:
+        raise ValueError(
+            f"No labeled rows found in {labeled_csv_path}. "
+            f"Ensure analysts have filled the '{label_col}' column."
+        )
+
+    # Merge: update existing rows or append new labeled rows
+    if alert_id_col in training.columns:
+        # For alerts already in training data, update their label
+        training = training.set_index(alert_id_col)
+        labeled_indexed = labeled.set_index(alert_id_col)[[label_col]]
+        training.update(labeled_indexed)
+        training = training.reset_index()
+
+        # For alerts NOT in training data, append them as new rows
+        new_alerts = labeled[~labeled[alert_id_col].isin(training[alert_id_col])]
+        if len(new_alerts) > 0:
+            training = pd.concat([training, new_alerts], ignore_index=True)
+    else:
+        # Training data has no alert_id column - just append
+        training = pd.concat([training, labeled], ignore_index=True)
+
+    if dedup and alert_id_col in training.columns:
+        training = training.drop_duplicates(subset=[alert_id_col], keep="last")
+
+    out = Path(output_path) if output_path else training_data_path
+    training.to_csv(out, index=False)
+
+    n_labeled = len(labeled)
+    n_total = len(training)
+    print(
+        f"Ingested {n_labeled} labeled alerts from {labeled_csv_path.name} -> "
+        f"{out} (total training rows: {n_total})"
+    )
+    return str(out)
