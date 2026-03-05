@@ -39,6 +39,7 @@ from src.storage import Storage
 from src.governance.drift_monitor import score_distribution_monitor, feature_drift_monitor
 from src.governance.psi import compute_psi_table
 from src.governance.performance_monitor import performance_trends
+from src.governance.decision_logger import DecisionLogger
 
 app = FastAPI(title="AML Alert Prioritization API")
 
@@ -177,6 +178,36 @@ def _sanitize_record(r: dict) -> dict:
             out[k] = _make_json_serializable(v)
         except Exception:
             out[k] = str(v) if v is not None else None
+    return out
+
+
+def _parse_json_field(raw, default):
+    if raw is None:
+        return default
+    if isinstance(raw, str):
+        if not raw.strip():
+            return default
+        try:
+            return json.loads(raw)
+        except Exception:
+            return default
+    return raw
+
+
+def _apply_scoring_api_fields(record: dict) -> dict:
+    out = dict(record)
+    score = float(out.get("risk_score", 0.0) or 0.0)
+    risk_band = str(out.get("risk_band", "") or "").lower()
+    out["score"] = score
+    out["priority"] = str(out.get("priority") or risk_band or "low")
+    out["model_version"] = str(out.get("model_version") or getattr(config, "MODEL_VERSION", "v1.0"))
+
+    top_features = _parse_json_field(out.get("top_features_json"), [])
+    if not isinstance(top_features, list) or not top_features:
+        contrib = _parse_json_field(out.get("top_feature_contributions_json"), [])
+        if isinstance(contrib, list):
+            top_features = [str(item.get("feature")) for item in contrib if isinstance(item, dict) and item.get("feature")]
+    out["top_features"] = top_features if isinstance(top_features, list) else []
     return out
 
 
@@ -388,6 +419,14 @@ def run_pipeline():
             gov = df["governance_status"].astype(str).str.lower()
             df["in_queue"] = gov.isin(["eligible", "mandatory_review"])
         df = _ensure_risk_band(df)
+        if "priority" not in df.columns:
+            if "risk_band" in df.columns:
+                df["priority"] = df["risk_band"].astype(str).str.lower()
+            else:
+                df["priority"] = "low"
+        if "model_version" not in df.columns:
+            df["model_version"] = str(getattr(config, "MODEL_VERSION", "v1.0"))
+        DecisionLogger().log_decisions(df, model_version=str(getattr(config, "MODEL_VERSION", "v1.0")))
         df = scoring_service.generate_explainability_drivers(df)
         run_id = _make_run_id()
         dataset_hash = _state.get("_bank_csv_hash") or _dataset_hash_from_df(df)
@@ -476,7 +515,7 @@ def get_alerts(
             queue = queue.sort_values("risk_score", ascending=False)
 
         records = queue.head(200).to_dict("records")
-        records = [_sanitize_record(r) for r in records]
+        records = [_sanitize_record(_apply_scoring_api_fields(r)) for r in records]
 
         return {"alerts": records, "run_id": run_id, "total": len(records)}
     except Exception as e:
@@ -557,7 +596,7 @@ def get_alert(alert_id: str):
     if row.empty:
         raise HTTPException(status_code=404, detail="Alert not found")
 
-    return _alert_row_to_dict(row.iloc[0])
+    return _sanitize_record(_apply_scoring_api_fields(_alert_row_to_dict(row.iloc[0])))
 
 
 @app.get("/api/alerts/{alert_id}/explain")

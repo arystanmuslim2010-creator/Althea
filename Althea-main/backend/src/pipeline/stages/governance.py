@@ -14,6 +14,7 @@ from ...external_data import load_all_configured_sources
 from ...external_data.constraints import compute_external_flags_and_versions
 from ...queue_governance import apply_alert_governance
 from ...observability.logging import get_logger
+from ...governance.decision_logger import DecisionLogger
 
 logger = get_logger("governance")
 
@@ -74,5 +75,11 @@ def run_governance(
 
     # in_queue: single source of truth = eligible or MANDATORY_REVIEW
     out["in_queue"] = out["governance_status"].astype(str).str.lower().isin(["eligible", "mandatory_review"])
+    if "risk_band" in out.columns:
+        out["priority"] = out["risk_band"].astype(str).str.lower()
+    else:
+        out["priority"] = "low"
+    model_version = str(cfg.get("model_version", getattr(config, "MODEL_VERSION", "v1.0")))
+    DecisionLogger().log_decisions(out, model_version=model_version)
 
     return out

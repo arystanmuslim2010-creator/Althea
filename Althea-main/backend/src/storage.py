@@ -170,6 +170,10 @@ class Storage:
                 risk_prob REAL,
                 risk_score REAL,
                 risk_band TEXT,
+                priority TEXT,
+                model_version TEXT,
+                top_features_json TEXT,
+                top_feature_contributions_json TEXT,
                 risk_explain_json TEXT,
                 governance_status TEXT,
                 suppression_code TEXT,
@@ -250,6 +254,14 @@ class Storage:
                 cursor.execute("ALTER TABLE alerts ADD COLUMN schema_version TEXT")
             if "context_json" not in cols:
                 cursor.execute("ALTER TABLE alerts ADD COLUMN context_json TEXT")
+            if "priority" not in cols:
+                cursor.execute("ALTER TABLE alerts ADD COLUMN priority TEXT")
+            if "model_version" not in cols:
+                cursor.execute("ALTER TABLE alerts ADD COLUMN model_version TEXT")
+            if "top_features_json" not in cols:
+                cursor.execute("ALTER TABLE alerts ADD COLUMN top_features_json TEXT")
+            if "top_feature_contributions_json" not in cols:
+                cursor.execute("ALTER TABLE alerts ADD COLUMN top_feature_contributions_json TEXT")
             if "hard_constraint" not in cols:
                 cursor.execute("ALTER TABLE alerts ADD COLUMN hard_constraint INTEGER DEFAULT 0")
             if "hard_constraint_reason" not in cols:
@@ -842,6 +854,21 @@ class Storage:
             risk_prob = float(alert.get("risk_prob", 0.0))
             risk_score = float(alert.get("risk_score", 0.0))
             risk_band = str(alert.get("risk_band", ""))
+            priority = str(alert.get("priority", risk_band.lower() if risk_band else ""))
+            model_version = str(alert.get("model_version", ""))
+            top_features_raw = alert.get("top_features_json", alert.get("top_features", []))
+            top_feature_contrib_raw = alert.get(
+                "top_feature_contributions_json",
+                alert.get("top_feature_contributions", []),
+            )
+            top_features_json = (
+                json.dumps(top_features_raw) if not isinstance(top_features_raw, str) else (top_features_raw or "[]")
+            )
+            top_feature_contributions_json = (
+                json.dumps(top_feature_contrib_raw)
+                if not isinstance(top_feature_contrib_raw, str)
+                else (top_feature_contrib_raw or "[]")
+            )
             risk_explain_json = alert.get("risk_explain_json", "")
             if not isinstance(risk_explain_json, str) and risk_explain_json is not None:
                 risk_explain_json = json.dumps(risk_explain_json) if risk_explain_json != "" else "{}"
@@ -885,7 +912,7 @@ class Storage:
             cursor.execute("""
                 INSERT OR REPLACE INTO alerts (
                     alert_id, user_id, tx_ref, created_at, segment, typology,
-                    risk_score_raw, risk_prob, risk_score, risk_band, risk_explain_json,
+                    risk_score_raw, risk_prob, risk_score, risk_band, priority, model_version, top_features_json, top_feature_contributions_json, risk_explain_json,
                     governance_status, suppression_code, suppression_reason, in_queue, policy_version,
                     features_json, ml_signals_json, rules_json, rule_evidence_json,
                     external_versions_json,
@@ -893,10 +920,10 @@ class Storage:
                     hard_constraint, hard_constraint_reason, hard_constraint_code,
                     run_id,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 alert_id, user_id, tx_ref, created_at, segment, typology,
-                risk_score_raw, risk_prob, risk_score, risk_band, risk_explain_json,
+                risk_score_raw, risk_prob, risk_score, risk_band, priority, model_version, top_features_json, top_feature_contributions_json, risk_explain_json,
                 governance_status, suppression_code, suppression_reason, in_queue, policy_version,
                 features_json, ml_signals_json, rules_json, rule_evidence_json,
                 external_versions_json,
@@ -921,7 +948,7 @@ class Storage:
         df = pd.read_sql_query("""
             SELECT 
                 alert_id, user_id, tx_ref, created_at, segment, typology,
-                risk_score_raw, risk_prob, risk_score, risk_band, risk_explain_json,
+                risk_score_raw, risk_prob, risk_score, risk_band, priority, model_version, top_features_json, top_feature_contributions_json, risk_explain_json,
                 governance_status, suppression_code, suppression_reason, in_queue, policy_version,
                 features_json, ml_signals_json, rules_json, rule_evidence_json,
                 external_versions_json,
@@ -943,7 +970,7 @@ class Storage:
         df = pd.read_sql_query("""
             SELECT 
                 alert_id, user_id, tx_ref, created_at, segment, typology,
-                risk_score_raw, risk_prob, risk_score, risk_band, risk_explain_json,
+                risk_score_raw, risk_prob, risk_score, risk_band, priority, model_version, top_features_json, top_feature_contributions_json, risk_explain_json,
                 governance_status, suppression_code, suppression_reason, in_queue, policy_version,
                 features_json, ml_signals_json, rules_json, rule_evidence_json,
                 external_versions_json, updated_at
@@ -1050,7 +1077,7 @@ class Storage:
             df = pd.read_sql_query("""
                 SELECT 
                     alert_id, user_id, tx_ref, created_at, segment, typology,
-                    risk_score_raw, risk_prob, risk_score, risk_band, risk_explain_json,
+                    risk_score_raw, risk_prob, risk_score, risk_band, priority, model_version, top_features_json, top_feature_contributions_json, risk_explain_json,
                     governance_status, suppression_code, suppression_reason, in_queue, policy_version,
                     features_json, ml_signals_json, rules_json, rule_evidence_json,
                     external_versions_json, decision_trace_json, schema_version, context_json,
@@ -1071,7 +1098,7 @@ class Storage:
         df = pd.read_sql_query("""
             SELECT 
                 alert_id, user_id, tx_ref, created_at, segment, typology,
-                risk_score_raw, risk_prob, risk_score, risk_band, risk_explain_json,
+                risk_score_raw, risk_prob, risk_score, risk_band, priority, model_version, top_features_json, top_feature_contributions_json, risk_explain_json,
                 governance_status, suppression_code, suppression_reason, in_queue, policy_version,
                 features_json, ml_signals_json, rules_json, rule_evidence_json,
                 external_versions_json, run_id, updated_at

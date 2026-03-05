@@ -38,6 +38,8 @@ def _row_to_decision_trace(row: pd.Series, run_id: str) -> Dict[str, Any]:
     external_versions = _parse_json_field(row.get("external_versions_json"), {})
     ml_signals = _parse_json_field(row.get("ml_signals_json"), {})
     risk_explain = _parse_json_field(row.get("risk_explain_json"), {})
+    top_features = _parse_json_field(row.get("top_features_json"), [])
+    top_feature_contrib = _parse_json_field(row.get("top_feature_contributions_json"), [])
     policy_ver = str(row.get("policy_version", "1.0"))
     return {
         "alert_id": str(row.get("alert_id", "")),
@@ -51,6 +53,10 @@ def _row_to_decision_trace(row: pd.Series, run_id: str) -> Dict[str, Any]:
             "risk_score": float(row.get("risk_score", 0)),
             "risk_prob": float(row.get("risk_prob", 0)),
             "risk_band": str(row.get("risk_band", "")),
+            "priority": str(row.get("priority", "")),
+            "model_version": str(row.get("model_version", "")),
+            "top_features": top_features,
+            "top_feature_contributions": top_feature_contrib,
             "ml_signals_json": ml_signals,
             "risk_explain_json": risk_explain,
         },

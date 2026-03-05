@@ -104,6 +104,23 @@ def _overlay_only_score(df: pd.DataFrame, cfg_ns: Any) -> pd.DataFrame:
         })
     df["ml_signals_json"] = [json.dumps(m) for m in ml_signals_list]
     df["risk_explain_json"] = [json.dumps(r) for r in risk_explain_list]
+    top_contribs = []
+    top_names = []
+    for idx in df.index:
+        row = df.loc[idx]
+        contrib = [
+            {"feature": "rule_score_total", "impact": float(row.get("rule_score_total", 0.0) or 0.0)},
+            {"feature": "rule_score_raw", "impact": float(row.get("rule_score_raw", 0.0) or 0.0)},
+            {"feature": "risk_prob", "impact": float(row.get("risk_prob", 0.0) or 0.0)},
+        ]
+        top_contribs.append(contrib)
+        top_names.append([item["feature"] for item in contrib])
+    df["top_feature_contributions"] = top_contribs
+    df["top_feature_contributions_json"] = [json.dumps(item) for item in top_contribs]
+    df["top_features"] = top_names
+    df["top_features_json"] = [json.dumps(item) for item in top_names]
+    df["priority"] = df["risk_band"].astype(str).str.lower()
+    df["model_version"] = str(getattr(config, "MODEL_VERSION", "v1.0"))
     return df
 
 

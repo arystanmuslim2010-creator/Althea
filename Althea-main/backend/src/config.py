@@ -333,6 +333,11 @@ SHOW_TEMPORAL_DEBUG: bool = False  # Set to True to print temporal feature debug
 MODEL_CACHE_ENABLED: bool = True  # Enable model artifact caching
 FORCE_RETRAIN: bool = False  # Force retraining even if cache exists
 MODEL_CACHE_DIR: str = "data/model_cache"  # Cache directory path
+MODEL_VERSION: str = "v1.0"
+
+# Explainability / SHAP configuration
+SHAP_TOP_FEATURES: int = 5
+SHAP_MAX_ALERTS: int = 0  # 0 = compute SHAP for all alerts; >0 = top-N by risk score only
 
 # =============================================================================
 # Phase G: Model Health & Ops Monitoring Thresholds

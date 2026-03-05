@@ -43,7 +43,16 @@ def run_persist(
         r.setdefault("external_versions_json", "{}")
         if "decision_trace_json" in r and not isinstance(r["decision_trace_json"], str):
             r["decision_trace_json"] = json.dumps(r["decision_trace_json"]) if r["decision_trace_json"] else "{}"
-        for col in ["risk_explain_json", "rules_json", "rule_evidence_json", "ml_signals_json", "features_json", "context_json"]:
+        for col in [
+            "risk_explain_json",
+            "rules_json",
+            "rule_evidence_json",
+            "ml_signals_json",
+            "features_json",
+            "context_json",
+            "top_features_json",
+            "top_feature_contributions_json",
+        ]:
             if col in r and r[col] is not None and not isinstance(r[col], str):
                 r[col] = json.dumps(r[col]) if r[col] != "" else "{}"
     storage.upsert_alerts(records, run_id=run_id)

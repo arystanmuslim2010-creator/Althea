@@ -337,6 +337,117 @@ def get_calibration_metadata_from_cache(
         return None
 
 
+def _get_model_version() -> str:
+    return str(getattr(config, "MODEL_VERSION", "v1.0"))
+
+
+def _normalize_shap_values(shap_values: Any) -> Optional[np.ndarray]:
+    """Normalize SHAP output shape to (n_samples, n_features)."""
+    if shap_values is None:
+        return None
+    vals = shap_values
+    if isinstance(vals, list):
+        if not vals:
+            return None
+        vals = vals[-1]
+    arr = np.asarray(vals)
+    if arr.ndim == 1:
+        arr = arr.reshape(1, -1)
+    elif arr.ndim == 3:
+        # Multi-class shape can be (n_samples, n_features, n_classes); use positive/last class.
+        arr = arr[:, :, -1]
+    if arr.ndim != 2:
+        return None
+    return arr
+
+
+def _resolve_shap_tree_model(
+    models: Dict[str, object],
+    feature_groups: Dict[str, List[str]],
+    df: pd.DataFrame,
+) -> Tuple[Optional[object], List[str]]:
+    candidates = [
+        ("temporal_behavior_model", feature_groups.get("temporal_behavior_cols", [])),
+        ("temporal_model", feature_groups.get("temporal_cols", [])),
+        ("structural_model", feature_groups.get("structural_cols", [])),
+    ]
+    for model_name, cols in candidates:
+        mdl = models.get(model_name)
+        present = [c for c in cols if c in df.columns]
+        if mdl is not None and present:
+            return mdl, present
+    return None, []
+
+
+def _fallback_feature_contributions(df: pd.DataFrame) -> Tuple[List[List[Dict[str, float]]], List[List[str]]]:
+    contribs: List[List[Dict[str, float]]] = []
+    names: List[List[str]] = []
+    for _, row in df.iterrows():
+        items = [
+            {"feature": "risk_behavioral", "impact": float(row.get("risk_behavioral", 0.0) or 0.0)},
+            {"feature": "risk_structural", "impact": float(row.get("risk_structural", 0.0) or 0.0)},
+            {"feature": "risk_temporal", "impact": float(row.get("risk_temporal", 0.0) or 0.0)},
+            {"feature": "risk_rules", "impact": float(row.get("risk_rules", 0.0) or 0.0)},
+            {"feature": "risk_meta", "impact": float(row.get("risk_meta", 0.0) or 0.0)},
+        ]
+        items = sorted(items, key=lambda x: abs(float(x["impact"])), reverse=True)[:5]
+        contribs.append(items)
+        names.append([str(x["feature"]) for x in items])
+    return contribs, names
+
+
+def _compute_top_feature_contributions(
+    df: pd.DataFrame,
+    models: Dict[str, object],
+    feature_groups: Dict[str, List[str]],
+) -> Tuple[List[List[Dict[str, float]]], List[List[str]]]:
+    fallback_contribs, fallback_names = _fallback_feature_contributions(df)
+
+    try:
+        import shap
+    except Exception:
+        return fallback_contribs, fallback_names
+
+    model, feature_cols = _resolve_shap_tree_model(models, feature_groups, df)
+    if model is None or not feature_cols:
+        return fallback_contribs, fallback_names
+
+    top_n = max(1, int(getattr(config, "SHAP_TOP_FEATURES", 5)))
+    max_alerts = int(getattr(config, "SHAP_MAX_ALERTS", 0))
+    selected_df = df
+    if max_alerts > 0 and "risk_score" in df.columns and len(df) > max_alerts:
+        selected_idx = (
+            pd.to_numeric(df["risk_score"], errors="coerce")
+            .fillna(0.0)
+            .sort_values(ascending=False)
+            .head(max_alerts)
+            .index
+        )
+        selected_df = df.loc[selected_idx]
+
+    try:
+        explainer = shap.TreeExplainer(model, feature_perturbation="tree_path_dependent")
+        shap_values = explainer.shap_values(selected_df[feature_cols])
+        arr = _normalize_shap_values(shap_values)
+        if arr is None or arr.shape[0] != len(selected_df):
+            return fallback_contribs, fallback_names
+
+        for pos, idx in enumerate(selected_df.index):
+            top_features = sorted(
+                zip(feature_cols, arr[pos]),
+                key=lambda x: abs(float(x[1])),
+                reverse=True,
+            )[:top_n]
+            fallback_contribs[df.index.get_loc(idx)] = [
+                {"feature": str(name), "impact": float(value)} for name, value in top_features
+            ]
+            fallback_names[df.index.get_loc(idx)] = [str(name) for name, _ in top_features]
+    except Exception:
+        return fallback_contribs, fallback_names
+
+    return fallback_contribs, fallback_names
+
+
 def train_risk_engine(
     df: pd.DataFrame,
     feature_groups: Dict[str, List[str]],
@@ -523,6 +634,7 @@ def train_risk_engine(
         "meta_default": base_rate,
         "feature_groups": feature_groups,
         "ml_calibrator": ml_calibrator,  # New calibrator for ML probabilities
+        "model_version": _get_model_version(),
     }
     
     # Save to cache if enabled (includes calibration metrics in metadata)
@@ -806,6 +918,18 @@ def score_with_risk_engine(
     df["Suspicious"] = np.where(
         df["risk_score_final"] >= config.RISK_SCORE_THRESHOLD, config.RISK_LABEL_YES, config.RISK_LABEL_NO
     )
+
+    # SHAP-based top feature contributions per alert (with fallback when SHAP isn't available).
+    top_contribs, top_names = _compute_top_feature_contributions(df, models, feature_groups)
+    df["top_feature_contributions"] = top_contribs
+    df["top_feature_contributions_json"] = [json.dumps(item) for item in top_contribs]
+    df["top_features"] = top_names
+    df["top_features_json"] = [json.dumps(item) for item in top_names]
+    if "risk_band" in df.columns:
+        df["priority"] = df["risk_band"].astype(str).str.lower()
+    else:
+        df["priority"] = "low"
+    df["model_version"] = str(models.get("model_version") or _get_model_version())
 
     # Generate deterministic alert_id if missing
     # Use build_alert_id() for canonical, stable IDs
