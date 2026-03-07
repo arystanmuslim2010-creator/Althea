@@ -201,12 +201,12 @@ def _get_cache_paths(data_signature: str, cache_dir: Path) -> Dict[str, Path]:
     }
 
 
-def load_cached_risk_engine(data_signature: str, cache_dir: Path) -> Optional[Tuple[Dict[str, object], Optional[object]]]:
+def load_cached_risk_engine(data_signature: str, cache_dir: Path, tenant_id: str = "default") -> Optional[Tuple[Dict[str, object], Optional[object]]]:
     """
     Load cached model artifacts from disk (for use with st.cache_resource in the app).
     Returns (models, calibrator) or None if cache miss or corrupted.
     """
-    return _load_cached_models(data_signature, cache_dir)
+    return _load_cached_models(data_signature, cache_dir / str(tenant_id))
 
 
 def _load_cached_models(data_signature: str, cache_dir: Path) -> Optional[Tuple[Dict[str, object], Optional[object]]]:
@@ -448,11 +448,27 @@ def _compute_top_feature_contributions(
     return fallback_contribs, fallback_names
 
 
+def _try_load_lgbm(artifact_path: str):
+    """Load LightGBM model + calibrator from artifact dir. Returns (model, calibrator) or (None, None)."""
+    try:
+        p = Path(artifact_path)
+        model_file = p / getattr(config, "LGBM_MODEL_FILENAME", "model_lgbm.joblib")
+        cal_file = p / getattr(config, "LGBM_CALIBRATOR_FILENAME", "calibrator.joblib")
+        if not model_file.exists():
+            return None, None
+        model = joblib.load(model_file)
+        cal = joblib.load(cal_file) if cal_file.exists() else None
+        return model, cal
+    except Exception:
+        return None, None
+
+
 def train_risk_engine(
     df: pd.DataFrame,
     feature_groups: Dict[str, List[str]],
     force_retrain: bool = False,
     loader: Optional[Callable[[str], Optional[Tuple[Dict[str, object], Optional[object]]]]] = None,
+    tenant_id: str = "default",
 ) -> Tuple[Dict[str, object], Optional[object]]:
     _validate_feature_groups(feature_groups)
 
@@ -461,6 +477,7 @@ def train_risk_engine(
     cache_dir = Path("data/model_cache")
     if hasattr(config, "MODEL_CACHE_DIR"):
         cache_dir = Path(config.MODEL_CACHE_DIR)
+    cache_dir = cache_dir / str(tenant_id)
 
     cache_enabled = getattr(config, "MODEL_CACHE_ENABLED", True)
     force_retrain_flag = getattr(config, "FORCE_RETRAIN", False) or force_retrain
@@ -683,7 +700,7 @@ def score_with_risk_engine(
     temporal_score = components["temporal_score"]
     meta_score = components["meta_score"]
     
-    # Compute temporal behavior ML score
+    # Compute temporal behavior ML score — try LightGBM artifact first, fall back to sklearn
     temporal_behavior_model = models.get("temporal_behavior_model", None)
     temporal_behavior_cols = feature_groups.get("temporal_behavior_cols", [])
     logger.debug(
@@ -692,7 +709,22 @@ def score_with_risk_engine(
         len(temporal_behavior_cols),
     )
 
-    if temporal_behavior_model is not None and temporal_behavior_cols and all(col in df.columns for col in temporal_behavior_cols):
+    lgbm_model, lgbm_calibrator = _try_load_lgbm(
+        getattr(config, "MODEL_ARTIFACT_PATH", "backend/artifacts/models/latest")
+    )
+
+    if lgbm_model is not None and temporal_behavior_cols and all(c in df.columns for c in temporal_behavior_cols):
+        X_lgbm = df[temporal_behavior_cols]
+        raw_prob = lgbm_model.predict_proba(X_lgbm)[:, 1] if hasattr(lgbm_model, "predict_proba") else lgbm_model.predict(X_lgbm)
+        if lgbm_calibrator is not None:
+            from .calibration import apply_calibrator
+            temporal_ml_score = pd.Series(apply_calibrator(lgbm_calibrator, raw_prob), index=df.index)
+        else:
+            temporal_ml_score = pd.Series(np.clip(raw_prob, 0.0, 1.0), index=df.index)
+        df["risk_temporal_ml"] = temporal_ml_score * 100.0
+        logger.info("LightGBM artifact loaded and used for temporal_ml_score")
+    elif temporal_behavior_model is not None and temporal_behavior_cols and all(col in df.columns for col in temporal_behavior_cols):
+        # fallback: use existing temporal_behavior_model (sklearn)
         X_temporal_behavior = df[temporal_behavior_cols]
         temporal_behavior_score = _score_classifier(
             temporal_behavior_model,

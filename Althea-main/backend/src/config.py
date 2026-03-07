@@ -12,9 +12,6 @@ PAGE_LAYOUT: str = "wide"
 PAGE_SIDEBAR_STATE: str = "expanded"
 
 FEATURE_COLUMNS: List[str] = [
-    "amount_rz",
-    "velocity_rz",
-    "activity_rz",
     "amount_z",
     "velocity_z",
     "activity_z",
@@ -334,6 +331,10 @@ MODEL_CACHE_ENABLED: bool = True  # Enable model artifact caching
 FORCE_RETRAIN: bool = False  # Force retraining even if cache exists
 MODEL_CACHE_DIR: str = "data/model_cache"  # Cache directory path
 MODEL_VERSION: str = "v1.0"
+MODEL_ARTIFACT_PATH: str = "backend/artifacts/models/latest"
+LGBM_MODEL_FILENAME: str = "model_lgbm.joblib"
+LGBM_CALIBRATOR_FILENAME: str = "calibrator.joblib"
+TENANT_ID: str = "default"
 
 # Explainability / SHAP configuration
 SHAP_TOP_FEATURES: int = 5

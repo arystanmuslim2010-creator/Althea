@@ -69,6 +69,8 @@ class Storage:
             if "updated_at" not in cols:
                 cursor.execute("ALTER TABLE cases ADD COLUMN updated_at TEXT")
                 cursor.execute("UPDATE cases SET updated_at = datetime('now') WHERE updated_at IS NULL")
+            if "tenant_id" not in cols:
+                cursor.execute("ALTER TABLE cases ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'")
         except Exception:
             pass
 
@@ -88,6 +90,8 @@ class Storage:
             if "added_at" not in ca_cols:
                 cursor.execute("ALTER TABLE case_alerts ADD COLUMN added_at TEXT")
                 cursor.execute("UPDATE case_alerts SET added_at = datetime('now') WHERE added_at IS NULL OR added_at = ''")
+            if "tenant_id" not in ca_cols:
+                cursor.execute("ALTER TABLE case_alerts ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'")
         except Exception:
             pass
 
@@ -124,6 +128,15 @@ class Storage:
                         entry_hash TEXT NOT NULL
                     )
                 """)
+        except Exception:
+            pass
+
+        # Migration: add tenant_id to audit_log if missing
+        try:
+            cursor.execute("PRAGMA table_info(audit_log)")
+            al_cols2 = {row[1] for row in cursor.fetchall()}
+            if "tenant_id" not in al_cols2:
+                cursor.execute("ALTER TABLE audit_log ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'")
         except Exception:
             pass
 
@@ -268,6 +281,8 @@ class Storage:
                 cursor.execute("ALTER TABLE alerts ADD COLUMN hard_constraint_reason TEXT")
             if "hard_constraint_code" not in cols:
                 cursor.execute("ALTER TABLE alerts ADD COLUMN hard_constraint_code TEXT")
+            if "tenant_id" not in cols:
+                cursor.execute("ALTER TABLE alerts ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'")
         except Exception:
             pass
 
@@ -283,6 +298,15 @@ class Storage:
             )
         """)
 
+        # Migration: add tenant_id to runs if missing
+        try:
+            cursor.execute("PRAGMA table_info(runs)")
+            runs_cols = {row[1] for row in cursor.fetchall()}
+            if "tenant_id" not in runs_cols:
+                cursor.execute("ALTER TABLE runs ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'")
+        except Exception:
+            pass
+
         # Run artifacts: determinism hashes per run (config_hash, model_hash, rules_hash, etc.)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS run_artifacts (
@@ -297,6 +321,15 @@ class Storage:
                 FOREIGN KEY (run_id) REFERENCES runs(run_id)
             )
         """)
+
+        # Migration: add tenant_id to run_artifacts if missing
+        try:
+            cursor.execute("PRAGMA table_info(run_artifacts)")
+            ra_cols = {row[1] for row in cursor.fetchall()}
+            if "tenant_id" not in ra_cols:
+                cursor.execute("ALTER TABLE run_artifacts ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'")
+        except Exception:
+            pass
 
         # AI Summaries table – stores generated AI narrative summaries
         cursor.execute("""
@@ -824,13 +857,14 @@ class Storage:
         conn.commit()
         conn.close()
 
-    def upsert_alerts(self, alerts: List[Dict[str, Any]], run_id: Optional[str] = None):
+    def upsert_alerts(self, alerts: List[Dict[str, Any]], run_id: Optional[str] = None, tenant_id: str = "default"):
         """
         Upsert alerts to database (INSERT OR REPLACE).
-        
+
         Args:
             alerts: List of alert dictionaries with required fields
             run_id: Optional run_id to tag every alert with
+            tenant_id: Tenant namespace for multi-tenancy isolation
         """
         if not alerts:
             return
@@ -918,9 +952,9 @@ class Storage:
                     external_versions_json,
                     decision_trace_json, schema_version, context_json,
                     hard_constraint, hard_constraint_reason, hard_constraint_code,
-                    run_id,
+                    run_id, tenant_id,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 alert_id, user_id, tx_ref, created_at, segment, typology,
                 risk_score_raw, risk_prob, risk_score, risk_band, priority, model_version, top_features_json, top_feature_contributions_json, risk_explain_json,
@@ -929,7 +963,7 @@ class Storage:
                 external_versions_json,
                 decision_trace_json_val, schema_version_val, context_json_val,
                 hard_constraint, hard_constraint_reason, hard_constraint_code,
-                rid,
+                rid, tenant_id,
                 now_iso
             ))
         
@@ -989,23 +1023,23 @@ class Storage:
     # =========================================================================
 
     def save_run(self, run_id: str, source: str, dataset_hash: str,
-                 row_count: int, notes: str = "") -> None:
+                 row_count: int, notes: str = "", tenant_id: str = "default") -> None:
         """Persist a pipeline run record."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         now_iso = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
         cursor.execute("""
-            INSERT OR REPLACE INTO runs (run_id, source, dataset_hash, row_count, created_at, notes)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (run_id, source, dataset_hash, row_count, now_iso, notes))
+            INSERT OR REPLACE INTO runs (run_id, source, dataset_hash, row_count, created_at, notes, tenant_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (run_id, source, dataset_hash, row_count, now_iso, notes, tenant_id))
         conn.commit()
         conn.close()
 
-    def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
+    def get_run(self, run_id: str, tenant_id: str = "default") -> Optional[Dict[str, Any]]:
         """Load run metadata by run_id."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute("SELECT run_id, source, dataset_hash, row_count, created_at, notes FROM runs WHERE run_id = ?", (run_id,))
+        cursor.execute("SELECT run_id, source, dataset_hash, row_count, created_at, notes FROM runs WHERE run_id = ? AND tenant_id = ?", (run_id, tenant_id))
         row = cursor.fetchone()
         conn.close()
         if not row:
@@ -1070,12 +1104,12 @@ class Storage:
             "config_hash": row[6], "created_at": row[7],
         }
 
-    def load_alerts_by_run(self, run_id: str) -> pd.DataFrame:
+    def load_alerts_by_run(self, run_id: str, tenant_id: str = "default") -> pd.DataFrame:
         """Load alerts for a specific run_id. Returns empty DataFrame if table missing or error."""
         try:
             conn = sqlite3.connect(self.db_path)
             df = pd.read_sql_query("""
-                SELECT 
+                SELECT
                     alert_id, user_id, tx_ref, created_at, segment, typology,
                     risk_score_raw, risk_prob, risk_score, risk_band, priority, model_version, top_features_json, top_feature_contributions_json, risk_explain_json,
                     governance_status, suppression_code, suppression_reason, in_queue, policy_version,
@@ -1083,8 +1117,8 @@ class Storage:
                     external_versions_json, decision_trace_json, schema_version, context_json,
                     hard_constraint, hard_constraint_reason, hard_constraint_code,
                     run_id, updated_at
-                FROM alerts WHERE run_id = ?
-            """, conn, params=(run_id,))
+                FROM alerts WHERE run_id = ? AND tenant_id = ?
+            """, conn, params=(run_id, tenant_id))
             conn.close()
             if "in_queue" in df.columns:
                 df["in_queue"] = df["in_queue"].astype(bool)

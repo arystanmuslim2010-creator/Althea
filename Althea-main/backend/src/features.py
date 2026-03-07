@@ -409,10 +409,6 @@ def compute_behavioral_features(
     df["velocity_z"] = (df["velocity"] - df["baseline_velocity_mean"]) / (df["baseline_velocity_std"] + eps)
     df["activity_z"] = (activity - df["baseline_activity_mean"]) / (df["baseline_activity_std"] + eps)
 
-    df["amount_rz"] = df["amount_z"]
-    df["velocity_rz"] = df["velocity_z"]
-    df["activity_rz"] = df["activity_z"]
-
     rolling_base = pd.DataFrame(
         {
             "user_id": df["user_id"].to_numpy(),
@@ -512,9 +508,6 @@ def compute_behavioral_features(
         "amount_z",
         "velocity_z",
         "activity_z",
-        "amount_rz",
-        "velocity_rz",
-        "activity_rz",
         "amount_ratio",
         "velocity_ratio",
         "activity_ratio",
@@ -575,9 +568,6 @@ def compute_behavioral_features(
         progress_cb(100)
 
     behavioral_cols = [
-        "amount_rz",
-        "velocity_rz",
-        "activity_rz",
         "amount_ratio",
         "velocity_ratio",
         "activity_ratio",

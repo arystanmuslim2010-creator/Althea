@@ -30,48 +30,74 @@ def run_rule(df: pd.DataFrame, cfg) -> pd.DataFrame:
     thresholds = {"inactive_days_thr": inactive_days, "burst_min": burst_min}
     window = {"days": 1, "inactive_days": inactive_days}
 
+    out = out.sort_values(["user_id", "ts"], kind="mergesort").copy()
     out[hit_col] = 0
     out[score_col] = 0.0
     out[evidence_col] = "none"
     out[result_col] = None
 
-    out = out.sort_values(["user_id", "ts"])
-    for user, group in out.groupby("user_id", sort=False):
-        grp = group.copy()
-        grp = grp.set_index("ts")
-        inactivity = grp.index.to_series().diff().dt.total_seconds().div(86400.0).fillna(0.0)
-        burst_24h = pd.Series(1, index=grp.index).rolling("1D").count().fillna(1)
-        # Propagate dormancy signal: if a row has inactivity >= threshold, mark all rows
-        # within the next 24 hours as part of the dormancy-wake burst window
-        dormancy_ts = inactivity.index[inactivity >= inactive_days]
-        dormancy_within = pd.Series(False, index=grp.index)
-        for ts in dormancy_ts:
-            mask = (grp.index >= ts) & (grp.index <= ts + pd.Timedelta(days=1))
-            dormancy_within[mask] = True
-        hits = dormancy_within & (burst_24h >= burst_min)
-        score = np.minimum(
-            1.0,
-            0.5 * (inactivity / max(inactive_days, 1)) + 0.5 * (burst_24h / max(burst_min, 1)),
+    # Set DatetimeIndex for time-based rolling
+    out_ts = out.set_index("ts")
+
+    # Inactivity gap per user via groupby diff
+    inactivity = (
+        out_ts.groupby("user_id", sort=False)["user_id"]
+        .transform(lambda s: s.index.to_series().diff().dt.total_seconds().div(86400.0).fillna(0.0))
+    )
+
+    # 24h burst count per user via groupby rolling
+    out_ts["_one"] = 1.0
+    burst_24h = (
+        out_ts.groupby("user_id", sort=False)["_one"]
+        .rolling("1D")
+        .count()
+        .fillna(1)
+        .reset_index(level=0, drop=True)
+    )
+
+    # Forward-propagate dormancy signal using backward rolling max over 1D:
+    # A row at time R is "dormancy_within" if any trigger (inactivity >= threshold)
+    # occurred in the window [R-1D, R] — equivalent to forward propagation of trigger for 24h.
+    dormancy_trigger = (inactivity >= inactive_days).astype(float)
+    out_ts["_trigger"] = dormancy_trigger.values
+    dormancy_rolling = (
+        out_ts.groupby("user_id", sort=False)["_trigger"]
+        .rolling("1D")
+        .max()
+        .fillna(0)
+        .reset_index(level=0, drop=True)
+    )
+    dormancy_within = dormancy_rolling > 0
+
+    hits = dormancy_within & (burst_24h >= burst_min)
+    score = np.minimum(
+        1.0,
+        0.5 * (inactivity.to_numpy() / max(inactive_days, 1))
+        + 0.5 * (burst_24h.to_numpy() / max(burst_min, 1)),
+    )
+
+    out[hit_col] = hits.astype(int).to_numpy()
+    out[score_col] = score
+
+    evidence = []
+    result_list = []
+    for i, b, h, sc in zip(
+        inactivity.to_numpy(), burst_24h.to_numpy(), hits.to_numpy(), score
+    ):
+        evidence.append(f"inactive_days={int(i)}; burst_24h={int(b)}" if h else "none")
+        result_list.append(
+            RuleResult(
+                rule_id=RULE_ID,
+                rule_version=RULE_VERSION,
+                hit=bool(h),
+                severity=DEFAULT_SEVERITY,
+                score=float(sc),
+                evidence={"inactive_days": float(i), "burst_24h": int(b)} if h else {},
+                thresholds=thresholds,
+                window=window,
+            ).to_dict()
         )
-        out.loc[group.index, hit_col] = hits.astype(int).to_numpy()
-        out.loc[group.index, score_col] = score.to_numpy()
-        evidence = []
-        result_list = []
-        for i, b, h, sc in zip(inactivity, burst_24h, hits, score):
-            evidence.append(f"inactive_days={int(i)}; burst_24h={int(b)}" if h else "none")
-            result_list.append(
-                RuleResult(
-                    rule_id=RULE_ID,
-                    rule_version=RULE_VERSION,
-                    hit=bool(h),
-                    severity=DEFAULT_SEVERITY,
-                    score=float(sc),
-                    evidence={"inactive_days": float(i), "burst_24h": int(b)} if h else {},
-                    thresholds=thresholds,
-                    window=window,
-                ).to_dict()
-            )
-        out.loc[group.index, evidence_col] = evidence
-        out.loc[group.index, result_col] = result_list
+    out[evidence_col] = evidence
+    out[result_col] = result_list
 
     return out

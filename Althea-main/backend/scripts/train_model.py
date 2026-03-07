@@ -219,6 +219,29 @@ def main() -> int:
         with open(out_dir_path / "calibrator.pkl", "wb") as f:
             pickle.dump(calibrator, f)
 
+    # Save model as joblib for production scoring (_try_load_lgbm expects model_lgbm.joblib)
+    import joblib as _joblib
+    _joblib.dump(model, out_dir_path / "model_lgbm.joblib")
+    if calibrator is not None:
+        _joblib.dump(calibrator, out_dir_path / "calibrator.joblib")
+
+    # Update backend/artifacts/models/latest symlink (or copy on Windows)
+    latest_dir = _backend / "artifacts" / "models" / "latest"
+    latest_dir.parent.mkdir(parents=True, exist_ok=True)
+    import os as _os
+    if latest_dir.is_symlink() or latest_dir.exists():
+        if latest_dir.is_symlink():
+            latest_dir.unlink()
+        else:
+            import shutil as _shutil
+            _shutil.rmtree(latest_dir)
+    try:
+        latest_dir.symlink_to(out_dir_path.resolve())
+    except (OSError, NotImplementedError):
+        import shutil as _shutil
+        _shutil.copytree(str(out_dir_path), str(latest_dir))
+    print(f"  Latest artifacts symlinked to: {latest_dir}")
+
     # -- Two-stage cascade (optional, controlled by ml.yaml two_stage config) --
     two_stage_cfg = cfg.get("two_stage", {})
     if two_stage_cfg.get("enabled", False):
