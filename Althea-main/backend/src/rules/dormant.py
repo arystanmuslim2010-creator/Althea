@@ -41,7 +41,14 @@ def run_rule(df: pd.DataFrame, cfg) -> pd.DataFrame:
         grp = grp.set_index("ts")
         inactivity = grp.index.to_series().diff().dt.total_seconds().div(86400.0).fillna(0.0)
         burst_24h = pd.Series(1, index=grp.index).rolling("1D").count().fillna(1)
-        hits = (inactivity >= inactive_days) & (burst_24h >= burst_min)
+        # Propagate dormancy signal: if a row has inactivity >= threshold, mark all rows
+        # within the next 24 hours as part of the dormancy-wake burst window
+        dormancy_ts = inactivity.index[inactivity >= inactive_days]
+        dormancy_within = pd.Series(False, index=grp.index)
+        for ts in dormancy_ts:
+            mask = (grp.index >= ts) & (grp.index <= ts + pd.Timedelta(days=1))
+            dormancy_within[mask] = True
+        hits = dormancy_within & (burst_24h >= burst_min)
         score = np.minimum(
             1.0,
             0.5 * (inactivity / max(inactive_days, 1)) + 0.5 * (burst_24h / max(burst_min, 1)),

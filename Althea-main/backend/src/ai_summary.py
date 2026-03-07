@@ -27,6 +27,32 @@ except ImportError:
     genai = None
 
 
+def _load_local_env_file() -> None:
+    """Load GEMINI_API_KEY from local .env files if present."""
+    candidates = [
+        Path(__file__).resolve().parents[1] / ".env",  # backend/.env
+        Path(__file__).resolve().parents[2] / ".env",  # project root .env
+    ]
+    for env_path in candidates:
+        if not env_path.exists():
+            continue
+        try:
+            for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                if key != "GEMINI_API_KEY":
+                    continue
+                value = value.strip().strip('"').strip("'")
+                if value and not os.environ.get("GEMINI_API_KEY"):
+                    os.environ["GEMINI_API_KEY"] = value
+                    return
+        except Exception:
+            continue
+
+
 def _load_api_key() -> str:
     """Load API key with priority: secrets.py -> environment variable -> disabled."""
     logger.debug("_load_api_key called")
@@ -99,6 +125,7 @@ def _load_api_key() -> str:
 
     # Fallback: environment
     if not api_key:
+        _load_local_env_file()
         api_key = os.environ.get("GEMINI_API_KEY", "").strip()
         logger.debug("Using environment variable fallback")
 

@@ -54,8 +54,8 @@ def run_rule(df: pd.DataFrame, cfg) -> pd.DataFrame:
         )
         hits = (ratio >= ratio_min) & (total >= volume_min)
         scores = np.clip(ratio, 0.0, 1.0)
-        out.loc[group.index, hit_col] = hits.astype(int)
-        out.loc[group.index, score_col] = scores
+        out.loc[group.index, hit_col] = np.asarray(hits).astype(int)
+        out.loc[group.index, score_col] = np.asarray(scores)
         evidence = []
         result_list = []
         for s_in, s_out, r, h, sc in zip(sum_in, sum_out, ratio, hits, scores):

@@ -611,7 +611,7 @@ class EvaluationService:
             except Exception:
                 eval_df = df
 
-        metrics      = self.compute_ranking_metrics(eval_df, capacity, minutes_per_case=minutes_per_case)
+        metrics      = self.compute_ranking_metrics(eval_df, capacity, minutes_per_case=minutes_per_case, _source=source, _col=col)
         pr_curve     = PrecisionRecallCurveData().compute(eval_df)
         sar_analysis = SARCaptureAnalysis().compute(eval_df, capacity)
 
@@ -630,6 +630,8 @@ class EvaluationService:
         df: pd.DataFrame,
         capacity: int,
         minutes_per_case: int = 45,
+        _source: Optional[OutcomeLabelSource] = None,
+        _col: Optional[str] = None,
     ) -> Optional[RankingMetrics]:
         """
         Backward-compatible wrapper. Returns RankingMetrics dataclass or None.
@@ -637,7 +639,10 @@ class EvaluationService:
         if len(df) == 0 or "risk_score" not in df.columns:
             return None
 
-        source, col, warning = detect_outcome_source(df)
+        if _source is not None and _col is not None:
+            source, col, warning = _source, _col, ""
+        else:
+            source, col, warning = detect_outcome_source(df)
         if source == OutcomeLabelSource.NONE:
             return None
 

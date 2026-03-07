@@ -51,8 +51,6 @@ def validate_normalized_alert_schema(record: Dict[str, Any]) -> List[str]:
     entity_id can be stored as user_id in DataFrame; we accept either key.
     """
     errors: List[str] = []
-    if not record:
-        return ["Record is empty"]
     # entity_id may be present as user_id in payload
     if "entity_id" not in record and record.get("user_id") is None:
         errors.append("Missing entity_id (or user_id)")
