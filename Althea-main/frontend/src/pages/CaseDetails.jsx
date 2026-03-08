@@ -1,20 +1,32 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../services/api'
+import { useAuth } from '../contexts/AuthContext'
 
-const STATUSES = ['open', 'under_review', 'escalated', 'sar_filed', 'closed']
+const BASE_STATUSES = ['open', 'under_review', 'escalated', 'closed']
 
 export function CaseDetails() {
   const { id } = useParams()
+  const { user } = useAuth()
   const [data, setData] = useState(null)
   const [status, setStatus] = useState('open')
   const [error, setError] = useState('')
+
+  const canEditCase = user?.role === 'analyst' || user?.role === 'lead' || user?.role === 'manager' || user?.role === 'admin'
+
+  const availableStatuses = useMemo(() => {
+    if (user?.role === 'manager' || user?.role === 'admin') {
+      return [...BASE_STATUSES, 'sar_filed']
+    }
+    return BASE_STATUSES
+  }, [user?.role])
 
   const load = async () => {
     try {
       const res = await api.getInvestigationCase(id)
       setData(res)
       setStatus(res?.case?.status || 'open')
+      setError('')
     } catch (err) {
       setError(err.message || 'Failed to load case')
     }
@@ -25,8 +37,12 @@ export function CaseDetails() {
   }, [id])
 
   const saveStatus = async () => {
-    await api.updateInvestigationCaseStatus(id, status)
-    await load()
+    try {
+      await api.updateInvestigationCaseStatus(id, status)
+      await load()
+    } catch (err) {
+      setError(err.message || 'Failed to update case status')
+    }
   }
 
   return (
@@ -41,12 +57,16 @@ export function CaseDetails() {
         <p>Created by: {data?.case?.created_by}</p>
         <p>Created at: {data?.case?.created_at}</p>
         <p>Current status: {data?.case?.status}</p>
-        <div className="flex gap-2 items-center">
-          <select className="border rounded px-2 py-1" value={status} onChange={(e) => setStatus(e.target.value)}>
-            {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-          <button className="px-3 py-1 border rounded" onClick={saveStatus}>Update status</button>
-        </div>
+        {canEditCase ? (
+          <div className="flex gap-2 items-center">
+            <select className="border rounded px-2 py-1" value={status} onChange={(e) => setStatus(e.target.value)}>
+              {availableStatuses.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <button className="px-3 py-1 border rounded" onClick={saveStatus}>Update status</button>
+          </div>
+        ) : (
+          <p className="text-xs text-slate-500">Your role is read-only for case status updates.</p>
+        )}
       </div>
       <div className="border rounded p-4 bg-white">
         <h2 className="font-semibold mb-2">Timeline</h2>

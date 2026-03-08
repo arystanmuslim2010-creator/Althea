@@ -20,6 +20,9 @@ export function isConnectionError(message) {
 async function parseResponse(res) {
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
+    if (res.status === 401) {
+      localStorage.removeItem(TOKEN_KEY)
+    }
     throw new Error(err.detail || res.statusText)
   }
   if (res.status === 204 || res.headers.get('content-length') === '0') return {}
@@ -78,6 +81,8 @@ export const api = {
   createInvestigationCase: (alertId) => req('POST', '/cases/create', { alert_id: alertId }),
   getInvestigationCase: (caseId) => req('GET', `/cases/${caseId}`),
   updateInvestigationCaseStatus: (caseId, status) => req('POST', `/cases/${caseId}/status`, { status }),
+  getAdminUsers: () => req('GET', '/admin/users'),
+  updateUserRole: (userId, role) => req('POST', `/admin/users/${userId}/role`, { role }),
   getHealth: () => req('GET', '/health'),
   getRunInfo: () => req('GET', '/run-info'),
   getQueueMetrics: () => req('GET', '/queue-metrics'),

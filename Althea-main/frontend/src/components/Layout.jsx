@@ -1,12 +1,14 @@
-import { Outlet, useLocation } from 'react-router-dom'
+import { Link, Outlet, useLocation } from 'react-router-dom'
 import { Sidebar } from './Sidebar'
 import { ThemeToggle } from './ThemeToggle'
 import { LanguageSelect } from './LanguageSelect'
 import { useLanguage } from '../contexts/LanguageContext'
+import { useAuth } from '../contexts/AuthContext'
 
 export function Layout() {
   const { pathname } = useLocation()
   const { t } = useLanguage()
+  const { user, logout } = useAuth()
   const pageTitle = t.layout.pageTitles[pathname] ?? t.layout.defaultTitle
 
   return (
@@ -16,6 +18,9 @@ export function Layout() {
           {t.layout.defaultTitle}
         </h1>
         <div className="flex items-center gap-2">
+          <Link className="px-2 py-1 text-xs rounded border border-[var(--border)]" to="/investigation/dashboard">Investigation</Link>
+          {user ? <span className="text-xs px-2 py-1 rounded bg-[var(--surface2)] border border-[var(--border)]">{user.role}</span> : null}
+          <button type="button" onClick={logout} className="px-2 py-1 text-xs rounded border border-[var(--border)]">Logout</button>
           <LanguageSelect />
           <ThemeToggle />
         </div>

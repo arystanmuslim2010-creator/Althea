@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { NavLink } from 'react-router-dom'
 import { api } from '../services/api'
 import { useLanguage } from '../contexts/LanguageContext'
+import { useAuth } from '../contexts/AuthContext'
 
 const nav = [
   { path: '/', icon: '⌂' },
@@ -17,6 +18,7 @@ export function Sidebar({ title = 'Althea' }) {
   const [actor, setActor] = useState('Analyst_1')
   const [collapsed, setCollapsed] = useState(false)
   const { t } = useLanguage()
+  const { user } = useAuth()
 
   useEffect(() => {
     api.getActor().then((r) => setActor(r.actor || 'Analyst_1')).catch(() => {})
@@ -77,6 +79,43 @@ export function Sidebar({ title = 'Althea' }) {
             {!collapsed && t.sidebar.nav[path]}
           </NavLink>
         ))}
+      </nav>
+      <nav className={`flex flex-col gap-0.5 ${collapsed ? 'px-1' : 'px-3'} mb-4`}>
+        {!collapsed && (
+          <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-[var(--muted)] mt-0 mx-0 mb-1 ml-2 block">
+            Investigation
+          </span>
+        )}
+        <NavLink
+          to="/investigation/dashboard"
+          className={({ isActive }) =>
+            `${collapsed ? 'px-2 py-2.5 justify-center' : 'px-3 py-2'} text-sm rounded-md transition-colors duration-300 flex items-center gap-2 ${
+              isActive
+                ? 'text-[var(--text)] bg-[var(--surface2)] font-medium border border-[var(--border)]'
+                : 'text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface2)]'
+            }`
+          }
+          title={collapsed ? 'Investigation Dashboard' : undefined}
+        >
+          <span className="text-base leading-none" aria-hidden>Q</span>
+          {!collapsed && 'Investigation Dashboard'}
+        </NavLink>
+        {user?.role === 'admin' ? (
+          <NavLink
+            to="/investigation/admin/users"
+            className={({ isActive }) =>
+              `${collapsed ? 'px-2 py-2.5 justify-center' : 'px-3 py-2'} text-sm rounded-md transition-colors duration-300 flex items-center gap-2 ${
+                isActive
+                  ? 'text-[var(--text)] bg-[var(--surface2)] font-medium border border-[var(--border)]'
+                  : 'text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--surface2)]'
+              }`
+            }
+            title={collapsed ? 'User Management' : undefined}
+          >
+            <span className="text-base leading-none" aria-hidden>U</span>
+            {!collapsed && 'User Management'}
+          </NavLink>
+        ) : null}
       </nav>
       {!collapsed && (
         <div className="mt-4 pt-4 px-4 border-t border-[var(--border)]">
