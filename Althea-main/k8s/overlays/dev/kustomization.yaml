@@ -1,0 +1,32 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  - target:
+      kind: ConfigMap
+      name: althea-config
+    patch: |-
+      - op: replace
+        path: /data/ALTHEA_ENV
+        value: development
+      - op: replace
+        path: /data/ALTHEA_ALLOW_SQLITE_IN_DEV
+        value: "true"
+      - op: replace
+        path: /data/ALTHEA_WORKER_CONCURRENCY
+        value: "2"
+  - target:
+      kind: Deployment
+      name: althea-backend
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: althea-worker
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2

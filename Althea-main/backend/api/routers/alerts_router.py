@@ -100,6 +100,14 @@ def _active_run_id(request: Request, tenant_id: str) -> Optional[str]:
     return info.get("run_id")
 
 
+def _load_alerts_df(request: Request, tenant_id: str, run_id: str) -> pd.DataFrame:
+    payloads = request.app.state.repository.list_alert_payloads_by_run(tenant_id=tenant_id, run_id=run_id, limit=500000)
+    if payloads:
+        return pd.DataFrame(payloads)
+    # Backward-compatible fallback for legacy runs.
+    return request.app.state.storage.load_alerts_by_run(run_id)
+
+
 @router.get("/api/alerts")
 def get_alerts(
     request: Request,
@@ -111,11 +119,10 @@ def get_alerts(
     run_id: Optional[str] = None,
     tenant_id: str = Depends(get_tenant_id),
 ):
-    storage = request.app.state.storage
     run_id = run_id or _active_run_id(request, tenant_id)
     if not run_id:
         return {"alerts": [], "run_id": None, "total": 0}
-    alerts_df = storage.load_alerts_by_run(run_id)
+    alerts_df = _load_alerts_df(request, tenant_id, run_id)
     if alerts_df.empty:
         return {"alerts": [], "run_id": run_id, "total": 0}
     queue = alerts_df.copy()
@@ -156,7 +163,7 @@ def get_alert(alert_id: str, request: Request, tenant_id: str = Depends(get_tena
     run_id = _active_run_id(request, tenant_id)
     if not run_id:
         raise HTTPException(status_code=404, detail="No active run")
-    alerts_df = request.app.state.storage.load_alerts_by_run(run_id)
+    alerts_df = _load_alerts_df(request, tenant_id, run_id)
     row = alerts_df[alerts_df["alert_id"].astype(str) == str(alert_id)]
     if row.empty:
         raise HTTPException(status_code=404, detail="Alert not found")
@@ -168,6 +175,7 @@ def get_alert_explain(alert_id: str, request: Request, run_id: Optional[str] = N
     rid = run_id or _active_run_id(request, tenant_id)
     if not rid:
         raise HTTPException(status_code=404, detail="No active run")
+    # explain service expects storage-like object; use legacy storage fallback for trace read compatibility.
     result = request.app.state.explain_service.explain_alert(alert_id, rid, request.app.state.storage)
     if result is None:
         raise HTTPException(status_code=404, detail="Alert or decision trace not found")
@@ -185,7 +193,7 @@ def get_ai_summary(alert_id: str, request: Request):
 @router.post("/api/alerts/{alert_id}/ai-summary")
 def generate_ai_summary(alert_id: str, request: Request, tenant_id: str = Depends(get_tenant_id)):
     run_id = _active_run_id(request, tenant_id)
-    alerts_df = request.app.state.storage.load_alerts_by_run(run_id or "")
+    alerts_df = _load_alerts_df(request, tenant_id, run_id or "")
     row = alerts_df[alerts_df["alert_id"].astype(str) == str(alert_id)]
     if row.empty:
         raise HTTPException(status_code=404, detail="Alert not found")
@@ -207,7 +215,7 @@ def get_queue_metrics(request: Request, tenant_id: str = Depends(get_tenant_id))
     safe = {"total_alerts": 0, "in_queue": 0, "suppressed": 0, "high_risk": 0}
     if not run_id:
         return safe
-    alerts_df = request.app.state.storage.load_alerts_by_run(run_id)
+    alerts_df = _load_alerts_df(request, tenant_id, run_id)
     if alerts_df.empty:
         return safe
     total = len(alerts_df)
@@ -232,7 +240,7 @@ def get_queue_metrics(request: Request, tenant_id: str = Depends(get_tenant_id))
 @router.get("/api/ops-metrics")
 def get_ops_metrics(request: Request, analyst_capacity: int = 50, tenant_id: str = Depends(get_tenant_id)):
     run_id = _active_run_id(request, tenant_id)
-    alerts_df = request.app.state.storage.load_alerts_by_run(run_id or "")
+    alerts_df = _load_alerts_df(request, tenant_id, run_id or "")
     if alerts_df.empty or "risk_score" not in alerts_df.columns:
         return {"precision_k": 0, "alerts_per_case": 0, "suppression_rate": 0}
     metrics = request.app.state.ops_service.compute_ops_metrics(alerts_df, analyst_capacity, 30)

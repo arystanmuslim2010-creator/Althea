@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -18,6 +18,15 @@ def _user_scope(request: Request, user: dict | None = None) -> str:
     return (user or {}).get("user_id") or request.headers.get("X-User-Scope") or "public"
 
 
+def _load_alerts_df(request: Request, tenant_id: str, run_id: str):
+    payloads = request.app.state.repository.list_alert_payloads_by_run(tenant_id=tenant_id, run_id=run_id, limit=500000)
+    if payloads:
+        import pandas as pd
+
+        return pd.DataFrame(payloads)
+    return request.app.state.storage.load_alerts_by_run(run_id)
+
+
 def _log_event(
     request: Request,
     tenant_id: str,
@@ -27,7 +36,7 @@ def _log_event(
     case_id: str | None = None,
     details: dict | None = None,
 ) -> None:
-    request.app.state.repository.append_investigation_log(
+    entry = request.app.state.repository.append_investigation_log(
         {
             "id": uuid.uuid4().hex,
             "tenant_id": tenant_id,
@@ -38,6 +47,17 @@ def _log_event(
             "details_json": details or {},
             "timestamp": datetime.now(timezone.utc),
         }
+    )
+    request.app.state.event_bus.publish(
+        event_name=action,
+        tenant_id=tenant_id,
+        payload={
+            "investigation_log_id": entry.get("id"),
+            "case_id": case_id,
+            "alert_id": alert_id,
+            "performed_by": performed_by,
+            "details": details or {},
+        },
     )
 
 
@@ -89,7 +109,7 @@ def get_work_queue(
     run_id = run_info.get("run_id")
     if not run_id:
         return {"queue": [], "count": 0}
-    alerts_df = request.app.state.storage.load_alerts_by_run(run_id)
+    alerts_df = _load_alerts_df(request, user["tenant_id"], run_id)
     if alerts_df.empty:
         return {"queue": [], "count": 0}
     repo = request.app.state.repository
@@ -213,6 +233,7 @@ def create_investigation_case(
         raise HTTPException(status_code=409, detail="Case already exists for this alert")
     case_id = f"INV-{uuid.uuid4().hex[:12]}"
     created_at = datetime.now(timezone.utc)
+    sla_due_at = (created_at + timedelta(hours=24)).isoformat()
     case = repo.save_case(
         {
             "case_id": case_id,
@@ -227,6 +248,11 @@ def create_investigation_case(
                 "created_by": user["user_id"],
                 "status": "open",
                 "created_at": created_at.isoformat(),
+                "sla_due_at": sla_due_at,
+                "approval_chain": [
+                    {"step": "analyst_review", "status": "completed", "actor": user["user_id"], "timestamp": created_at.isoformat()},
+                    {"step": "manager_approval", "status": "pending", "actor": None, "timestamp": None},
+                ],
             },
             "immutable_timeline_json": [],
             "created_at": created_at,
@@ -249,9 +275,9 @@ def get_case(
         notes = repo.list_alert_notes(user["tenant_id"], case.get("alert_id") or "")
         logs = repo.list_investigation_logs(user["tenant_id"], case_id=case_id, limit=200)
         return {"case": case["payload_json"], "notes": notes, "timeline": logs}
-    legacy_cases = request.app.state.case_service.list_cases()
+    legacy_cases = request.app.state.case_service.list_cases(user["tenant_id"])
     if case_id in legacy_cases:
-        return {"case": legacy_cases[case_id], "notes": [], "timeline": request.app.state.case_service.get_case_audit(case_id)}
+        return {"case": legacy_cases[case_id], "notes": [], "timeline": request.app.state.case_service.get_case_audit(case_id, user["tenant_id"])}
     raise HTTPException(status_code=404, detail="Case not found")
 
 
@@ -274,6 +300,16 @@ def update_investigation_case_status(
     payload_json = dict(case["payload_json"])
     payload_json["status"] = new_status
     payload_json["closed_at"] = datetime.now(timezone.utc).isoformat() if new_status == "closed" else None
+    approval_chain = list(payload_json.get("approval_chain") or [])
+    if new_status in {"sar_filed", "closed"}:
+        if not approval_chain:
+            approval_chain = [{"step": "manager_approval", "status": "pending", "actor": None, "timestamp": None}]
+        for step in approval_chain:
+            if step.get("step") == "manager_approval":
+                step["status"] = "completed"
+                step["actor"] = user["user_id"]
+                step["timestamp"] = datetime.now(timezone.utc).isoformat()
+    payload_json["approval_chain"] = approval_chain
     timeline = list(case.get("immutable_timeline_json") or [])
     timeline.append(
         {
@@ -326,8 +362,8 @@ def admin_logs(request: Request, user: dict = Depends(require_permissions("view_
 
 
 @router.get("/cases")
-def get_cases(request: Request):
-    return {"cases": request.app.state.case_service.list_cases()}
+def get_cases(request: Request, tenant_id: str = Depends(get_tenant_id)):
+    return {"cases": request.app.state.case_service.list_cases(tenant_id)}
 
 
 @router.post("/cases")
@@ -341,6 +377,11 @@ def create_case(request: Request, payload: CreateCaseRequest, tenant_id: str = D
         alert_ids=payload.alert_ids,
         run_id=run_info["run_id"],
         actor=payload.actor,
+    )
+    request.app.state.event_bus.publish(
+        event_name="case_created",
+        tenant_id=tenant_id,
+        payload={"case_id": case.get("case_id"), "alert_ids": payload.alert_ids, "actor": payload.actor},
     )
     return {"case_id": case["case_id"], "status": case["status"]}
 
@@ -382,5 +423,5 @@ def delete_case(case_id: str, request: Request, tenant_id: str = Depends(get_ten
 
 
 @router.get("/cases/{case_id}/audit")
-def get_case_audit(case_id: str, request: Request):
-    return {"events": request.app.state.case_service.get_case_audit(case_id)}
+def get_case_audit(case_id: str, request: Request, tenant_id: str = Depends(get_tenant_id)):
+    return {"events": request.app.state.case_service.get_case_audit(case_id, tenant_id)}

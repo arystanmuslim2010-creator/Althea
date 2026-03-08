@@ -41,8 +41,22 @@ class RefreshRequest(BaseModel):
 def list_identity_providers(request: Request):
     settings = request.app.state.settings
     return {
-        "oidc": {"enabled": bool(settings.oidc_issuer_url), "issuer": settings.oidc_issuer_url, "client_id": settings.oidc_client_id},
+        "oidc": {
+            "enabled": bool(settings.oidc_issuer_url),
+            "issuer": settings.oidc_issuer_url,
+            "client_id": settings.oidc_client_id,
+        },
         "saml": {"enabled": bool(settings.saml_metadata_url), "metadata_url": settings.saml_metadata_url},
+        "azure_ad": {
+            "enabled": bool(settings.azure_ad_tenant_id and settings.azure_ad_client_id),
+            "tenant_id": settings.azure_ad_tenant_id,
+            "client_id": settings.azure_ad_client_id,
+        },
+        "okta": {
+            "enabled": bool(settings.okta_domain and settings.okta_client_id),
+            "domain": settings.okta_domain,
+            "client_id": settings.okta_client_id,
+        },
     }
 
 
@@ -132,14 +146,27 @@ def refresh_session(payload: RefreshRequest, request: Request):
     user = repository.get_user_by_id(tenant_id, claims.get("sub", ""))
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    rotated_refresh_token = build_refresh_token(settings, tenant_id, user, session["session_id"])
+    repository.update_session_refresh_token(
+        tenant_id=tenant_id,
+        session_id=session["session_id"],
+        refresh_token_hash=hash_refresh_token(rotated_refresh_token),
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=settings.refresh_token_minutes),
+    )
     access_token = build_access_token(settings, tenant_id, user, session["session_id"])
-    return {"access_token": access_token, "token_type": "bearer"}
+    return {"access_token": access_token, "refresh_token": rotated_refresh_token, "token_type": "bearer"}
 
 
 @router.post("/logout")
 def logout(request: Request, user: dict = Depends(get_current_user)):
     request.app.state.repository.revoke_session(user["tenant_id"], user["session_id"])
     return {"status": "revoked"}
+
+
+@router.post("/logout-all")
+def logout_all(request: Request, user: dict = Depends(get_current_user)):
+    revoked = request.app.state.repository.revoke_all_user_sessions(user["tenant_id"], user["user_id"])
+    return {"status": "revoked", "revoked_sessions": revoked}
 
 
 @router.get("/me")

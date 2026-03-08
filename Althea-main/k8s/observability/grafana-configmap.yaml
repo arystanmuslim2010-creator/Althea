@@ -1,0 +1,59 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: althea-grafana-dashboard
+data:
+  althea-overview.json: |
+    {
+      "id": null,
+      "title": "ALTHEA AML Operations",
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "30s",
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "Pipeline Run Duration",
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(althea_pipeline_run_duration_seconds_bucket[5m])) by (le))",
+              "legendFormat": "p95"
+            }
+          ],
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 }
+        },
+        {
+          "type": "timeseries",
+          "title": "ML Inference Latency",
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(althea_ml_inference_latency_seconds_bucket[5m])) by (le))",
+              "legendFormat": "p95"
+            }
+          ],
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 }
+        },
+        {
+          "type": "timeseries",
+          "title": "Worker Task Duration",
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(althea_worker_task_duration_seconds_bucket[5m])) by (le, worker))",
+              "legendFormat": "{{worker}} p95"
+            }
+          ],
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 }
+        },
+        {
+          "type": "stat",
+          "title": "Alert Queue Size",
+          "targets": [
+            {
+              "expr": "althea_alert_queue_size"
+            }
+          ],
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 }
+        }
+      ]
+    }

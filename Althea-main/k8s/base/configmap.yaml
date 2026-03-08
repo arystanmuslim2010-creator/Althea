@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: althea-config
+data:
+  ALTHEA_ENV: development
+  ALTHEA_QUEUE_MODE: rq
+  ALTHEA_RQ_QUEUE: althea-pipeline
+  ALTHEA_WORKER_CONCURRENCY: "4"
+  ALTHEA_PIPELINE_BATCH_SIZE: "20000"
+  ALTHEA_REQUIRE_POSTGRES: "true"
+  ALTHEA_ALLOW_SQLITE_IN_DEV: "true"
+  ALTHEA_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,8 +13,10 @@ from api.routers.investigation_router import router as investigation_router
 from api.routers.pipeline_router import router as pipeline_router
 from core.dependencies import build_app_state
 from core.observability import MetricsRegistry, correlation_middleware
+from core.telemetry import setup_telemetry
 from src.domain.schemas import OverlayInputError
 from src.services import OpsService
+from workers.event_subscriber_worker import run_event_subscriber
 
 logger = logging.getLogger("althea-backend")
 
@@ -24,6 +27,10 @@ for key, value in build_app_state().items():
 app.state.metrics = MetricsRegistry()
 app.state.storage = app.state.pipeline_service._legacy_storage
 app.state.ops_service = OpsService()
+setup_telemetry(app, app.state.settings)
+if app.state.settings.queue_mode == "threaded":
+    app.state.job_queue_service.start_threaded_workers(app.state.settings.worker_concurrency)
+    threading.Thread(target=run_event_subscriber, name="althea-event-worker", daemon=True).start()
 
 app.add_middleware(
     CORSMiddleware,

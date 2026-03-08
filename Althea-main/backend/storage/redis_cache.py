@@ -70,3 +70,30 @@ class RedisCache:
             return list(reversed(out))
         with self._lock:
             return list(self._streams.get(stream, []))[-limit:]
+
+    def read_events_after(
+        self,
+        stream: str,
+        last_event_id: str = "0-0",
+        limit: int = 100,
+        block_ms: int = 1000,
+    ) -> list[dict[str, Any]]:
+        if self._client is not None:
+            result = self._client.xread({stream: last_event_id}, block=block_ms, count=limit)
+            out: list[dict[str, Any]] = []
+            for _, items in result:
+                for event_id, fields in items:
+                    out.append({"id": event_id, "payload": json.loads(fields.get("payload", "{}"))})
+            return out
+        with self._lock:
+            events = list(self._streams.get(stream, []))
+            if last_event_id == "0-0":
+                return events[-limit:]
+            seen = False
+            new_events: list[dict[str, Any]] = []
+            for event in events:
+                if seen:
+                    new_events.append(event)
+                elif event.get("id") == last_event_id:
+                    seen = True
+            return new_events[-limit:]

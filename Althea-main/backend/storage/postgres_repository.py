@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, create_engine, desc, select
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text, create_engine, desc, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 
@@ -154,7 +154,36 @@ class ModelVersionRecord(Base):
     metrics_uri: Mapped[str] = mapped_column(String(512))
     artifact_uri: Mapped[str] = mapped_column(String(512))
     approval_status: Mapped[str] = mapped_column(String(64), default="pending")
+    training_metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    approved_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class FeatureStoreRecord(Base):
+    __tablename__ = "feature_store"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True, default=lambda: uuid.uuid4().hex)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    run_id: Mapped[str] = mapped_column(String(128), index=True)
+    alert_id: Mapped[str] = mapped_column(String(128), index=True)
+    feature_schema_hash: Mapped[str] = mapped_column(String(256), index=True)
+    features_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+
+
+class ModelMonitoringRecord(Base):
+    __tablename__ = "model_monitoring"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True, default=lambda: uuid.uuid4().hex)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    run_id: Mapped[str] = mapped_column(String(128), index=True)
+    model_version: Mapped[str] = mapped_column(String(128), index=True)
+    psi_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    drift_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    degradation_flag: Mapped[bool] = mapped_column(Boolean, default=False)
+    metrics_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
 
 
 class EnterpriseRepository:
@@ -244,6 +273,56 @@ class EnterpriseRepository:
             ).scalars()
             return [self._to_dict(row) for row in rows]
 
+    def save_alert_payloads(self, tenant_id: str, run_id: str, records: list[dict[str, Any]]) -> int:
+        if not records:
+            return 0
+        with self.session() as session:
+            valid_records: list[dict[str, Any]] = []
+            alert_ids: list[str] = []
+            for payload in records:
+                alert_id = str(payload.get("alert_id") or payload.get("id") or "").strip()
+                if not alert_id:
+                    continue
+                valid_records.append(payload)
+                alert_ids.append(alert_id)
+            if not valid_records:
+                return 0
+
+            existing_rows = session.execute(
+                select(AlertRecord).where(AlertRecord.id.in_(alert_ids))
+            ).scalars()
+            existing_by_id = {row.id: row for row in existing_rows}
+
+            for payload in valid_records:
+                alert_id = str(payload.get("alert_id") or payload.get("id"))
+                row = existing_by_id.get(alert_id)
+                if row is None:
+                    session.add(
+                        AlertRecord(
+                            id=alert_id,
+                            tenant_id=tenant_id,
+                            run_id=run_id,
+                            payload_json=payload,
+                            created_at=_utcnow(),
+                        )
+                    )
+                    continue
+                row.tenant_id = tenant_id
+                row.run_id = run_id
+                row.payload_json = payload
+            session.flush()
+            return len(valid_records)
+
+    def list_alert_payloads_by_run(self, tenant_id: str, run_id: str, limit: int = 200000) -> list[dict[str, Any]]:
+        with self.session() as session:
+            rows = session.execute(
+                select(AlertRecord)
+                .where(AlertRecord.tenant_id == tenant_id, AlertRecord.run_id == run_id)
+                .order_by(AlertRecord.created_at.desc())
+                .limit(limit)
+            ).scalars()
+            return [dict(row.payload_json or {}) for row in rows]
+
     def create_user(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self.session() as session:
             record = UserRecord(**payload)
@@ -313,6 +392,43 @@ class EnterpriseRepository:
             row.revoked = True
             session.flush()
             return self._to_dict(row)
+
+    def update_session_refresh_token(
+        self,
+        tenant_id: str,
+        session_id: str,
+        refresh_token_hash: str,
+        expires_at: datetime,
+    ) -> dict[str, Any] | None:
+        with self.session() as session:
+            row = session.execute(
+                select(UserSessionRecord).where(
+                    UserSessionRecord.tenant_id == tenant_id,
+                    UserSessionRecord.session_id == session_id,
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            row.refresh_token_hash = refresh_token_hash
+            row.expires_at = expires_at
+            session.flush()
+            return self._to_dict(row)
+
+    def revoke_all_user_sessions(self, tenant_id: str, user_id: str) -> int:
+        with self.session() as session:
+            rows = session.execute(
+                select(UserSessionRecord).where(
+                    UserSessionRecord.tenant_id == tenant_id,
+                    UserSessionRecord.user_id == user_id,
+                    UserSessionRecord.revoked == False,
+                )
+            ).scalars()
+            count = 0
+            for row in rows:
+                row.revoked = True
+                count += 1
+            session.flush()
+            return count
 
     def upsert_assignment(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self.session() as session:
@@ -423,6 +539,55 @@ class EnterpriseRepository:
                 select(ModelVersionRecord)
                 .where(ModelVersionRecord.tenant_id == tenant_id)
                 .order_by(ModelVersionRecord.created_at.desc())
+            ).scalars()
+            return [self._to_dict(row) for row in rows]
+
+    def store_feature_rows(
+        self,
+        tenant_id: str,
+        run_id: str,
+        feature_schema_hash: str,
+        feature_rows: list[dict[str, Any]],
+    ) -> int:
+        with self.session() as session:
+            for row in feature_rows:
+                alert_id = str(row.get("alert_id") or row.get("id") or uuid.uuid4().hex)
+                session.add(
+                    FeatureStoreRecord(
+                        tenant_id=tenant_id,
+                        run_id=run_id,
+                        alert_id=alert_id,
+                        feature_schema_hash=feature_schema_hash,
+                        features_json=row,
+                    )
+                )
+            session.flush()
+            return len(feature_rows)
+
+    def list_feature_rows(self, tenant_id: str, run_id: str, limit: int = 200000) -> list[dict[str, Any]]:
+        with self.session() as session:
+            rows = session.execute(
+                select(FeatureStoreRecord)
+                .where(FeatureStoreRecord.tenant_id == tenant_id, FeatureStoreRecord.run_id == run_id)
+                .order_by(FeatureStoreRecord.created_at.desc())
+                .limit(limit)
+            ).scalars()
+            return [dict(row.features_json or {}) for row in rows]
+
+    def save_model_monitoring(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self.session() as session:
+            row = ModelMonitoringRecord(**payload)
+            session.add(row)
+            session.flush()
+            return self._to_dict(row)
+
+    def list_model_monitoring(self, tenant_id: str, limit: int = 200) -> list[dict[str, Any]]:
+        with self.session() as session:
+            rows = session.execute(
+                select(ModelMonitoringRecord)
+                .where(ModelMonitoringRecord.tenant_id == tenant_id)
+                .order_by(ModelMonitoringRecord.created_at.desc())
+                .limit(limit)
             ).scalars()
             return [self._to_dict(row) for row in rows]
 

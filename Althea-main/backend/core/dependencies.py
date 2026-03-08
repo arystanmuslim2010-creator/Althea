@@ -14,6 +14,7 @@ from services.explain_service import ExplainabilityService
 from services.feature_service import EnterpriseFeatureService
 from services.ingestion_service import EnterpriseIngestionService
 from services.job_queue_service import JobQueueService
+from services.model_monitoring_service import ModelMonitoringService
 from services.pipeline_service import PipelineService
 from services.scoring_service import EnterpriseScoringService
 from storage.object_storage import ObjectStorage
@@ -98,7 +99,13 @@ def get_pipeline_service() -> PipelineService:
         event_bus=get_event_bus(),
         job_queue=get_job_queue_service(),
         feature_service=get_feature_service(),
+        model_monitoring_service=get_model_monitoring_service(),
     )
+
+
+@lru_cache(maxsize=1)
+def get_model_monitoring_service() -> ModelMonitoringService:
+    return ModelMonitoringService(get_repository())
 
 
 def build_app_state() -> dict:
@@ -117,4 +124,5 @@ def build_app_state() -> dict:
         "pipeline_service": get_pipeline_service(),
         "job_queue_service": get_job_queue_service(),
         "ml_service": get_ml_service(),
+        "model_monitoring_service": get_model_monitoring_service(),
     }

@@ -1,22 +1,34 @@
 from __future__ import annotations
 
+import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
-
 from storage.postgres_repository import EnterpriseRepository
-from src.services.case_service import CaseService as LegacyCaseService
 from src.storage import Storage as LegacyStorage
+
+ALLOWED_CASE_TRANSITIONS: dict[str, set[str]] = {
+    "open": {"under_review", "escalated", "closed"},
+    "under_review": {"escalated", "sar_filed", "closed"},
+    "escalated": {"under_review", "sar_filed", "closed"},
+    "sar_filed": {"closed"},
+    "closed": set(),
+}
 
 
 class CaseWorkflowService:
+    """
+    Enterprise case lifecycle with backward-compatible payload shape.
+
+    Existing `/api/cases*` endpoints keep working while case state is now persisted in
+    the enterprise repository. Legacy SQLite is used only as a read fallback.
+    """
+
     def __init__(self, repository: EnterpriseRepository, legacy_sqlite_path: Path) -> None:
         self._repository = repository
         self._legacy_storage = LegacyStorage(db_path=str(legacy_sqlite_path))
-        self._legacy_case_service = LegacyCaseService(storage=self._legacy_storage)
 
     def get_actor(self, tenant_id: str, user_scope: str) -> str:
         context = self._repository.get_runtime_context(tenant_id, user_scope)
@@ -25,18 +37,55 @@ class CaseWorkflowService:
     def set_actor(self, tenant_id: str, user_scope: str, actor: str) -> dict[str, Any]:
         return self._repository.upsert_runtime_context(tenant_id, user_scope, actor=actor)
 
-    def _load_state(self, actor: str) -> dict[str, Any]:
-        cases_dict, case_counter, audit_log = self._legacy_storage.load_state_from_db()
+    def _next_case_id(self, tenant_id: str) -> str:
+        existing = self._repository.list_cases(tenant_id)
+        max_n = 0
+        for row in existing:
+            case_id = str(row.get("case_id", ""))
+            m = re.match(r"^CASE_(\d{5})$", case_id)
+            if m:
+                max_n = max(max_n, int(m.group(1)))
+        return f"CASE_{max_n + 1:05d}"
+
+    def _default_case_payload(self, case_id: str, alert_ids: list[str], actor: str) -> dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        sla_due_at = now + timedelta(hours=24)
         return {
-            "cases": cases_dict or {},
-            "case_counter": case_counter or 1,
-            "audit_log": audit_log or [],
-            "actor": actor,
+            "case_id": case_id,
+            "status": "OPEN",
+            "state": "OPEN",
+            "assigned_to": actor,
+            "owner": actor,
+            "alert_ids": list(alert_ids),
+            "notes": "",
+            "version": 1,
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
+            "sla_due_at": sla_due_at.isoformat(),
+            "approval_chain": [
+                {
+                    "step": "analyst_review",
+                    "status": "completed",
+                    "actor": actor,
+                    "timestamp": now.isoformat(),
+                },
+                {"step": "manager_approval", "status": "pending", "actor": None, "timestamp": None},
+            ],
         }
 
-    def list_cases(self) -> dict[str, Any]:
-        state = self._load_state("Analyst_1")
-        return state["cases"]
+    def list_cases(self, tenant_id: str = "default-bank") -> dict[str, Any]:
+        # Compatibility mode for legacy UI endpoint; tenant defaults to default-bank.
+        enterprise_cases = self._repository.list_cases(tenant_id)
+        if enterprise_cases:
+            out: dict[str, Any] = {}
+            for row in enterprise_cases:
+                payload = row.get("payload_json") or {}
+                out[row["case_id"]] = payload
+            return out
+
+        # Legacy fallback for historical local data.
+        cases_dict, _, _ = self._legacy_storage.load_state_from_db()
+        return cases_dict or {}
 
     def create_case(
         self,
@@ -46,20 +95,29 @@ class CaseWorkflowService:
         run_id: str,
         actor: str,
     ) -> dict[str, Any]:
-        state = self._load_state(actor)
-        alerts_df = self._legacy_storage.load_alerts_by_run(run_id)
-        case_id = self._legacy_case_service.create_case(state, alerts_df, alert_ids)
-        case = state["cases"][case_id]
+        case_id = self._next_case_id(tenant_id)
+        payload = self._default_case_payload(case_id=case_id, alert_ids=alert_ids, actor=actor)
+        now = datetime.now(timezone.utc)
         self._repository.save_case(
             {
                 "case_id": case_id,
                 "tenant_id": tenant_id,
-                "status": case.get("status", "OPEN"),
+                "status": "open",
                 "created_by": actor,
-                "assigned_to": case.get("assigned_to"),
+                "assigned_to": actor,
                 "alert_id": (alert_ids or [None])[0],
-                "payload_json": case,
-                "immutable_timeline_json": self._legacy_storage.get_audit_log_for_case(case_id),
+                "payload_json": payload,
+                "immutable_timeline_json": [
+                    {
+                        "id": uuid.uuid4().hex,
+                        "action": "case_created",
+                        "performed_by": actor,
+                        "timestamp": now.isoformat(),
+                        "details": {"alert_ids": alert_ids, "run_id": run_id},
+                    }
+                ],
+                "created_at": now,
+                "updated_at": now,
             }
         )
         self._repository.append_investigation_log(
@@ -70,12 +128,12 @@ class CaseWorkflowService:
                 "alert_id": (alert_ids or [None])[0],
                 "action": "case_created",
                 "performed_by": actor,
-                "details_json": {"alert_ids": alert_ids},
-                "timestamp": datetime.now(timezone.utc),
+                "details_json": {"alert_ids": alert_ids, "run_id": run_id},
+                "timestamp": now,
             }
         )
         self.set_actor(tenant_id, user_scope, actor)
-        return case
+        return payload
 
     def update_case(
         self,
@@ -88,30 +146,61 @@ class CaseWorkflowService:
         assigned_to: str | None = None,
         notes: str | None = None,
     ) -> tuple[bool, str, dict[str, Any] | None]:
-        state = self._load_state(actor)
-        alerts_df = self._legacy_storage.load_alerts_by_run(run_id)
-        ok, message = self._legacy_case_service.update_case(
-            state,
-            case_id=case_id,
-            df=alerts_df,
-            status=status,
-            assigned_to=assigned_to,
-            notes=notes,
-            action="CASE_UPDATED",
+        existing = self._repository.get_case(tenant_id, case_id)
+        if not existing:
+            return False, "Case not found", None
+
+        payload = dict(existing.get("payload_json") or {})
+        current_state = str(payload.get("status", "OPEN")).lower()
+        new_state = (status or current_state).lower()
+        if new_state not in ALLOWED_CASE_TRANSITIONS:
+            return False, f"Invalid status: {new_state}", None
+        if new_state != current_state and new_state not in ALLOWED_CASE_TRANSITIONS.get(current_state, set()):
+            return False, f"Invalid transition: {current_state} -> {new_state}", None
+
+        if assigned_to is not None:
+            payload["assigned_to"] = assigned_to
+            payload["owner"] = assigned_to
+        if notes is not None:
+            payload["notes"] = notes
+
+        payload["status"] = new_state.upper()
+        payload["state"] = new_state.upper()
+        payload["version"] = int(payload.get("version", 1)) + 1
+        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+        if new_state in {"sar_filed", "closed"}:
+            chain = list(payload.get("approval_chain") or [])
+            for step in chain:
+                if step.get("step") == "manager_approval":
+                    step["status"] = "completed"
+                    step["actor"] = actor
+                    step["timestamp"] = datetime.now(timezone.utc).isoformat()
+            payload["approval_chain"] = chain
+
+        timeline = list(existing.get("immutable_timeline_json") or [])
+        timeline.append(
+            {
+                "id": uuid.uuid4().hex,
+                "action": "case_updated",
+                "performed_by": actor,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "details": {"status": new_state, "assigned_to": assigned_to, "notes": notes, "run_id": run_id},
+            }
         )
-        if not ok:
-            return False, message, None
-        case = state["cases"][case_id]
+
         self._repository.save_case(
             {
                 "case_id": case_id,
                 "tenant_id": tenant_id,
-                "status": case.get("status", "OPEN"),
-                "created_by": actor,
-                "assigned_to": case.get("assigned_to"),
-                "alert_id": (case.get("alert_ids") or [None])[0],
-                "payload_json": case,
-                "immutable_timeline_json": self._legacy_storage.get_audit_log_for_case(case_id),
+                "status": new_state,
+                "created_by": existing.get("created_by"),
+                "assigned_to": payload.get("assigned_to"),
+                "alert_id": existing.get("alert_id"),
+                "payload_json": payload,
+                "immutable_timeline_json": timeline,
+                "created_at": datetime.fromisoformat(existing["created_at"]),
+                "updated_at": datetime.now(timezone.utc),
             }
         )
         self._repository.append_investigation_log(
@@ -119,20 +208,34 @@ class CaseWorkflowService:
                 "id": uuid.uuid4().hex,
                 "tenant_id": tenant_id,
                 "case_id": case_id,
-                "alert_id": (case.get("alert_ids") or [None])[0],
+                "alert_id": existing.get("alert_id"),
                 "action": "case_updated",
                 "performed_by": actor,
-                "details_json": {"status": status, "assigned_to": assigned_to, "notes": notes},
+                "details_json": {"status": new_state, "assigned_to": assigned_to, "notes": notes, "run_id": run_id},
                 "timestamp": datetime.now(timezone.utc),
             }
         )
         self.set_actor(tenant_id, user_scope, actor)
-        return True, message, case
+        return True, "Case updated", payload
 
     def delete_case(self, tenant_id: str, case_id: str) -> bool:
-        self._legacy_storage.delete_case(case_id)
-        self._repository.delete_case(tenant_id, case_id)
-        return True
+        deleted = self._repository.delete_case(tenant_id, case_id)
+        return bool(deleted)
 
-    def get_case_audit(self, case_id: str) -> list[dict[str, Any]]:
+    def get_case_audit(self, case_id: str, tenant_id: str = "default-bank") -> list[dict[str, Any]]:
+        case = self._repository.get_case(tenant_id, case_id)
+        if case and case.get("immutable_timeline_json"):
+            events = []
+            for item in case.get("immutable_timeline_json", []):
+                events.append(
+                    {
+                        "event_id": item.get("id"),
+                        "case_id": case_id,
+                        "ts": item.get("timestamp"),
+                        "actor": item.get("performed_by"),
+                        "action": item.get("action"),
+                        "payload": item.get("details", {}),
+                    }
+                )
+            return events
         return self._legacy_storage.get_audit_log_for_case(case_id)

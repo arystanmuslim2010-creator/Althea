@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: althea-grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: althea-grafana
+  template:
+    metadata:
+      labels:
+        app: althea-grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.1.0
+          ports:
+            - containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: admin
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: admin
+          volumeMounts:
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+      volumes:
+        - name: dashboards
+          configMap:
+            name: althea-grafana-dashboard
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: althea-grafana
+spec:
+  selector:
+    app: althea-grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000

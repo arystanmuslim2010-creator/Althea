@@ -20,8 +20,10 @@ class ModelRegistry:
         training_dataset_hash: str,
         feature_schema: dict[str, Any],
         metrics: dict[str, Any],
+        training_metadata: dict[str, Any] | None = None,
         approval_status: str = "pending",
         model_version: str | None = None,
+        approved_by: str | None = None,
     ) -> dict[str, Any]:
         version = model_version or f"model-{uuid.uuid4().hex[:12]}"
         artifact_uri = f"models/{tenant_id}/{version}/artifact.bin"
@@ -38,6 +40,9 @@ class ModelRegistry:
             "feature_schema_hash": feature_schema.get("schema_hash", ""),
             "metrics_uri": metrics_uri,
             "approval_status": approval_status,
+            "training_metadata_json": training_metadata or {},
+            "approved_by": approved_by,
+            "approved_at": datetime.now(timezone.utc).isoformat() if approval_status == "approved" else None,
             "artifact_uri": artifact_uri,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
