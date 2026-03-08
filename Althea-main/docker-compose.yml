@@ -1,0 +1,59 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: althea
+      POSTGRES_USER: althea
+      POSTGRES_PASSWORD: althea
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      ALTHEA_DATABASE_URL: postgresql+psycopg://althea:althea@postgres:5432/althea
+      ALTHEA_REDIS_URL: redis://redis:6379/0
+      ALTHEA_QUEUE_MODE: rq
+      ALTHEA_JWT_SECRET: change-me
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "8000:8000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: rq worker althea-pipeline --url redis://redis:6379/0
+    environment:
+      ALTHEA_DATABASE_URL: postgresql+psycopg://althea:althea@postgres:5432/althea
+      ALTHEA_REDIS_URL: redis://redis:6379/0
+      ALTHEA_QUEUE_MODE: rq
+      ALTHEA_JWT_SECRET: change-me
+    depends_on:
+      - postgres
+      - redis
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+
+volumes:
+  postgres_data:

@@ -1,0 +1,10 @@
+from __future__ import annotations
+
+import pandas as pd
+
+from core.dependencies import get_scoring_service
+
+
+def score_feature_batch(tenant_id: str, feature_rows: list[dict]) -> dict:
+    feature_frame = pd.DataFrame(feature_rows)
+    return get_scoring_service().predict(tenant_id=tenant_id, feature_matrix=feature_frame)

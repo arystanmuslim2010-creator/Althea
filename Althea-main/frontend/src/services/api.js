@@ -7,6 +7,7 @@
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
 const API = API_BASE ? `${API_BASE}/api` : '/api'
 const TOKEN_KEY = 'althea_auth_token'
+const REQUEST_TIMEOUT_MS = 10000
 
 /** Generic message when the service is unreachable (no port or server instructions). */
 export const CONNECTION_ERROR_MESSAGE = 'Cannot connect to backend service. Please try again.'
@@ -27,7 +28,21 @@ async function parseResponse(res) {
   }
   if (res.status === 204 || res.headers.get('content-length') === '0') return {}
   const text = await res.text()
-  return text ? JSON.parse(text) : {}
+  if (!text) return {}
+  try {
+    return JSON.parse(text)
+  } catch {
+    throw new Error('Backend returned an invalid response.')
+  }
+}
+
+function withTimeout() {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  return {
+    signal: controller.signal,
+    done: () => clearTimeout(timeoutId),
+  }
 }
 
 async function req(method, path, body = null) {
@@ -41,12 +56,16 @@ async function req(method, path, body = null) {
     opts.body = JSON.stringify(body)
   }
   let res
+  const timeout = withTimeout()
   try {
-    res = await fetch(`${API}${path}`, opts)
+    res = await fetch(`${API}${path}`, { ...opts, signal: timeout.signal })
   } catch (e) {
     const msg = (e && e.message) || ''
+    if (e?.name === 'AbortError') throw new Error(CONNECTION_ERROR_MESSAGE)
     if (isConnectionError(msg)) throw new Error(CONNECTION_ERROR_MESSAGE)
     throw new Error(msg || 'Network error')
+  } finally {
+    timeout.done()
   }
   return parseResponse(res)
 }
@@ -55,12 +74,16 @@ async function reqForm(path, formData) {
   const token = localStorage.getItem(TOKEN_KEY)
   const headers = token ? { Authorization: `Bearer ${token}` } : undefined
   let res
+  const timeout = withTimeout()
   try {
-    res = await fetch(`${API}${path}`, { method: 'POST', body: formData, headers })
+    res = await fetch(`${API}${path}`, { method: 'POST', body: formData, headers, signal: timeout.signal })
   } catch (e) {
     const msg = (e && e.message) || ''
+    if (e?.name === 'AbortError') throw new Error(CONNECTION_ERROR_MESSAGE)
     if (isConnectionError(msg)) throw new Error(CONNECTION_ERROR_MESSAGE)
     throw new Error(msg || 'Network error')
+  } finally {
+    timeout.done()
   }
   return parseResponse(res)
 }
@@ -121,5 +144,6 @@ export const api = {
     return reqForm('/data/upload-bank-csv', fd)
   },
   runPipeline: () => req('POST', '/pipeline/run'),
+  getPipelineJob: (jobId) => req('GET', `/pipeline/jobs/${jobId}`),
   clearRun: () => req('POST', '/pipeline/clear'),
 }

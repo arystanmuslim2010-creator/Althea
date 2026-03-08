@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: althea-backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: althea-backend
+  template:
+    metadata:
+      labels:
+        app: althea-backend
+    spec:
+      containers:
+        - name: backend
+          image: ghcr.io/your-org/althea-backend:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: ALTHEA_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: althea-secrets
+                  key: database-url
+            - name: ALTHEA_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: althea-secrets
+                  key: redis-url
+            - name: ALTHEA_QUEUE_MODE
+              value: rq
+            - name: ALTHEA_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: althea-secrets
+                  key: jwt-secret

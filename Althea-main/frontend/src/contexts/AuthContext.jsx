@@ -18,6 +18,19 @@ function decodeJwtPayload(token) {
   }
 }
 
+function buildUserFromJwt(token) {
+  const jwtPayload = decodeJwtPayload(token)
+  if (!jwtPayload) return null
+  return {
+    user_id: jwtPayload.user_id || jwtPayload.sub || null,
+    id: jwtPayload.sub || jwtPayload.user_id || null,
+    role: jwtPayload.role,
+    team: jwtPayload.team,
+    tenant_id: jwtPayload.tenant_id,
+    source: 'jwt',
+  }
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -30,15 +43,11 @@ export function AuthProvider({ children }) {
         return
       }
 
-      const jwtPayload = decodeJwtPayload(token)
-      if (jwtPayload) {
-        setUser({
-          user_id: jwtPayload.user_id,
-          role: jwtPayload.role,
-          team: jwtPayload.team,
-          source: 'jwt',
-        })
+      const jwtUser = buildUserFromJwt(token)
+      if (jwtUser) {
+        setUser(jwtUser)
       }
+      setLoading(false)
 
       try {
         const me = await api.me()
@@ -46,8 +55,6 @@ export function AuthProvider({ children }) {
       } catch {
         api.clearToken()
         setUser(null)
-      } finally {
-        setLoading(false)
       }
     }
 
@@ -57,18 +64,16 @@ export function AuthProvider({ children }) {
   const login = async ({ email, password }) => {
     const res = await api.login({ email, password })
     api.setToken(res.access_token)
-    const jwtPayload = decodeJwtPayload(res.access_token)
-    if (jwtPayload) {
-      setUser({
-        user_id: jwtPayload.user_id,
-        role: jwtPayload.role,
-        team: jwtPayload.team,
-        source: 'jwt',
-      })
-    }
-    const me = await api.me()
-    setUser({ ...me, source: 'api' })
-    return me
+    const resolvedUser = res.user
+      ? { ...res.user, user_id: res.user.user_id || res.user.id, source: 'login' }
+      : buildUserFromJwt(res.access_token)
+    setUser(resolvedUser || null)
+
+    api.me()
+      .then((me) => setUser({ ...me, source: 'api' }))
+      .catch(() => {})
+
+    return resolvedUser
   }
 
   const logout = () => {

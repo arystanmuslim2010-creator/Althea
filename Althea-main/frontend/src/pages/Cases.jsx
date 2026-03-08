@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../services/api'
 
-const STATUS_OPTIONS = ['OPEN', 'IN_PROGRESS', 'CLOSED_TP', 'CLOSED_FP']
+const STATUS_OPTIONS = ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'ESCALATED', 'MANAGER_REVIEW', 'SAR_FILED', 'CLOSED_TP', 'CLOSED_FP']
 const TAB_IDS = [
   { id: 'overview', label: 'Alert Overview' },
   { id: 'why', label: 'Why This Alert' },

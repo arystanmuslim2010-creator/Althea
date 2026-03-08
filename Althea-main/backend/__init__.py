@@ -1,1 +1,1 @@
-# AML Alert Prioritization backend
+"""Enterprise backend package for ALTHEA."""

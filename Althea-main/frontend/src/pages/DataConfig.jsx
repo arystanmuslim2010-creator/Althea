@@ -13,6 +13,22 @@ export function DataConfig() {
     setMsg(null)
     try {
       const res = await api.runPipeline()
+      if (res.job_id && res.status !== 'completed') {
+        setMsg(`Pipeline job queued: ${res.job_id}. Waiting for completion...`)
+        let final = res
+        for (let i = 0; i < 30; i += 1) {
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((resolve) => setTimeout(resolve, 1000))
+          // eslint-disable-next-line no-await-in-loop
+          final = await api.getPipelineJob(res.job_id)
+          if (final.status === 'completed' || final.status === 'failed') break
+        }
+        if (final.status === 'failed') {
+          throw new Error(final.detail || 'Pipeline failed')
+        }
+        setMsg(`Pipeline complete. ${final.alerts ?? '—'} alerts generated.`)
+        return final
+      }
       setMsg(`Pipeline complete. ${res.alerts ?? res.row_count ?? '—'} alerts generated.`)
       return res
     } catch (e) {
@@ -73,7 +89,7 @@ export function DataConfig() {
   return (
     <div className="max-w-[1200px] mx-auto">
       <h1 className="text-[1.375rem] font-medium mb-5 text-[var(--text)]">System & Data</h1>
-      <div className="p-6 max-w-[480px] rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-md">
+      <div className="p-6 max-w-[560px] rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-md">
         <h3 className="mt-0 text-[0.9375rem] font-semibold mb-4">Data Source</h3>
         <div className="flex flex-col gap-2 my-3 mb-4">
           <label className="flex items-center gap-2 cursor-pointer text-sm text-[var(--text)]">
@@ -88,6 +104,9 @@ export function DataConfig() {
             <input type="radio" name="source" checked={source === 'bank'} onChange={() => setSource('bank')} className="accent-blue-500" />
             Bank Alerts CSV
           </label>
+        </div>
+        <div className="mb-4 rounded-md border border-[var(--border)] bg-[var(--surface2)] px-4 py-3 text-sm text-[var(--muted)]">
+          Pipeline execution now goes through a persisted job flow. Local runs can still complete inline, while enterprise deployments can switch to Redis/RQ workers without changing the UI contract.
         </div>
         {source === 'synthetic' && (
           <>
