@@ -40,6 +40,7 @@ from src.governance.drift_monitor import score_distribution_monitor, feature_dri
 from src.governance.psi import compute_psi_table
 from src.governance.performance_monitor import performance_trends
 from src.governance.decision_logger import DecisionLogger
+from src.investigation_api import router as investigation_router
 
 app = FastAPI(title="AML Alert Prioritization API")
 
@@ -88,6 +89,7 @@ scoring_service = ScoringService()
 case_service = CaseService(storage=storage)
 ops_service = OpsService()
 ingestion_service = IngestionService()
+app.state.storage = storage
 
 # Session state per "session" (simplified: single global for demo)
 _state = {
@@ -101,6 +103,8 @@ _state = {
     "case_counter": 1,
     "actor": "Analyst_1",
 }
+app.state.runtime_state = _state
+app.include_router(investigation_router)
 
 # Load cases from DB on startup
 def _load_cases_from_db():

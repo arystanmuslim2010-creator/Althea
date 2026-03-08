@@ -347,6 +347,75 @@ class Storage:
             )
         """)
 
+        # Investigation layer tables (auth + workflow + audit trail)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL,
+                team TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS alerts_assignments (
+                id TEXT PRIMARY KEY,
+                alert_id TEXT NOT NULL,
+                assigned_to TEXT NOT NULL,
+                assigned_by TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_alerts_assignments_alert_id
+            ON alerts_assignments(alert_id)
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS alert_notes (
+                id TEXT PRIMARY KEY,
+                alert_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                note_text TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_alert_notes_alert_id
+            ON alert_notes(alert_id)
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS investigation_cases (
+                case_id TEXT PRIMARY KEY,
+                alert_id TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                closed_at TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_investigation_cases_alert_id
+            ON investigation_cases(alert_id)
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS investigation_logs (
+                id TEXT PRIMARY KEY,
+                case_id TEXT,
+                alert_id TEXT,
+                action TEXT NOT NULL,
+                performed_by TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                details_json TEXT NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_investigation_logs_case_id
+            ON investigation_logs(case_id)
+        """)
+
         conn.commit()
         conn.close()
     
@@ -1302,6 +1371,380 @@ class Storage:
         )
         conn.commit()
         conn.close()
+
+    # =========================================================================
+    # Investigation Layer Storage Methods
+    # =========================================================================
+
+    def create_user(self, user: Dict[str, Any]) -> None:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO users (id, email, password_hash, role, team, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user["id"],
+                user["email"].lower(),
+                user["password_hash"],
+                user["role"],
+                user["team"],
+                user["created_at"],
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, email, password_hash, role, team, created_at FROM users WHERE lower(email) = ?",
+            (email.lower(),),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "email": row[1],
+            "password_hash": row[2],
+            "role": row[3],
+            "team": row[4],
+            "created_at": row[5],
+        }
+
+    def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, email, password_hash, role, team, created_at FROM users WHERE id = ?",
+            (user_id,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "email": row[1],
+            "password_hash": row[2],
+            "role": row[3],
+            "team": row[4],
+            "created_at": row[5],
+        }
+
+    def list_users(self) -> List[Dict[str, Any]]:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, email, role, team, created_at FROM users ORDER BY created_at DESC"
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [
+            {"id": r[0], "email": r[1], "role": r[2], "team": r[3], "created_at": r[4]}
+            for r in rows
+        ]
+
+    def update_user_role(self, user_id: str, role: str) -> bool:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
+        updated = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return updated
+
+    def get_latest_assignment(self, alert_id: str) -> Optional[Dict[str, Any]]:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, alert_id, assigned_to, assigned_by, status, created_at, updated_at
+            FROM alerts_assignments
+            WHERE alert_id = ?
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (alert_id,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "alert_id": row[1],
+            "assigned_to": row[2],
+            "assigned_by": row[3],
+            "status": row[4],
+            "created_at": row[5],
+            "updated_at": row[6],
+        }
+
+    def upsert_alert_assignment(self, assignment: Dict[str, Any]) -> None:
+        existing = self.get_latest_assignment(assignment["alert_id"])
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        if existing:
+            cursor.execute(
+                """
+                UPDATE alerts_assignments
+                SET assigned_to = ?, assigned_by = ?, status = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    assignment["assigned_to"],
+                    assignment["assigned_by"],
+                    assignment["status"],
+                    assignment["updated_at"],
+                    existing["id"],
+                ),
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT INTO alerts_assignments
+                (id, alert_id, assigned_to, assigned_by, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    assignment["id"],
+                    assignment["alert_id"],
+                    assignment["assigned_to"],
+                    assignment["assigned_by"],
+                    assignment["status"],
+                    assignment["created_at"],
+                    assignment["updated_at"],
+                ),
+            )
+        conn.commit()
+        conn.close()
+
+    def list_assignments(self) -> List[Dict[str, Any]]:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, alert_id, assigned_to, assigned_by, status, created_at, updated_at
+            FROM alerts_assignments
+            ORDER BY updated_at DESC
+            """
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [
+            {
+                "id": r[0],
+                "alert_id": r[1],
+                "assigned_to": r[2],
+                "assigned_by": r[3],
+                "status": r[4],
+                "created_at": r[5],
+                "updated_at": r[6],
+            }
+            for r in rows
+        ]
+
+    def create_alert_note(self, note: Dict[str, Any]) -> None:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO alert_notes (id, alert_id, user_id, note_text, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (note["id"], note["alert_id"], note["user_id"], note["note_text"], note["created_at"]),
+        )
+        conn.commit()
+        conn.close()
+
+    def list_alert_notes(self, alert_id: str) -> List[Dict[str, Any]]:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, alert_id, user_id, note_text, created_at
+            FROM alert_notes
+            WHERE alert_id = ?
+            ORDER BY created_at DESC
+            """,
+            (alert_id,),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [
+            {
+                "id": r[0],
+                "alert_id": r[1],
+                "user_id": r[2],
+                "note_text": r[3],
+                "created_at": r[4],
+            }
+            for r in rows
+        ]
+
+    def create_investigation_case(self, case_data: Dict[str, Any]) -> None:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO investigation_cases
+            (case_id, alert_id, created_by, status, created_at, closed_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                case_data["case_id"],
+                case_data["alert_id"],
+                case_data["created_by"],
+                case_data["status"],
+                case_data["created_at"],
+                case_data.get("closed_at"),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    def get_investigation_case(self, case_id: str) -> Optional[Dict[str, Any]]:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT case_id, alert_id, created_by, status, created_at, closed_at
+            FROM investigation_cases
+            WHERE case_id = ?
+            """,
+            (case_id,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            "case_id": row[0],
+            "alert_id": row[1],
+            "created_by": row[2],
+            "status": row[3],
+            "created_at": row[4],
+            "closed_at": row[5],
+        }
+
+    def get_investigation_case_by_alert(self, alert_id: str) -> Optional[Dict[str, Any]]:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT case_id, alert_id, created_by, status, created_at, closed_at
+            FROM investigation_cases
+            WHERE alert_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (alert_id,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            "case_id": row[0],
+            "alert_id": row[1],
+            "created_by": row[2],
+            "status": row[3],
+            "created_at": row[4],
+            "closed_at": row[5],
+        }
+
+    def update_investigation_case_status(
+        self, case_id: str, status: str, closed_at: Optional[str] = None
+    ) -> bool:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE investigation_cases SET status = ?, closed_at = ? WHERE case_id = ?",
+            (status, closed_at, case_id),
+        )
+        updated = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+        return updated
+
+    def append_investigation_log(self, event: Dict[str, Any]) -> None:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO investigation_logs
+            (id, case_id, alert_id, action, performed_by, timestamp, details_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event["id"],
+                event.get("case_id"),
+                event.get("alert_id"),
+                event["action"],
+                event["performed_by"],
+                event["timestamp"],
+                event.get("details_json", "{}"),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    def list_investigation_logs(
+        self, case_id: Optional[str] = None, alert_id: Optional[str] = None, limit: int = 200
+    ) -> List[Dict[str, Any]]:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        if case_id:
+            cursor.execute(
+                """
+                SELECT id, case_id, alert_id, action, performed_by, timestamp, details_json
+                FROM investigation_logs
+                WHERE case_id = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+                """,
+                (case_id, limit),
+            )
+        elif alert_id:
+            cursor.execute(
+                """
+                SELECT id, case_id, alert_id, action, performed_by, timestamp, details_json
+                FROM investigation_logs
+                WHERE alert_id = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+                """,
+                (alert_id, limit),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT id, case_id, alert_id, action, performed_by, timestamp, details_json
+                FROM investigation_logs
+                ORDER BY timestamp DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+        rows = cursor.fetchall()
+        conn.close()
+        return [
+            {
+                "id": r[0],
+                "case_id": r[1],
+                "alert_id": r[2],
+                "action": r[3],
+                "performed_by": r[4],
+                "timestamp": r[5],
+                "details_json": r[6],
+            }
+            for r in rows
+        ]
 
 
 def get_storage(db_path: Optional[str] = None) -> Storage:

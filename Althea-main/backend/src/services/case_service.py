@@ -442,3 +442,64 @@ class CaseService:
             df.loc[mask, "case_status"] = alert_case_status
         
         return df
+
+
+class InvestigationCaseService:
+    """Service for investigation queue and case overlays on top of existing alerts."""
+
+    def __init__(self, storage: Storage) -> None:
+        self._storage = storage
+
+    def fetch_alerts_from_existing_endpoint(self, run_id: Optional[str]) -> List[Dict[str, Any]]:
+        """
+        Fetch alerts from the existing alert source used by /api/alerts.
+        For local integration this reads the same underlying alert run data.
+        """
+        if not run_id:
+            return []
+        alerts_df = self._storage.load_alerts_by_run(run_id)
+        if alerts_df.empty:
+            return []
+        keep_cols = [c for c in ["alert_id", "priority", "risk_score", "risk_band", "typology", "segment"] if c in alerts_df.columns]
+        return alerts_df[keep_cols].to_dict(orient="records")
+
+    def build_work_queue(self, run_id: Optional[str], user_id: str, role: str, team: str) -> List[Dict[str, Any]]:
+        alerts = self.fetch_alerts_from_existing_endpoint(run_id)
+        assignments = {a["alert_id"]: a for a in self._storage.list_assignments()}
+        cases_by_alert: Dict[str, Dict[str, Any]] = {}
+        for alert in alerts:
+            case_info = self._storage.get_investigation_case_by_alert(str(alert.get("alert_id", "")))
+            if case_info:
+                cases_by_alert[str(alert.get("alert_id", ""))] = case_info
+
+        queue: List[Dict[str, Any]] = []
+        for alert in alerts:
+            alert_id = str(alert.get("alert_id", ""))
+            assignment = assignments.get(alert_id)
+            case_info = cases_by_alert.get(alert_id)
+            item = {
+                "alert_id": alert_id,
+                "priority": str(alert.get("priority") or alert.get("risk_band") or "low"),
+                "risk_score": float(alert.get("risk_score") or 0.0),
+                "assigned_to": assignment["assigned_to"] if assignment else None,
+                "status": assignment["status"] if assignment else "open",
+                "case_id": case_info["case_id"] if case_info else None,
+                "case_status": case_info["status"] if case_info else None,
+            }
+            queue.append(item)
+
+        if role == "manager" or role == "admin":
+            return queue
+        if role == "lead":
+            # Team scoping for leads: same-team assignees or unassigned.
+            scoped: List[Dict[str, Any]] = []
+            for q in queue:
+                assignee = q["assigned_to"]
+                if assignee is None:
+                    scoped.append(q)
+                    continue
+                assignee_user = self._storage.get_user_by_id(str(assignee))
+                if assignee_user and assignee_user.get("team") == team:
+                    scoped.append(q)
+            return scoped
+        return [q for q in queue if q["assigned_to"] == user_id]

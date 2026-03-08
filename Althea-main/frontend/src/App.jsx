@@ -7,6 +7,10 @@ import { AlertQueue } from './pages/AlertQueue'
 import { Cases } from './pages/Cases'
 import { OpsGovernance } from './pages/OpsGovernance'
 import { DataConfig } from './pages/DataConfig'
+import { Login } from './pages/Login'
+import { AnalystDashboard } from './pages/AnalystDashboard'
+import { AlertDetails } from './pages/AlertDetails'
+import { CaseDetails } from './pages/CaseDetails'
 
 export default function App() {
   return (
@@ -14,6 +18,10 @@ export default function App() {
       <LanguageProvider>
         <div className="min-h-screen bg-[var(--bg)] text-[var(--text)] transition-colors duration-300">
           <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route path="/investigation/dashboard" element={<AnalystDashboard />} />
+            <Route path="/investigation/alerts/:id" element={<AlertDetails />} />
+            <Route path="/investigation/cases/:id" element={<CaseDetails />} />
             <Route path="/" element={<Layout />}>
               <Route index element={<Home />} />
               <Route path="alert-queue" element={<AlertQueue />} />

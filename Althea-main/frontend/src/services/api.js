@@ -6,6 +6,7 @@
  */
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
 const API = API_BASE ? `${API_BASE}/api` : '/api'
+const TOKEN_KEY = 'althea_auth_token'
 
 /** Generic message when the service is unreachable (no port or server instructions). */
 export const CONNECTION_ERROR_MESSAGE = 'Cannot connect to backend service. Please try again.'
@@ -28,8 +29,12 @@ async function parseResponse(res) {
 
 async function req(method, path, body = null) {
   const opts = { method }
+  const token = localStorage.getItem(TOKEN_KEY)
+  if (token) {
+    opts.headers = { ...(opts.headers || {}), Authorization: `Bearer ${token}` }
+  }
   if (body !== null && body !== undefined) {
-    opts.headers = { 'Content-Type': 'application/json' }
+    opts.headers = { ...(opts.headers || {}), 'Content-Type': 'application/json' }
     opts.body = JSON.stringify(body)
   }
   let res
@@ -44,9 +49,11 @@ async function req(method, path, body = null) {
 }
 
 async function reqForm(path, formData) {
+  const token = localStorage.getItem(TOKEN_KEY)
+  const headers = token ? { Authorization: `Bearer ${token}` } : undefined
   let res
   try {
-    res = await fetch(`${API}${path}`, { method: 'POST', body: formData })
+    res = await fetch(`${API}${path}`, { method: 'POST', body: formData, headers })
   } catch (e) {
     const msg = (e && e.message) || ''
     if (isConnectionError(msg)) throw new Error(CONNECTION_ERROR_MESSAGE)
@@ -57,6 +64,20 @@ async function reqForm(path, formData) {
 
 /** API client. Endpoints match backend OpenAPI: /api/health, /api/run-info, /api/alerts, etc. */
 export const api = {
+  setToken: (token) => localStorage.setItem(TOKEN_KEY, token),
+  getToken: () => localStorage.getItem(TOKEN_KEY),
+  clearToken: () => localStorage.removeItem(TOKEN_KEY),
+  register: (payload) => req('POST', '/auth/register', payload),
+  login: (payload) => req('POST', '/auth/login', payload),
+  me: () => req('GET', '/auth/me'),
+  getWorkQueue: () => req('GET', '/work/queue'),
+  assignAlert: (alertId, assignedTo) => req('POST', `/alerts/${alertId}/assign`, { assigned_to: assignedTo }),
+  updateAlertStatus: (alertId, status) => req('POST', `/alerts/${alertId}/status`, { status }),
+  addAlertNote: (alertId, noteText) => req('POST', `/alerts/${alertId}/note`, { note_text: noteText }),
+  getAlertNotes: (alertId) => req('GET', `/alerts/${alertId}/notes`),
+  createInvestigationCase: (alertId) => req('POST', '/cases/create', { alert_id: alertId }),
+  getInvestigationCase: (caseId) => req('GET', `/cases/${caseId}`),
+  updateInvestigationCaseStatus: (caseId, status) => req('POST', `/cases/${caseId}/status`, { status }),
   getHealth: () => req('GET', '/health'),
   getRunInfo: () => req('GET', '/run-info'),
   getQueueMetrics: () => req('GET', '/queue-metrics'),
@@ -68,6 +89,7 @@ export const api = {
     return req('GET', q ? `/alerts?${q}` : '/alerts')
   },
   getAlert: (id) => req('GET', `/alerts/${id}`),
+  getAlertExplain: (id) => req('GET', `/alerts/${id}/explain`),
   getAiSummary: (alertId) => req('GET', `/alerts/${alertId}/ai-summary`),
   generateAiSummary: (alertId) => req('POST', `/alerts/${alertId}/ai-summary`),
   clearAiSummary: (alertId) => req('DELETE', `/alerts/${alertId}/ai-summary`),
