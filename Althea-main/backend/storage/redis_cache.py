@@ -35,6 +35,12 @@ class RedisCache:
         with self._lock:
             return self._memory.get(key, default)
 
+    def ping(self) -> bool:
+        if self._client is not None:
+            self._client.ping()
+            return True
+        return True
+
     def set_json(self, key: str, value: Any, ttl_seconds: int | None = None) -> None:
         if self._client is not None:
             payload = json.dumps(value)

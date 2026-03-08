@@ -15,7 +15,7 @@ spec:
       containers:
         - name: worker
           image: ghcr.io/your-org/althea-backend:latest
-          command: ["rq", "worker", "althea-pipeline", "--url", "redis://redis:6379/0"]
+          command: ["python", "-m", "workers.pipeline_worker"]
           env:
             - name: ALTHEA_DATABASE_URL
               valueFrom:

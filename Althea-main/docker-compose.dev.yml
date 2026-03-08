@@ -3,7 +3,7 @@ services:
     environment:
       ALTHEA_ENV: development
       ALTHEA_ALLOW_SQLITE_IN_DEV: "true"
-      ALTHEA_QUEUE_MODE: threaded
+      ALTHEA_QUEUE_MODE: rq
   worker:
     deploy:
       replicas: 1

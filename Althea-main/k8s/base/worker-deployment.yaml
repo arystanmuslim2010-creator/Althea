@@ -16,11 +16,9 @@ spec:
         - name: worker
           image: ghcr.io/your-org/althea-backend:latest
           command:
-            - rq
-            - worker
-            - althea-pipeline
-            - --url
-            - $(ALTHEA_REDIS_URL)
+            - python
+            - -m
+            - workers.pipeline_worker
           envFrom:
             - configMapRef:
                 name: althea-config

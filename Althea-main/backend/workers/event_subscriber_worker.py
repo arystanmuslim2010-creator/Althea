@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from core.dependencies import get_event_bus, get_ml_service, get_pipeline_service, get_repository
+from core.dependencies import get_event_bus, get_inference_service, get_pipeline_service, get_repository
 from core.observability import record_worker_task
 
 logger = logging.getLogger("althea.event_worker")
@@ -18,6 +18,7 @@ SUBSCRIBED_EVENTS = {
     "alert_scored",
     "alert_governed",
     "case_created",
+    "case_closed",
 }
 
 
@@ -35,7 +36,7 @@ def _handle_event(envelope: dict[str, Any]) -> None:
         run_id = payload.get("run_id")
         if tenant_id and run_id:
             repository = get_repository()
-            ml_service = get_ml_service()
+            inference_service = get_inference_service()
             feature_rows = repository.list_feature_rows(tenant_id=tenant_id, run_id=run_id, limit=200000)
             if feature_rows:
                 frame = pd.DataFrame(feature_rows)
@@ -48,7 +49,7 @@ def _handle_event(envelope: dict[str, Any]) -> None:
                     for start in range(0, len(matrix), batch_size):
                         sub_matrix = matrix.iloc[start : start + batch_size]
                         sub_ids = alert_ids[start : start + batch_size]
-                        inference = ml_service.predict(tenant_id=tenant_id, features=sub_matrix)
+                        inference = inference_service.predict(tenant_id=tenant_id, feature_frame=sub_matrix)
                         scores = inference.get("scores", [])
                         explanations = inference.get("explanations", [])
                         for idx, alert_id in enumerate(sub_ids):
@@ -73,7 +74,7 @@ def _handle_event(envelope: dict[str, Any]) -> None:
         run_id = payload.get("run_id")
         if tenant_id and run_id:
             # Snapshot latest model health at scoring completion.
-            health = get_pipeline_service().compute_health(run_id)
+            health = get_pipeline_service().compute_health(run_id=run_id, tenant_id=tenant_id)
             get_repository().save_model_monitoring(
                 {
                     "tenant_id": tenant_id,

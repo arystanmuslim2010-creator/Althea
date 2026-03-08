@@ -11,11 +11,9 @@ import numpy as np
 import pandas as pd
 
 from ... import config
-from ... import features
-from ... import scoring
 from ...domain.schemas import OverlayInputError
-from ...external_data import load_all_configured_sources
 from ...observability.logging import get_logger
+from ...services.feature_service import FeatureService
 from ...services.scoring_service import ScoringService
 
 logger = get_logger("score")
@@ -144,10 +142,10 @@ def run_score(
     if overlay_mode:
         return _overlay_only_score(df, cfg_ns)
 
-    # Legacy path (non-overlay): features + anomaly + risk engine
-    df, feature_groups = features.compute_behavioral_features(df, cfg_ns)
-    all_feature_cols = feature_groups.get("all_feature_cols", [])
-    X = features.build_feature_matrix(df, all_feature_cols)
+    # Canonical non-overlay path: centralized features + scoring service.
+    feature_svc = FeatureService()
+    df = feature_svc.compute_behavioral_baselines(df)
+    X = feature_svc.build_feature_matrix(df)
     scoring_svc = ScoringService()
     df = scoring_svc.run_anomaly_detection(df, X)
 
@@ -155,13 +153,12 @@ def run_score(
     df = run_all_rules(df, cfg_ns, policy_params=None)
     df = aggregate_rule_score(df, cfg_ns)
 
-    try:
-        loaded_external = load_all_configured_sources()
-    except Exception:
-        loaded_external = {}
-
-    models, calibrator = scoring.train_risk_engine(df, feature_groups)
-    df = scoring.score_with_risk_engine(df, models, calibrator, external_sources=loaded_external)
+    anomaly_component = pd.to_numeric(df.get("anomaly_score", 0.0), errors="coerce").fillna(0.0) / 100.0
+    rule_component = pd.to_numeric(df.get("rule_score_total", 0.0), errors="coerce").fillna(0.0) / 100.0
+    risk_prob = (0.6 * rule_component + 0.4 * anomaly_component).clip(0.0, 1.0)
+    df["risk_prob"] = risk_prob
+    df["risk_score_raw"] = risk_prob
+    df["risk_score"] = (risk_prob * 100.0).clip(0.0, 100.0)
 
     t1 = int(getattr(config, "RISK_BAND_T1", 40))
     t2 = int(getattr(config, "RISK_BAND_T2", 70))

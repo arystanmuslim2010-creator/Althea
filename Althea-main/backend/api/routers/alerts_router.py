@@ -102,10 +102,7 @@ def _active_run_id(request: Request, tenant_id: str) -> Optional[str]:
 
 def _load_alerts_df(request: Request, tenant_id: str, run_id: str) -> pd.DataFrame:
     payloads = request.app.state.repository.list_alert_payloads_by_run(tenant_id=tenant_id, run_id=run_id, limit=500000)
-    if payloads:
-        return pd.DataFrame(payloads)
-    # Backward-compatible fallback for legacy runs.
-    return request.app.state.storage.load_alerts_by_run(run_id)
+    return pd.DataFrame(payloads)
 
 
 @router.get("/api/alerts")
@@ -164,6 +161,8 @@ def get_alert(alert_id: str, request: Request, tenant_id: str = Depends(get_tena
     if not run_id:
         raise HTTPException(status_code=404, detail="No active run")
     alerts_df = _load_alerts_df(request, tenant_id, run_id)
+    if "alert_id" not in alerts_df.columns:
+        raise HTTPException(status_code=404, detail="Alert not found")
     row = alerts_df[alerts_df["alert_id"].astype(str) == str(alert_id)]
     if row.empty:
         raise HTTPException(status_code=404, detail="Alert not found")
@@ -175,16 +174,15 @@ def get_alert_explain(alert_id: str, request: Request, run_id: Optional[str] = N
     rid = run_id or _active_run_id(request, tenant_id)
     if not rid:
         raise HTTPException(status_code=404, detail="No active run")
-    # explain service expects storage-like object; use legacy storage fallback for trace read compatibility.
-    result = request.app.state.explain_service.explain_alert(alert_id, rid, request.app.state.storage)
+    result = request.app.state.explain_service.explain_alert(tenant_id=tenant_id, alert_id=alert_id, run_id=rid)
     if result is None:
         raise HTTPException(status_code=404, detail="Alert or decision trace not found")
     return result
 
 
 @router.get("/api/alerts/{alert_id}/ai-summary")
-def get_ai_summary(alert_id: str, request: Request):
-    rec = request.app.state.storage.get_ai_summary("alert", alert_id)
+def get_ai_summary(alert_id: str, request: Request, tenant_id: str = Depends(get_tenant_id)):
+    rec = request.app.state.repository.get_ai_summary(tenant_id=tenant_id, entity_type="alert", entity_id=alert_id)
     if rec:
         return {"summary": rec["summary"], "ts": rec.get("ts", "")}
     return {"summary": None, "ts": None}
@@ -194,18 +192,29 @@ def get_ai_summary(alert_id: str, request: Request):
 def generate_ai_summary(alert_id: str, request: Request, tenant_id: str = Depends(get_tenant_id)):
     run_id = _active_run_id(request, tenant_id)
     alerts_df = _load_alerts_df(request, tenant_id, run_id or "")
+    if "alert_id" not in alerts_df.columns:
+        raise HTTPException(status_code=404, detail="Alert not found")
     row = alerts_df[alerts_df["alert_id"].astype(str) == str(alert_id)]
     if row.empty:
         raise HTTPException(status_code=404, detail="Alert not found")
     summary = _generate_alert_summary(row.iloc[0].to_dict())
     actor = request.headers.get("X-Actor") or request.app.state.case_service.get_actor(tenant_id, _user_scope(request))
-    request.app.state.storage.save_ai_summary("alert", alert_id, summary, run_id=run_id or "", actor=actor)
-    return {"summary": summary, "ts": pd.Timestamp.utcnow().isoformat()}
+    rec = request.app.state.repository.save_ai_summary(
+        {
+            "tenant_id": tenant_id,
+            "entity_type": "alert",
+            "entity_id": alert_id,
+            "summary": summary,
+            "run_id": run_id or "",
+            "actor": actor,
+        }
+    )
+    return {"summary": summary, "ts": rec.get("ts") or pd.Timestamp.utcnow().isoformat()}
 
 
 @router.delete("/api/alerts/{alert_id}/ai-summary")
-def clear_ai_summary(alert_id: str, request: Request):
-    request.app.state.storage.delete_ai_summary("alert", alert_id)
+def clear_ai_summary(alert_id: str, request: Request, tenant_id: str = Depends(get_tenant_id)):
+    request.app.state.repository.delete_ai_summary(tenant_id=tenant_id, entity_type="alert", entity_id=alert_id)
     return {"status": "cleared"}
 
 
@@ -250,8 +259,8 @@ def get_ops_metrics(request: Request, analyst_capacity: int = 50, tenant_id: str
 @router.post("/internal/ml/predict")
 def internal_ml_predict(payload: dict, request: Request, tenant_id: str = Depends(get_tenant_id)):
     frame = pd.DataFrame(payload.get("rows", []))
-    feature_bundle = request.app.state.feature_service.build_inference_features(frame)
-    result = request.app.state.ml_service.predict(tenant_id=tenant_id, features=feature_bundle["feature_matrix"])
+    feature_bundle = request.app.state.feature_service.generate_inference_features(frame)
+    result = request.app.state.inference_service.predict(tenant_id=tenant_id, feature_frame=feature_bundle["feature_matrix"])
     return {
         "model_version": result["model_version"],
         "scores": result["scores"],

@@ -20,11 +20,9 @@ def _user_scope(request: Request, user: dict | None = None) -> str:
 
 def _load_alerts_df(request: Request, tenant_id: str, run_id: str):
     payloads = request.app.state.repository.list_alert_payloads_by_run(tenant_id=tenant_id, run_id=run_id, limit=500000)
-    if payloads:
-        import pandas as pd
+    import pandas as pd
 
-        return pd.DataFrame(payloads)
-    return request.app.state.storage.load_alerts_by_run(run_id)
+    return pd.DataFrame(payloads)
 
 
 def _log_event(
@@ -58,6 +56,8 @@ def _log_event(
             "performed_by": performed_by,
             "details": details or {},
         },
+        correlation_id=getattr(request.state, "request_id", None),
+        version="2.0",
     )
 
 
@@ -275,9 +275,6 @@ def get_case(
         notes = repo.list_alert_notes(user["tenant_id"], case.get("alert_id") or "")
         logs = repo.list_investigation_logs(user["tenant_id"], case_id=case_id, limit=200)
         return {"case": case["payload_json"], "notes": notes, "timeline": logs}
-    legacy_cases = request.app.state.case_service.list_cases(user["tenant_id"])
-    if case_id in legacy_cases:
-        return {"case": legacy_cases[case_id], "notes": [], "timeline": request.app.state.case_service.get_case_audit(case_id, user["tenant_id"])}
     raise HTTPException(status_code=404, detail="Case not found")
 
 
@@ -382,6 +379,8 @@ def create_case(request: Request, payload: CreateCaseRequest, tenant_id: str = D
         event_name="case_created",
         tenant_id=tenant_id,
         payload={"case_id": case.get("case_id"), "alert_ids": payload.alert_ids, "actor": payload.actor},
+        correlation_id=getattr(request.state, "request_id", None),
+        version="2.0",
     )
     return {"case_id": case["case_id"], "status": case["status"]}
 
@@ -417,8 +416,18 @@ def update_case(case_id: str, request: Request, payload: UpdateCaseRequest, tena
 
 
 @router.delete("/cases/{case_id}")
-def delete_case(case_id: str, request: Request, tenant_id: str = Depends(get_tenant_id)):
-    request.app.state.case_service.delete_case(tenant_id, case_id)
+def delete_case(case_id: str, request: Request, user: dict = Depends(get_current_user)):
+    case = request.app.state.repository.get_case(user["tenant_id"], case_id)
+    request.app.state.case_service.delete_case(user["tenant_id"], case_id)
+    _log_event(
+        request,
+        user["tenant_id"],
+        "case_closed",
+        user["user_id"],
+        alert_id=case.get("alert_id") if case else None,
+        case_id=case_id,
+        details={"reason": "deleted"},
+    )
     return {"status": "deleted", "case_id": case_id}
 
 

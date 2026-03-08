@@ -3,11 +3,9 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
 from storage.postgres_repository import EnterpriseRepository
-from src.storage import Storage as LegacyStorage
 
 ALLOWED_CASE_TRANSITIONS: dict[str, set[str]] = {
     "open": {"under_review", "escalated", "closed"},
@@ -22,13 +20,12 @@ class CaseWorkflowService:
     """
     Enterprise case lifecycle with backward-compatible payload shape.
 
-    Existing `/api/cases*` endpoints keep working while case state is now persisted in
-    the enterprise repository. Legacy SQLite is used only as a read fallback.
+    Existing `/api/cases*` endpoints keep working while case state is persisted in
+    the enterprise repository.
     """
 
-    def __init__(self, repository: EnterpriseRepository, legacy_sqlite_path: Path) -> None:
+    def __init__(self, repository: EnterpriseRepository) -> None:
         self._repository = repository
-        self._legacy_storage = LegacyStorage(db_path=str(legacy_sqlite_path))
 
     def get_actor(self, tenant_id: str, user_scope: str) -> str:
         context = self._repository.get_runtime_context(tenant_id, user_scope)
@@ -74,18 +71,12 @@ class CaseWorkflowService:
         }
 
     def list_cases(self, tenant_id: str = "default-bank") -> dict[str, Any]:
-        # Compatibility mode for legacy UI endpoint; tenant defaults to default-bank.
         enterprise_cases = self._repository.list_cases(tenant_id)
-        if enterprise_cases:
-            out: dict[str, Any] = {}
-            for row in enterprise_cases:
-                payload = row.get("payload_json") or {}
-                out[row["case_id"]] = payload
-            return out
-
-        # Legacy fallback for historical local data.
-        cases_dict, _, _ = self._legacy_storage.load_state_from_db()
-        return cases_dict or {}
+        out: dict[str, Any] = {}
+        for row in enterprise_cases:
+            payload = row.get("payload_json") or {}
+            out[row["case_id"]] = payload
+        return out
 
     def create_case(
         self,
@@ -219,23 +210,40 @@ class CaseWorkflowService:
         return True, "Case updated", payload
 
     def delete_case(self, tenant_id: str, case_id: str) -> bool:
+        existing = self._repository.get_case(tenant_id, case_id)
+        if existing:
+            self._repository.append_investigation_log(
+                {
+                    "id": uuid.uuid4().hex,
+                    "tenant_id": tenant_id,
+                    "case_id": case_id,
+                    "alert_id": existing.get("alert_id"),
+                    "action": "case_closed",
+                    "performed_by": existing.get("assigned_to") or existing.get("created_by") or "system",
+                    "details_json": {"reason": "case_deleted"},
+                    "timestamp": datetime.now(timezone.utc),
+                }
+            )
         deleted = self._repository.delete_case(tenant_id, case_id)
         return bool(deleted)
 
     def get_case_audit(self, case_id: str, tenant_id: str = "default-bank") -> list[dict[str, Any]]:
+        timeline = self._repository.list_case_timeline(tenant_id=tenant_id, case_id=case_id, limit=500)
+        if timeline:
+            return timeline
         case = self._repository.get_case(tenant_id, case_id)
-        if case and case.get("immutable_timeline_json"):
-            events = []
-            for item in case.get("immutable_timeline_json", []):
-                events.append(
-                    {
-                        "event_id": item.get("id"),
-                        "case_id": case_id,
-                        "ts": item.get("timestamp"),
-                        "actor": item.get("performed_by"),
-                        "action": item.get("action"),
-                        "payload": item.get("details", {}),
-                    }
-                )
-            return events
-        return self._legacy_storage.get_audit_log_for_case(case_id)
+        if not case:
+            return []
+        events = []
+        for item in case.get("immutable_timeline_json", []):
+            events.append(
+                {
+                    "event_id": item.get("id"),
+                    "case_id": case_id,
+                    "ts": item.get("timestamp"),
+                    "actor": item.get("performed_by"),
+                    "action": item.get("action"),
+                    "payload": item.get("details", {}),
+                }
+            )
+        return events

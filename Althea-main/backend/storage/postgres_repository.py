@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text, create_engine, desc, select
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text, create_engine, desc, func, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 
@@ -186,6 +186,19 @@ class ModelMonitoringRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
 
 
+class AISummaryRecord(Base):
+    __tablename__ = "ai_summaries"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True, default=lambda: uuid.uuid4().hex)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    entity_type: Mapped[str] = mapped_column(String(32), index=True)
+    entity_id: Mapped[str] = mapped_column(String(128), index=True)
+    summary: Mapped[str] = mapped_column(Text)
+    run_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    actor: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+
+
 class EnterpriseRepository:
     def __init__(self, database_url: str) -> None:
         connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
@@ -204,6 +217,11 @@ class EnterpriseRepository:
             raise
         finally:
             session.close()
+
+    def ping(self) -> bool:
+        with self.session() as session:
+            session.execute(text("SELECT 1"))
+            return True
 
     def upsert_runtime_context(self, tenant_id: str, user_scope: str, **payload: Any) -> dict[str, Any]:
         with self.session() as session:
@@ -245,10 +263,18 @@ class EnterpriseRepository:
 
     def update_pipeline_job(self, job_id: str, **payload: Any) -> dict[str, Any] | None:
         with self.session() as session:
-            record = session.get(PipelineRunRecord, job_id)
+            tenant_id = payload.get("tenant_id")
+            if tenant_id:
+                record = session.execute(
+                    select(PipelineRunRecord).where(PipelineRunRecord.id == job_id, PipelineRunRecord.tenant_id == tenant_id)
+                ).scalar_one_or_none()
+            else:
+                record = session.get(PipelineRunRecord, job_id)
             if record is None:
                 return None
             for key, value in payload.items():
+                if key == "tenant_id":
+                    continue
                 setattr(record, key, value)
             session.flush()
             return self._to_dict(record)
@@ -284,6 +310,7 @@ class EnterpriseRepository:
                 if not alert_id:
                     continue
                 valid_records.append(payload)
+                alert_ids.append(f"{tenant_id}:{alert_id}")
                 alert_ids.append(alert_id)
             if not valid_records:
                 return 0
@@ -295,11 +322,12 @@ class EnterpriseRepository:
 
             for payload in valid_records:
                 alert_id = str(payload.get("alert_id") or payload.get("id"))
-                row = existing_by_id.get(alert_id)
+                internal_id = f"{tenant_id}:{alert_id}"
+                row = existing_by_id.get(internal_id) or existing_by_id.get(alert_id)
                 if row is None:
                     session.add(
                         AlertRecord(
-                            id=alert_id,
+                            id=internal_id,
                             tenant_id=tenant_id,
                             run_id=run_id,
                             payload_json=payload,
@@ -322,6 +350,31 @@ class EnterpriseRepository:
                 .limit(limit)
             ).scalars()
             return [dict(row.payload_json or {}) for row in rows]
+
+    def list_alert_payloads_paginated(
+        self,
+        tenant_id: str,
+        run_id: str,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        with self.session() as session:
+            rows = session.execute(
+                select(AlertRecord)
+                .where(AlertRecord.tenant_id == tenant_id, AlertRecord.run_id == run_id)
+                .order_by(AlertRecord.created_at.desc())
+                .limit(limit)
+                .offset(offset)
+            ).scalars()
+            total = session.execute(
+                select(func.count()).select_from(AlertRecord).where(AlertRecord.tenant_id == tenant_id, AlertRecord.run_id == run_id)
+            ).scalar_one()
+            return {
+                "items": [dict(row.payload_json or {}) for row in rows],
+                "limit": int(limit),
+                "offset": int(offset),
+                "total": int(total or 0),
+            }
 
     def create_user(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self.session() as session:
@@ -432,7 +485,12 @@ class EnterpriseRepository:
 
     def upsert_assignment(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self.session() as session:
-            row = session.get(AlertAssignmentRecord, payload["id"])
+            row = session.execute(
+                select(AlertAssignmentRecord).where(
+                    AlertAssignmentRecord.id == payload["id"],
+                    AlertAssignmentRecord.tenant_id == payload["tenant_id"],
+                )
+            ).scalar_one_or_none()
             if row is None:
                 row = AlertAssignmentRecord(**payload)
                 session.add(row)
@@ -469,7 +527,12 @@ class EnterpriseRepository:
 
     def save_case(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self.session() as session:
-            row = session.get(CaseRecord, payload["case_id"])
+            row = session.execute(
+                select(CaseRecord).where(
+                    CaseRecord.case_id == payload["case_id"],
+                    CaseRecord.tenant_id == payload["tenant_id"],
+                )
+            ).scalar_one_or_none()
             if row is None:
                 row = CaseRecord(**payload)
                 session.add(row)
@@ -492,6 +555,20 @@ class EnterpriseRepository:
                 select(CaseRecord).where(CaseRecord.tenant_id == tenant_id).order_by(CaseRecord.updated_at.desc())
             ).scalars()
             return [self._to_dict(row) for row in rows]
+
+    def list_cases_paginated(self, tenant_id: str, limit: int = 100, offset: int = 0) -> dict[str, Any]:
+        with self.session() as session:
+            rows = session.execute(
+                select(CaseRecord)
+                .where(CaseRecord.tenant_id == tenant_id)
+                .order_by(CaseRecord.updated_at.desc())
+                .limit(limit)
+                .offset(offset)
+            ).scalars()
+            total = session.execute(
+                select(func.count()).select_from(CaseRecord).where(CaseRecord.tenant_id == tenant_id)
+            ).scalar_one()
+            return {"items": [self._to_dict(row) for row in rows], "limit": int(limit), "offset": int(offset), "total": int(total or 0)}
 
     def delete_case(self, tenant_id: str, case_id: str) -> bool:
         with self.session() as session:
@@ -590,6 +667,76 @@ class EnterpriseRepository:
                 .limit(limit)
             ).scalars()
             return [self._to_dict(row) for row in rows]
+
+    def list_case_timeline(self, tenant_id: str, case_id: str, limit: int = 500) -> list[dict[str, Any]]:
+        logs = self.list_investigation_logs(tenant_id=tenant_id, case_id=case_id, limit=limit)
+        timeline: list[dict[str, Any]] = []
+        for item in reversed(logs):
+            timeline.append(
+                {
+                    "event_id": item.get("id"),
+                    "case_id": case_id,
+                    "ts": item.get("timestamp"),
+                    "actor": item.get("performed_by"),
+                    "action": item.get("action"),
+                    "payload": item.get("details_json", {}),
+                }
+            )
+        return timeline
+
+    def save_ai_summary(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self.session() as session:
+            existing = session.execute(
+                select(AISummaryRecord).where(
+                    AISummaryRecord.tenant_id == payload["tenant_id"],
+                    AISummaryRecord.entity_type == payload["entity_type"],
+                    AISummaryRecord.entity_id == payload["entity_id"],
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                row = AISummaryRecord(
+                    tenant_id=payload["tenant_id"],
+                    entity_type=payload["entity_type"],
+                    entity_id=payload["entity_id"],
+                    summary=payload["summary"],
+                    run_id=payload.get("run_id"),
+                    actor=payload.get("actor"),
+                    ts=_utcnow(),
+                )
+                session.add(row)
+            else:
+                row = existing
+                row.summary = payload["summary"]
+                row.run_id = payload.get("run_id")
+                row.actor = payload.get("actor")
+                row.ts = _utcnow()
+            session.flush()
+            return self._to_dict(row)
+
+    def get_ai_summary(self, tenant_id: str, entity_type: str, entity_id: str) -> dict[str, Any] | None:
+        with self.session() as session:
+            row = session.execute(
+                select(AISummaryRecord).where(
+                    AISummaryRecord.tenant_id == tenant_id,
+                    AISummaryRecord.entity_type == entity_type,
+                    AISummaryRecord.entity_id == entity_id,
+                )
+            ).scalar_one_or_none()
+            return self._to_dict(row) if row else None
+
+    def delete_ai_summary(self, tenant_id: str, entity_type: str, entity_id: str) -> bool:
+        with self.session() as session:
+            row = session.execute(
+                select(AISummaryRecord).where(
+                    AISummaryRecord.tenant_id == tenant_id,
+                    AISummaryRecord.entity_type == entity_type,
+                    AISummaryRecord.entity_id == entity_id,
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return False
+            session.delete(row)
+            return True
 
     def _get_latest_runtime_context_record(self, session: Session, tenant_id: str, user_scope: str) -> RuntimeContext | None:
         records = list(

@@ -36,7 +36,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    command: rq worker althea-pipeline --url redis://redis:6379/0
+    command: python -m workers.pipeline_worker
     environment:
       ALTHEA_DATABASE_URL: postgresql+psycopg://althea:althea@postgres:5432/althea
       ALTHEA_REDIS_URL: redis://redis:6379/0

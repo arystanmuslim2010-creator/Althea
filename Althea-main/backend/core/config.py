@@ -41,13 +41,12 @@ class Settings:
     tenant_header: str = os.getenv("ALTHEA_TENANT_HEADER", "X-Tenant-ID")
     database_url: str = os.getenv("ALTHEA_DATABASE_URL", "")
     redis_url: str = os.getenv("ALTHEA_REDIS_URL", "redis://localhost:6379/0")
-    queue_mode: str = os.getenv("ALTHEA_QUEUE_MODE", "threaded")
+    queue_mode: str = os.getenv("ALTHEA_QUEUE_MODE", "rq")
     jwt_secret: str = os.getenv("ALTHEA_JWT_SECRET", "change-me-in-production")
     jwt_algorithm: str = os.getenv("ALTHEA_JWT_ALGORITHM", "HS256")
     access_token_minutes: int = int(os.getenv("ALTHEA_ACCESS_TOKEN_MINUTES", "60"))
     refresh_token_minutes: int = int(os.getenv("ALTHEA_REFRESH_TOKEN_MINUTES", str(60 * 24 * 14)))
     model_selection_strategy: str = os.getenv("ALTHEA_MODEL_SELECTION", "approved_latest")
-    legacy_sqlite_name: str = os.getenv("ALTHEA_LEGACY_SQLITE_NAME", "app.db")
     rq_queue_name: str = os.getenv("ALTHEA_RQ_QUEUE", "althea-pipeline")
     object_storage_dirname: str = os.getenv("ALTHEA_OBJECT_STORAGE_DIR", "object_storage")
     reports_dirname: str = os.getenv("ALTHEA_REPORTS_DIR", "reports")
@@ -114,10 +113,6 @@ class Settings:
         return f"sqlite:///{default_db.as_posix()}"
 
     @property
-    def legacy_sqlite_path(self) -> Path:
-        return self.data_dir / self.legacy_sqlite_name
-
-    @property
     def is_dev(self) -> bool:
         return self.app_env.lower() == "development"
 
@@ -128,9 +123,9 @@ class Settings:
     def validate(self) -> None:
         queue_mode = (self.queue_mode or "").lower().strip()
         if queue_mode == "inline":
-            raise RuntimeError("ALTHEA_QUEUE_MODE=inline is no longer supported. Use 'rq' or 'threaded'.")
-        if queue_mode not in {"rq", "threaded"}:
-            raise RuntimeError(f"Unsupported ALTHEA_QUEUE_MODE '{self.queue_mode}'. Allowed: rq, threaded.")
+            raise RuntimeError("ALTHEA_QUEUE_MODE=inline is no longer supported. Use 'rq'.")
+        if queue_mode != "rq":
+            raise RuntimeError(f"Unsupported ALTHEA_QUEUE_MODE '{self.queue_mode}'. Allowed: rq.")
 
         db_url = self.runtime_database_url
         if self.is_non_dev and self.require_postgres_in_non_dev:
