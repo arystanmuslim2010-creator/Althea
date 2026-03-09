@@ -1,0 +1,26 @@
+{
+  "run_id": "run_43a7f54854f59e61",
+  "total_alerts": 100,
+  "in_queue": 20,
+  "suppressed": 80,
+  "mandatory_review": 6,
+  "hard_constraints_count": 6,
+  "suppression_rate": 0.8,
+  "rule_hit_distribution": {
+    "high_risk_country": 3
+  },
+  "top_typology_distribution": {
+    "rapid_velocity": 9,
+    "bank_alert": 86,
+    "sanctions": 3,
+    "cross_border": 2
+  },
+  "precision_at_capacity": null,
+  "recall_at_k": null,
+  "lift": null,
+  "queue_pressure": 0.05,
+  "sla_risk": "low",
+  "analyst_time_saved_mins": 800,
+  "baseline_minutes_per_alert": 10,
+  "generated_at": "2026-03-04T11:21:02Z"
+}

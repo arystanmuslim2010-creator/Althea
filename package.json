@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "scripts": {
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build:frontend": "npm --prefix frontend run build",
+    "dev:backend": "cd backend && python -m uvicorn main:app --host 127.0.0.1 --port 8000",
+    "dev:backend:8001": "cd backend && python -m uvicorn main:app --host 127.0.0.1 --port 8001"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.2.0",
+    "tailwindcss": "^4.2.0"
+  }
+}

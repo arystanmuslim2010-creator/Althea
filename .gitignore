@@ -142,3 +142,10 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Legacy nested copy left by local migration attempts
+Althea-main/

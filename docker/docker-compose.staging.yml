@@ -1,0 +1,10 @@
+services:
+  backend:
+    environment:
+      ALTHEA_ENV: staging
+      ALTHEA_ALLOW_SQLITE_IN_DEV: "false"
+      ALTHEA_REQUIRE_POSTGRES: "true"
+      ALTHEA_QUEUE_MODE: rq
+  worker:
+    deploy:
+      replicas: 4
