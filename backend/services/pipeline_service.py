@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from typing import Any
+from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
 
 from core.config import Settings
+from core.observability import record_queue_depth
 from events.event_bus import EventBus
 from models.inference_service import InferenceService
 from services.feature_service import EnterpriseFeatureService
@@ -69,6 +70,7 @@ class PipelineService:
         return self._repository.list_pipeline_runs(tenant_id, limit=50)
 
     def get_job_status(self, tenant_id: str, job_id: str) -> dict[str, Any]:
+        record_queue_depth(self._job_queue.queue_depth(self._settings.rq_queue_name))
         cached = self._job_queue.get_status(job_id)
         if cached:
             return cached
@@ -107,6 +109,7 @@ class PipelineService:
             redis_url=self._settings.redis_url,
             queue_name=self._settings.rq_queue_name,
         )
+        record_queue_depth(self._job_queue.queue_depth(self._settings.rq_queue_name))
         return payload
 
     def execute_pipeline_job(self, job_id: str, tenant_id: str, user_scope: str) -> dict[str, Any]:
@@ -114,7 +117,33 @@ class PipelineService:
 
         return execute_pipeline_job(service=self, job_id=job_id, tenant_id=tenant_id, user_scope=user_scope)
 
-    def _run_pipeline(self, source_df: pd.DataFrame, tenant_id: str) -> tuple[str, int, str, list[float]]:
+    def run_pipeline_stream(
+        self,
+        tenant_id: str,
+        source_chunks: Iterable[pd.DataFrame],
+    ) -> tuple[str, int, str, list[float]]:
+        run_id = f"run_{uuid.uuid4().hex[:16]}"
+        total_persisted = 0
+        model_version = "unknown"
+        score_sample: list[float] = []
+        max_monitoring_scores = 50000
+
+        for chunk in source_chunks:
+            if chunk is None or chunk.empty:
+                continue
+            chunk_run_id, persisted, version, scores = self._run_pipeline(chunk, tenant_id=tenant_id, run_id=run_id)
+            run_id = chunk_run_id
+            total_persisted += int(persisted)
+            model_version = version or model_version
+            if len(score_sample) < max_monitoring_scores:
+                remaining = max_monitoring_scores - len(score_sample)
+                score_sample.extend(scores[:remaining])
+
+        if total_persisted <= 0:
+            raise ValueError("Pipeline produced no alerts from streamed dataset.")
+        return run_id, total_persisted, model_version, score_sample
+
+    def _run_pipeline(self, source_df: pd.DataFrame, tenant_id: str, run_id: str | None = None) -> tuple[str, int, str, list[float]]:
         feature_bundle = self._feature_service.generate_inference_features(source_df)
         alerts_df = feature_bundle.get("alerts_df", pd.DataFrame()).copy()
         feature_matrix = feature_bundle.get("feature_matrix", pd.DataFrame()).copy()
@@ -124,7 +153,7 @@ class PipelineService:
         inference = self._inference_service.predict(
             tenant_id=tenant_id,
             feature_frame=feature_matrix,
-            strategy=self._settings.model_selection_strategy,
+            strategy="active_approved",
         )
         model_version = str(inference.get("model_version") or "unknown")
         scores = list(inference.get("scores") or [])
@@ -165,15 +194,28 @@ class PipelineService:
         alerts_df["rule_evidence_json"] = alerts_df.get("rule_evidence_json", "{}")
 
         governed = self._governance_service.apply_governance(alerts_df)
-        run_id = f"run_{uuid.uuid4().hex[:16]}"
+        resolved_run_id = run_id or f"run_{uuid.uuid4().hex[:16]}"
         persisted = self._persist_outputs(
             tenant_id=tenant_id,
-            run_id=run_id,
+            run_id=resolved_run_id,
             alerts_df=governed,
             feature_matrix=feature_matrix,
         )
         score_values = [float(v) for v in governed["risk_score"].fillna(0.0).tolist()]
-        return run_id, persisted, model_version, score_values
+        logger.info(
+            json.dumps(
+                {
+                    "event": "pipeline_chunk_scored",
+                    "tenant_id": tenant_id,
+                    "pipeline_run_id": resolved_run_id,
+                    "model_version": model_version,
+                    "alert_id": str(governed["alert_id"].iloc[0]) if "alert_id" in governed.columns and len(governed) else None,
+                    "alerts_in_chunk": int(len(governed)),
+                },
+                ensure_ascii=True,
+            )
+        )
+        return resolved_run_id, persisted, model_version, score_values
 
     @staticmethod
     def _sanitize_value(value: Any) -> Any:
@@ -220,7 +262,6 @@ class PipelineService:
                     key: self._sanitize_value(value)
                     for key, value in feature_chunk.iloc[idx].to_dict().items()
                 }
-                row["features_json"] = feature_payload
                 records.append(row)
                 feature_rows.append({"alert_id": alert_id, **feature_payload})
 

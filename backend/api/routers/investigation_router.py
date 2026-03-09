@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from core.security import get_authenticated_tenant_id, get_current_user, require_any_permission, require_permissions
+from core.security import VALID_ROLES, get_authenticated_tenant_id, get_current_user, normalize_role, require_any_permission, require_permissions
 
 router = APIRouter(prefix="/api", tags=["investigation"])
 
@@ -121,7 +121,7 @@ def get_work_queue(
         case_id = next((case["case_id"] for case in cases if case.get("alert_id") == alert_id), None)
         if user["role"] in {"manager", "admin"}:
             pass
-        elif user["role"] == "lead":
+        elif user["role"] == "investigator":
             pass
         elif assignment and assignment.get("assigned_to") not in {None, "", user["user_id"]}:
             continue
@@ -346,11 +346,14 @@ def admin_update_role(
     request: Request,
     user: dict = Depends(require_permissions("manage_roles")),
 ):
-    updated = request.app.state.repository.update_user_role(user["tenant_id"], user_id, payload.role.lower().strip())
+    role = normalize_role(payload.role)
+    if role not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail="Invalid role")
+    updated = request.app.state.repository.update_user_role(user["tenant_id"], user_id, role)
     if not updated:
         raise HTTPException(status_code=404, detail="User not found")
-    _log_event(request, user["tenant_id"], "status_changed", user["user_id"], details={"target_user_id": user_id, "new_role": payload.role})
-    return {"user_id": user_id, "role": payload.role.lower().strip()}
+    _log_event(request, user["tenant_id"], "status_changed", user["user_id"], details={"target_user_id": user_id, "new_role": role})
+    return {"user_id": user_id, "role": role}
 
 
 @router.get("/admin/logs")

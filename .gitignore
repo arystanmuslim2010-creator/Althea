@@ -149,3 +149,15 @@ __pycache__/
 
 # Legacy nested copy left by local migration attempts
 Althea-main/
+
+# Runtime data (must stay out of git)
+data/*.db
+data/reports/
+data/model_cache/
+data/object_storage/
+data/dead_letter/
+backend/data/*.db
+backend/data/reports/
+backend/data/model_cache/
+backend/data/object_storage/
+backend/data/dead_letter/

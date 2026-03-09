@@ -18,6 +18,9 @@ class JobQueueService:
     def get_status(self, job_id: str) -> dict[str, Any] | None:
         return self._cache.get_json(f"job:{job_id}")
 
+    def queue_depth(self, queue_name: str) -> int:
+        return self._cache.queue_depth(queue_name)
+
     def enqueue(self, import_path: str, kwargs: dict[str, Any], queue_mode: str, redis_url: str, queue_name: str) -> None:
         normalized = (queue_mode or "").lower().strip()
         if normalized != "rq":
@@ -29,6 +32,7 @@ class JobQueueService:
         try:
             import redis
             from rq import Queue as RQQueue
+            from rq import Retry
         except Exception as exc:  # pragma: no cover
             raise RuntimeError(f"RQ queue mode import failed: {exc}") from exc
 
@@ -39,4 +43,6 @@ class JobQueueService:
             func=target,
             kwargs=kwargs,
             job_id=str(pipeline_job_id) if pipeline_job_id else None,
+            retry=Retry(max=3, interval=[10, 30, 60]),
+            failure_ttl=60 * 60 * 24 * 7,
         )

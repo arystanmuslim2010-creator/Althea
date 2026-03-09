@@ -46,7 +46,7 @@ class Settings:
     jwt_algorithm: str = os.getenv("ALTHEA_JWT_ALGORITHM", "HS256")
     access_token_minutes: int = int(os.getenv("ALTHEA_ACCESS_TOKEN_MINUTES", "60"))
     refresh_token_minutes: int = int(os.getenv("ALTHEA_REFRESH_TOKEN_MINUTES", str(60 * 24 * 14)))
-    model_selection_strategy: str = os.getenv("ALTHEA_MODEL_SELECTION", "approved_latest")
+    model_selection_strategy: str = os.getenv("ALTHEA_MODEL_SELECTION", "active_approved")
     rq_queue_name: str = os.getenv("ALTHEA_RQ_QUEUE", "althea-pipeline")
     object_storage_dirname: str = os.getenv("ALTHEA_OBJECT_STORAGE_DIR", "object_storage")
     reports_dirname: str = os.getenv("ALTHEA_REPORTS_DIR", "reports")
@@ -75,6 +75,7 @@ class Settings:
     azure_ad_client_id: str | None = os.getenv("ALTHEA_AZURE_AD_CLIENT_ID")
     okta_domain: str | None = os.getenv("ALTHEA_OKTA_DOMAIN")
     okta_client_id: str | None = os.getenv("ALTHEA_OKTA_CLIENT_ID")
+    sso_provisioning_secret: str | None = os.getenv("ALTHEA_SSO_PROVISIONING_SECRET")
     secret_key_ref: str | None = os.getenv("ALTHEA_SECRET_KEY_REF")
     otel_exporter_otlp_endpoint: str | None = os.getenv("ALTHEA_OTEL_EXPORTER_OTLP_ENDPOINT")
 
@@ -126,6 +127,11 @@ class Settings:
             raise RuntimeError("ALTHEA_QUEUE_MODE=inline is no longer supported. Use 'rq'.")
         if queue_mode != "rq":
             raise RuntimeError(f"Unsupported ALTHEA_QUEUE_MODE '{self.queue_mode}'. Allowed: rq.")
+        strategy = (self.model_selection_strategy or "").lower().strip()
+        if strategy != "active_approved":
+            raise RuntimeError(
+                "ALTHEA_MODEL_SELECTION must be 'active_approved' to enforce model governance."
+            )
 
         db_url = self.runtime_database_url
         if self.is_non_dev and self.require_postgres_in_non_dev:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 from typing import Any
@@ -23,6 +24,15 @@ def execute_pipeline_job(service: Any, job_id: str, tenant_id: str, user_scope: 
     Worker-side pipeline execution entrypoint.
     Heavy pipeline processing must stay in workers and never block API handlers.
     """
+    existing = service._repository.get_pipeline_job(tenant_id=tenant_id, job_id=job_id)
+    if existing and str(existing.get("status", "")).lower() == "completed" and existing.get("run_id"):
+        return {
+            "job_id": job_id,
+            "status": "completed",
+            "run_id": existing.get("run_id"),
+            "alerts": int(existing.get("row_count") or 0),
+        }
+
     started = time.perf_counter()
     service._repository.update_pipeline_job(
         job_id,
@@ -33,8 +43,14 @@ def execute_pipeline_job(service: Any, job_id: str, tenant_id: str, user_scope: 
     service._job_queue.set_status(job_id, {"job_id": job_id, "status": "running"})
     try:
         context = service.get_runtime_context(tenant_id, user_scope)
-        runtime_df = service._ingestion_service.load_runtime_dataframe(context)
-        run_id, persisted_count, model_version, score_values = service._run_pipeline(runtime_df, tenant_id=tenant_id)
+        runtime_stream = service._ingestion_service.stream_runtime_dataset(
+            context=context,
+            batch_size=service._settings.pipeline_batch_size,
+        )
+        run_id, persisted_count, model_version, score_values = service.run_pipeline_stream(
+            tenant_id=tenant_id,
+            source_chunks=runtime_stream,
+        )
 
         monitoring = service._model_monitoring_service.record_run_monitoring(
             tenant_id=tenant_id,
@@ -74,6 +90,21 @@ def execute_pipeline_job(service: Any, job_id: str, tenant_id: str, user_scope: 
         return payload
     except Exception as exc:
         record_pipeline_run(status="failed", duration_seconds=time.perf_counter() - started, alerts_processed=0)
+        dead_letter_path = service._settings.dead_letter_dir / f"{job_id}_dead_letter.json"
+        dead_letter_path.parent.mkdir(parents=True, exist_ok=True)
+        dead_letter_path.write_text(
+            json.dumps(
+                {
+                    "job_id": job_id,
+                    "tenant_id": tenant_id,
+                    "user_scope": user_scope,
+                    "error": str(exc),
+                    "ts": pd.Timestamp.utcnow().isoformat(),
+                },
+                ensure_ascii=True,
+            ),
+            encoding="utf-8",
+        )
         service._repository.update_pipeline_job(
             job_id,
             tenant_id=tenant_id,

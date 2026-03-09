@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { api } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 
-const ROLES = ['analyst', 'lead', 'manager', 'admin']
+const ROLES = ['analyst', 'investigator', 'manager', 'admin']
 
 export function AdminUsers() {
   const { user } = useAuth()

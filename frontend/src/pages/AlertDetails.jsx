@@ -25,7 +25,7 @@ export function AlertDetails() {
   const [caseInfo, setCaseInfo] = useState(null)
   const [error, setError] = useState('')
 
-  const canAddNotes = user?.role === 'analyst' || user?.role === 'lead' || user?.role === 'admin'
+  const canAddNotes = user?.role === 'analyst' || user?.role === 'investigator' || user?.role === 'lead' || user?.role === 'admin'
   const canCreateCase = canAddNotes
 
   const load = async () => {

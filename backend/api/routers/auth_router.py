@@ -12,9 +12,11 @@ from core.security import (
     build_refresh_token,
     decode_token,
     get_current_user,
+    get_current_user_optional,
     get_tenant_id,
     hash_password,
     hash_refresh_token,
+    normalize_role,
     verify_password,
 )
 
@@ -24,8 +26,12 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 class RegisterRequest(BaseModel):
     email: str
     password: str = Field(min_length=8)
-    role: str
+    role: str = "analyst"
     team: str = Field(min_length=1)
+    provision_mode: str = "ADMIN_INVITE"
+
+
+ALLOWED_PROVISION_MODES = {"ADMIN_INVITE", "TENANT_BOOTSTRAP", "SSO_PROVISIONING"}
 
 
 class LoginRequest(BaseModel):
@@ -61,11 +67,41 @@ def list_identity_providers(request: Request):
 
 
 @router.post("/register")
-def register_user(payload: RegisterRequest, request: Request, tenant_id: str = Depends(get_tenant_id)):
+def register_user(
+    payload: RegisterRequest,
+    request: Request,
+    tenant_id: str = Depends(get_tenant_id),
+    current_user: dict | None = Depends(get_current_user_optional),
+):
     repository = request.app.state.repository
-    role = payload.role.lower().strip()
+    settings = request.app.state.settings
+    provision_mode = str(payload.provision_mode or "").upper().strip()
+    if provision_mode not in ALLOWED_PROVISION_MODES:
+        raise HTTPException(status_code=400, detail="Unsupported provisioning mode")
+
+    role = normalize_role(payload.role)
     if role not in VALID_ROLES:
         raise HTTPException(status_code=400, detail="Invalid role")
+
+    if provision_mode == "TENANT_BOOTSTRAP":
+        if repository.count_users(tenant_id) > 0:
+            raise HTTPException(status_code=403, detail="Tenant bootstrap is only allowed for empty tenants")
+        if role != "admin":
+            raise HTTPException(status_code=400, detail="Tenant bootstrap must create an admin account")
+    elif provision_mode == "ADMIN_INVITE":
+        if not current_user or normalize_role(current_user.get("role")) != "admin":
+            raise HTTPException(status_code=403, detail="Admin invite registration requires admin authorization")
+    elif provision_mode == "SSO_PROVISIONING":
+        provisioning_secret = (getattr(settings, "sso_provisioning_secret", None) or "").strip()
+        provided_secret = (request.headers.get("X-SSO-Provisioning-Token") or "").strip()
+        if not provisioning_secret or provided_secret != provisioning_secret:
+            raise HTTPException(status_code=403, detail="Invalid SSO provisioning token")
+
+    # Prevent privilege escalation: role assignment is admin-controlled except tenant bootstrap.
+    if provision_mode != "TENANT_BOOTSTRAP" and (not current_user or normalize_role(current_user.get("role")) != "admin"):
+        if role != "analyst":
+            raise HTTPException(status_code=403, detail="Only admins can assign elevated roles")
+
     existing = repository.get_user_by_email(tenant_id, payload.email.lower())
     if existing:
         raise HTTPException(status_code=409, detail="User already exists")
@@ -80,8 +116,14 @@ def register_user(payload: RegisterRequest, request: Request, tenant_id: str = D
             "created_at": datetime.now(timezone.utc),
         }
     )
+    repository.assign_user_roles(
+        tenant_id=tenant_id,
+        user_id=user["id"],
+        roles=[role],
+        created_by=(current_user or {}).get("user_id"),
+        replace=True,
+    )
     session_id = uuid.uuid4().hex
-    settings = request.app.state.settings
     refresh_token = build_refresh_token(settings, tenant_id, user, session_id)
     repository.create_session(
         {
@@ -98,7 +140,14 @@ def register_user(payload: RegisterRequest, request: Request, tenant_id: str = D
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "user": {"id": user["id"], "user_id": user["id"], "email": user["email"], "role": user["role"], "team": user["team"]},
+        "user": {
+            "id": user["id"],
+            "user_id": user["id"],
+            "email": user["email"],
+            "role": normalize_role(user["role"]),
+            "team": user["team"],
+            "roles": repository.list_user_roles(tenant_id=tenant_id, user_id=user["id"]),
+        },
     }
 
 
@@ -126,7 +175,14 @@ def login_user(payload: LoginRequest, request: Request, tenant_id: str = Depends
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "user": {"id": user["id"], "user_id": user["id"], "email": user["email"], "role": user["role"], "team": user["team"]},
+        "user": {
+            "id": user["id"],
+            "user_id": user["id"],
+            "email": user["email"],
+            "role": normalize_role(user["role"]),
+            "team": user["team"],
+            "roles": repository.list_user_roles(tenant_id=tenant_id, user_id=user["id"]),
+        },
     }
 
 

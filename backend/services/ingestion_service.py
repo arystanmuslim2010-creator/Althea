@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from io import BytesIO
-from typing import Any
+from typing import Any, Iterator
 
 import numpy as np
 import pandas as pd
@@ -159,3 +159,13 @@ class EnterpriseIngestionService:
         if not artifact_uri:
             raise ValueError("No dataset is staged for the current tenant/session.")
         return pd.read_csv(BytesIO(self._object_storage.get_bytes(artifact_uri)))
+
+    def stream_runtime_dataset(self, context: dict[str, Any], batch_size: int = 20000) -> Iterator[pd.DataFrame]:
+        artifact_uri = context.get("dataset_artifact_uri")
+        if not artifact_uri:
+            raise ValueError("No dataset is staged for the current tenant/session.")
+        path = self._object_storage.resolve_path(str(artifact_uri))
+        if not path.exists():
+            raise ValueError(f"Dataset artifact is missing: {artifact_uri}")
+        for chunk in pd.read_csv(path, chunksize=max(1000, int(batch_size))):
+            yield chunk

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import io
+
 import numpy as np
 import pandas as pd
+from joblib import dump as joblib_dump
+from sklearn.dummy import DummyClassifier
 
 from models.feature_schema import FeatureSchemaValidator
 from models.inference_service import InferenceService
@@ -29,8 +33,24 @@ def _sample_df(n: int = 120, seed: int = 7) -> pd.DataFrame:
 
 
 class _StubRegistry:
+    def __init__(self, schema: dict, artifact_bytes: bytes):
+        self._schema = schema
+        self._artifact_bytes = artifact_bytes
+
     def resolve_model(self, tenant_id: str, strategy: str = "approved_latest"):
-        return None
+        return {
+            "id": "test-model-id",
+            "tenant_id": tenant_id,
+            "model_version": "test-model-v1",
+            "artifact_uri": f"models/{tenant_id}/test-model-v1/model.joblib",
+            "training_metadata_json": {"feature_schema_version": "v1", "artifact_format": "joblib"},
+        }
+
+    def load_feature_schema(self, model_record: dict):
+        return self._schema
+
+    def load_model_artifact(self, model_record: dict):
+        return self._artifact_bytes
 
 
 def test_feature_generation_uses_single_builder_for_training_and_inference():
@@ -58,7 +78,15 @@ def test_feature_builder_produces_stable_numeric_matrix():
 def test_inference_service_outputs_scores_in_valid_range():
     service = EnterpriseFeatureService(FeatureSchemaValidator())
     bundle = service.generate_inference_features(_sample_df(90))
-    inference = InferenceService(registry=_StubRegistry(), schema_validator=FeatureSchemaValidator())
+    x = bundle["feature_matrix"]
+    y = np.random.default_rng(19).integers(0, 2, size=len(x))
+    model = DummyClassifier(strategy="prior")
+    model.fit(x, y)
+    buffer = io.BytesIO()
+    joblib_dump(model, buffer)
+    registry = _StubRegistry(schema=bundle["feature_schema"], artifact_bytes=buffer.getvalue())
+
+    inference = InferenceService(registry=registry, schema_validator=FeatureSchemaValidator())
     result = inference.predict(tenant_id="default-bank", feature_frame=bundle["feature_matrix"])
 
     scores = np.asarray(result["scores"], dtype=float)
@@ -84,4 +112,3 @@ def test_governance_assigns_queue_status_consistently():
     assert status["A4"] == "mandatory_review"
     assert out.loc[out["alert_id"] == "A1", "in_queue"].iloc[0] is False
     assert out.loc[out["alert_id"] == "A4", "alert_priority"].iloc[0] == "P0"
-

@@ -1,10 +1,61 @@
 services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set_POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?set_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set_POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+
   backend:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
     environment:
       ALTHEA_ENV: staging
+      ALTHEA_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      ALTHEA_REDIS_URL: redis://redis:6379/0
+      ALTHEA_QUEUE_MODE: rq
+      ALTHEA_JWT_SECRET: ${ALTHEA_JWT_SECRET:?set_ALTHEA_JWT_SECRET}
       ALTHEA_ALLOW_SQLITE_IN_DEV: "false"
       ALTHEA_REQUIRE_POSTGRES: "true"
-      ALTHEA_QUEUE_MODE: rq
+    depends_on:
+      - postgres
+      - redis
+
   worker:
-    deploy:
-      replicas: 4
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    command: python -m workers.pipeline_worker
+    environment:
+      ALTHEA_ENV: staging
+      ALTHEA_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      ALTHEA_REDIS_URL: redis://redis:6379/0
+      ALTHEA_QUEUE_MODE: rq
+      ALTHEA_JWT_SECRET: ${ALTHEA_JWT_SECRET:?set_ALTHEA_JWT_SECRET}
+    depends_on:
+      - postgres
+      - redis
+
+  event-worker:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    command: python -m workers.event_worker
+    environment:
+      ALTHEA_ENV: staging
+      ALTHEA_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      ALTHEA_REDIS_URL: redis://redis:6379/0
+      ALTHEA_QUEUE_MODE: rq
+      ALTHEA_JWT_SECRET: ${ALTHEA_JWT_SECRET:?set_ALTHEA_JWT_SECRET}
+    depends_on:
+      - postgres
+      - redis
+
+volumes:
+  postgres_data:

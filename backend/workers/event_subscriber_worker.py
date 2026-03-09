@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import json
 import logging
 import time
 from typing import Any
 
-import pandas as pd
-
-from core.dependencies import get_event_bus, get_inference_service, get_pipeline_service, get_repository
+from core.dependencies import get_event_bus, get_pipeline_service, get_repository
 from core.observability import record_worker_task
 
 logger = logging.getLogger("althea.event_worker")
@@ -31,44 +28,10 @@ def _handle_event(envelope: dict[str, Any]) -> None:
 
     logger.info("event_received name=%s tenant=%s payload=%s", event_name, tenant_id, payload)
 
-    # Lightweight projection hooks for future async stage workers.
+    # Scoring is exclusively executed in PipelineService.
+    # Event subscriber only reacts, enriches monitoring state, and notifies downstream systems.
     if event_name == "features_generated":
-        run_id = payload.get("run_id")
-        if tenant_id and run_id:
-            repository = get_repository()
-            inference_service = get_inference_service()
-            feature_rows = repository.list_feature_rows(tenant_id=tenant_id, run_id=run_id, limit=200000)
-            if feature_rows:
-                frame = pd.DataFrame(feature_rows)
-                if "alert_id" in frame.columns and len(frame.columns) > 1:
-                    alert_ids = frame["alert_id"].astype(str).tolist()
-                    matrix = frame.drop(columns=["alert_id"], errors="ignore").fillna(0)
-                    score_by_alert: dict[str, float] = {}
-                    explain_by_alert: dict[str, dict[str, Any]] = {}
-                    batch_size = 10000
-                    for start in range(0, len(matrix), batch_size):
-                        sub_matrix = matrix.iloc[start : start + batch_size]
-                        sub_ids = alert_ids[start : start + batch_size]
-                        inference = inference_service.predict(tenant_id=tenant_id, feature_frame=sub_matrix)
-                        scores = inference.get("scores", [])
-                        explanations = inference.get("explanations", [])
-                        for idx, alert_id in enumerate(sub_ids):
-                            score_by_alert[alert_id] = float(scores[idx]) if idx < len(scores) else 0.0
-                            explain_by_alert[alert_id] = explanations[idx] if idx < len(explanations) else {}
-
-                    alert_payloads = repository.list_alert_payloads_by_run(tenant_id=tenant_id, run_id=run_id, limit=500000)
-                    if alert_payloads:
-                        updated: list[dict[str, Any]] = []
-                        for row in alert_payloads:
-                            item = dict(row)
-                            alert_id = str(item.get("alert_id", ""))
-                            if not alert_id or alert_id not in score_by_alert:
-                                updated.append(item)
-                                continue
-                            item["ml_service_score"] = float(score_by_alert[alert_id])
-                            item["ml_service_explain_json"] = json.dumps(explain_by_alert.get(alert_id, {}))
-                            updated.append(item)
-                        repository.save_alert_payloads(tenant_id=tenant_id, run_id=run_id, records=updated)
+        return
 
     if event_name == "alert_scored":
         run_id = payload.get("run_id")

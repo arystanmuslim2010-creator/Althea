@@ -1,5 +1,5 @@
 # ML training configuration for AML alert governance overlay.
-# Used by backend/src/ml/labels.py, train_model.py, etc.
+# Used by backend models/services training and inference tooling.
 
 random_seed: 42
 

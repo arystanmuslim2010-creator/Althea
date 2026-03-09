@@ -52,6 +52,18 @@ _EVENT_COUNT = Counter(
     ["event_name"],
 )
 _DYNAMIC_GAUGES: dict[str, Gauge] = {}
+_ALERTS_PROCESSED_TOTAL = Counter("alerts_processed_total", "Total number of alerts processed by pipeline jobs.")
+_PIPELINE_RUNTIME_SECONDS = Histogram(
+    "pipeline_runtime_seconds",
+    "Pipeline runtime in seconds.",
+    buckets=(0.1, 0.5, 1, 3, 5, 10, 30, 60, 120, 300, 600, 1800),
+)
+_ML_INFERENCE_LATENCY_SECONDS = Histogram(
+    "ml_inference_latency",
+    "ML inference latency in seconds.",
+    ["model_version"],
+)
+_QUEUE_DEPTH = Gauge("queue_depth", "Current depth of background queue.")
 
 
 def _safe_metric_name(name: str) -> str:
@@ -135,6 +147,8 @@ def record_pipeline_run(status: str, duration_seconds: float, alerts_processed: 
     _PIPELINE_RUNS.labels(status=(status or "unknown")).inc()
     _PIPELINE_RUN_LATENCY.observe(max(0.0, float(duration_seconds)))
     _PIPELINE_ALERTS.observe(max(0.0, float(alerts_processed)))
+    _PIPELINE_RUNTIME_SECONDS.observe(max(0.0, float(duration_seconds)))
+    _ALERTS_PROCESSED_TOTAL.inc(max(0, int(alerts_processed)))
 
 
 def record_worker_task(worker_name: str, status: str, duration_seconds: float) -> None:
@@ -145,10 +159,15 @@ def record_worker_task(worker_name: str, status: str, duration_seconds: float) -
 
 def record_ml_inference(model_version: str, duration_seconds: float) -> None:
     _ML_INFERENCE_LATENCY.labels(model_version=model_version or "unknown").observe(max(0.0, float(duration_seconds)))
+    _ML_INFERENCE_LATENCY_SECONDS.labels(model_version=model_version or "unknown").observe(max(0.0, float(duration_seconds)))
 
 
 def record_event(event_name: str) -> None:
     _EVENT_COUNT.labels(event_name=event_name or "unknown").inc()
+
+
+def record_queue_depth(depth: int) -> None:
+    _QUEUE_DEPTH.set(max(0, int(depth)))
 
 
 def metrics_response(metrics: MetricsRegistry) -> PlainTextResponse:

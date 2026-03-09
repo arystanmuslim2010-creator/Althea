@@ -43,7 +43,7 @@ def main():
     print("ERROR: Possible secrets found in staged files. Do not commit API keys.", file=sys.stderr)
     for path, name, preview in found:
         print(f"  {path}: {name} ({preview})", file=sys.stderr)
-    print("Remove the key from the file or unstage it. See backend/src/SECRETS_README.md", file=sys.stderr)
+    print("Remove the key from the file or unstage it. See the project security documentation.", file=sys.stderr)
     return 1
 
 

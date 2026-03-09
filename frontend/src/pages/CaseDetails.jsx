@@ -12,7 +12,7 @@ export function CaseDetails() {
   const [status, setStatus] = useState('open')
   const [error, setError] = useState('')
 
-  const canEditCase = user?.role === 'analyst' || user?.role === 'lead' || user?.role === 'manager' || user?.role === 'admin'
+  const canEditCase = user?.role === 'analyst' || user?.role === 'investigator' || user?.role === 'lead' || user?.role === 'manager' || user?.role === 'admin'
   const canApproveSar = user?.role === 'manager' || user?.role === 'admin'
 
   const availableStatuses = useMemo(() => {
@@ -71,7 +71,7 @@ export function CaseDetails() {
         </div>
         <div className="border rounded p-4 bg-white space-y-2">
           <div className="text-xs uppercase text-slate-500">Escalation</div>
-          <p className="text-sm text-slate-600">Use `escalated` to push analyst review to lead/manager workflow. Manager and admin roles can approve SAR filing.</p>
+          <p className="text-sm text-slate-600">Use `escalated` to push analyst review to investigator/manager workflow. Manager and admin roles can approve SAR filing.</p>
           <div className="flex flex-wrap gap-2">
             <button className="px-3 py-1 border rounded" disabled={!canEditCase} onClick={() => saveStatus('escalated')}>Escalate</button>
             <button className="px-3 py-1 border rounded" disabled={!canApproveSar} onClick={() => saveStatus('sar_filed')}>Approve SAR</button>

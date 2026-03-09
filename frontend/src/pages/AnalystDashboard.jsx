@@ -6,11 +6,11 @@ import { useAuth } from '../contexts/AuthContext'
 const ALERT_STATUSES = ['open', 'in_review', 'escalated', 'closed']
 
 function canReassign(role) {
-  return role === 'lead' || role === 'admin'
+  return role === 'investigator' || role === 'lead' || role === 'admin'
 }
 
 function canChangeStatus(role) {
-  return role === 'analyst' || role === 'lead' || role === 'admin'
+  return role === 'analyst' || role === 'investigator' || role === 'lead' || role === 'admin'
 }
 
 export function AnalystDashboard() {

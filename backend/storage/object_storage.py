@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 
 class ObjectStorage:
@@ -23,6 +23,12 @@ class ObjectStorage:
 
     def get_bytes(self, key: str) -> bytes:
         return self._path(key).read_bytes()
+
+    def resolve_path(self, key: str) -> Path:
+        return self._path(key)
+
+    def open_read(self, key: str) -> BinaryIO:
+        return self._path(key).open("rb")
 
     def put_json(self, key: str, payload: Any) -> str:
         self._path(key).write_text(json.dumps(payload, ensure_ascii=True, default=str), encoding="utf-8")

@@ -19,8 +19,43 @@ def root() -> dict:
 
 
 @router.get("/health")
-def health_check() -> dict:
-    return {"ok": True}
+def health_check(request: Request) -> dict:
+    checks = {
+        "database": False,
+        "redis": False,
+        "worker_queue": False,
+        "model_registry": False,
+    }
+    details: dict[str, str] = {}
+
+    try:
+        request.app.state.repository.ping()
+        checks["database"] = True
+    except Exception as exc:
+        details["database"] = str(exc)
+
+    try:
+        request.app.state.cache.ping()
+        checks["redis"] = True
+    except Exception as exc:
+        details["redis"] = str(exc)
+
+    try:
+        depth = request.app.state.job_queue_service.queue_depth(request.app.state.settings.rq_queue_name)
+        checks["worker_queue"] = depth >= 0
+    except Exception as exc:
+        details["worker_queue"] = str(exc)
+        depth = -1
+
+    try:
+        tenant_id = request.app.state.settings.default_tenant_id
+        request.app.state.ml_service.list_versions(tenant_id)
+        checks["model_registry"] = True
+    except Exception as exc:
+        details["model_registry"] = str(exc)
+
+    ok = all(checks.values())
+    return {"ok": ok, "checks": checks, "queue_depth": depth, "details": details}
 
 
 @router.get("/metrics")

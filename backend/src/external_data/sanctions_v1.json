@@ -1,8 +1,0 @@
-{
-  "as_of_date": "2025-01-01",
-  "records": [
-    {"entity_name": "EXAMPLE_SANCTIONED_ENTITY_1", "country": "IR", "match_type": "exact"},
-    {"entity_name": "EXAMPLE_SANCTIONED_ENTITY_2", "country": "RU", "match_type": "exact"},
-    {"entity_name": "GLOBAL_SANCTIONS_LIST_MOCK", "country": "KP", "match_type": "fuzzy"}
-  ]
-}

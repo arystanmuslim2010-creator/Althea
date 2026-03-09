@@ -26,6 +26,7 @@ class ModelRegistry:
         approved_by: str | None = None,
         feature_schema_version: str = "v1",
     ) -> dict[str, Any]:
+        now = datetime.now(timezone.utc)
         version = model_version or f"model-{uuid.uuid4().hex[:12]}"
         artifact_uri = f"models/{tenant_id}/{version}/artifact.bin"
         schema_uri = f"models/{tenant_id}/{version}/feature_schema.json"
@@ -36,7 +37,7 @@ class ModelRegistry:
         lifecycle = dict(training_metadata or {})
         lifecycle.setdefault("feature_schema_version", feature_schema_version)
         lifecycle.setdefault("is_active", False)
-        lifecycle.setdefault("lifecycle", {"registered_at": datetime.now(timezone.utc).isoformat()})
+        lifecycle.setdefault("lifecycle", {"registered_at": now.isoformat()})
 
         record = {
             "tenant_id": tenant_id,
@@ -48,9 +49,9 @@ class ModelRegistry:
             "approval_status": approval_status,
             "training_metadata_json": lifecycle,
             "approved_by": approved_by,
-            "approved_at": datetime.now(timezone.utc).isoformat() if approval_status == "approved" else None,
+            "approved_at": now if approval_status == "approved" else None,
             "artifact_uri": artifact_uri,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": now,
         }
         self._repository.register_model_version(record)
         if approval_status == "approved":
@@ -160,3 +161,9 @@ class ModelRegistry:
         if not uri:
             return {}
         return self._object_storage.get_json(uri)
+
+    def load_model_artifact(self, model_record: dict[str, Any]) -> bytes:
+        uri = model_record.get("artifact_uri")
+        if not uri:
+            raise ValueError("Model artifact URI is missing")
+        return self._object_storage.get_bytes(str(uri))

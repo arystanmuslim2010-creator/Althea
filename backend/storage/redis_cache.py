@@ -103,3 +103,9 @@ class RedisCache:
                 elif event.get("id") == last_event_id:
                     seen = True
             return new_events[-limit:]
+
+    def queue_depth(self, queue_name: str) -> int:
+        if self._client is not None:
+            key = f"rq:queue:{queue_name}"
+            return int(self._client.llen(key) or 0)
+        return 0

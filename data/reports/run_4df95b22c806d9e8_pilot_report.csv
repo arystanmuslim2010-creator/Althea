@@ -1,2 +1,0 @@
-run_id,total_alerts,in_queue,suppressed,mandatory_review,hard_constraints_count,suppression_rate,rule_hit_distribution,top_typology_distribution,precision_at_capacity,recall_at_k,lift,queue_pressure,sla_risk,analyst_time_saved_mins,baseline_minutes_per_alert,generated_at
-run_4df95b22c806d9e8,400,66,334,25,25,0.835,{'high_risk_country': 15},"{'bank_alert': 345, 'rapid_velocity': 36, 'sanctions': 10, 'cross_border': 9}",,,,0.165,low,3340,10,2026-03-07T07:41:26Z

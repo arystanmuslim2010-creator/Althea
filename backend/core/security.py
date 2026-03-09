@@ -17,7 +17,8 @@ from storage.postgres_repository import EnterpriseRepository
 
 security_scheme = HTTPBearer(auto_error=False)
 
-VALID_ROLES = {"analyst", "lead", "manager", "admin"}
+ROLE_ALIASES = {"lead": "investigator"}
+VALID_ROLES = {"analyst", "investigator", "manager", "admin"}
 ROLE_PERMISSIONS: dict[str, set[str]] = {
     "analyst": {
         "view_assigned_alerts",
@@ -26,7 +27,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "view_explanations",
         "work_cases",
     },
-    "lead": {
+    "investigator": {
         "view_assigned_alerts",
         "add_investigation_notes",
         "change_alert_status",
@@ -53,6 +54,11 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         "work_cases",
     },
 }
+
+
+def normalize_role(role: str | None) -> str:
+    normalized = str(role or "").lower().strip()
+    return ROLE_ALIASES.get(normalized, normalized)
 
 
 def _encode_token(payload: dict[str, Any], secret: str, algorithm: str) -> str:
@@ -89,10 +95,11 @@ def hash_refresh_token(token: str) -> str:
 
 def build_access_token(settings: Settings, tenant_id: str, user: dict[str, Any], session_id: str) -> str:
     now = datetime.now(timezone.utc)
+    role = normalize_role(user.get("role"))
     payload = {
         "sub": user["id"],
         "tenant_id": tenant_id,
-        "role": user["role"],
+        "role": role,
         "team": user.get("team", "default"),
         "sid": session_id,
         "type": "access",
@@ -122,7 +129,8 @@ def decode_token(settings: Settings, token: str) -> dict[str, Any]:
 
 def require_role(*roles: str):
     def _dep(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-        if user["role"] not in roles:
+        normalized = {normalize_role(role) for role in roles}
+        if normalize_role(user["role"]) not in normalized:
             raise HTTPException(status_code=403, detail="Forbidden")
         return user
 
@@ -131,10 +139,10 @@ def require_role(*roles: str):
 
 def require_permissions(*permissions: str):
     def _dep(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-        role = user["role"]
+        role = normalize_role(user["role"])
         if role == "admin":
             return user
-        granted = ROLE_PERMISSIONS.get(role, set())
+        granted = set(user.get("permissions") or ROLE_PERMISSIONS.get(role, set()))
         if not set(permissions).issubset(granted):
             raise HTTPException(status_code=403, detail="Forbidden")
         return user
@@ -144,10 +152,10 @@ def require_permissions(*permissions: str):
 
 def require_any_permission(*permissions: str):
     def _dep(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-        role = user["role"]
+        role = normalize_role(user["role"])
         if role == "admin":
             return user
-        granted = ROLE_PERMISSIONS.get(role, set())
+        granted = set(user.get("permissions") or ROLE_PERMISSIONS.get(role, set()))
         if not any(permission in granted for permission in permissions):
             raise HTTPException(status_code=403, detail="Forbidden")
         return user
@@ -186,15 +194,32 @@ def get_current_user(
     user = repository.get_user_by_id(tenant_id, payload.get("sub", ""))
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    role = normalize_role(user["role"])
+    roles = repository.list_user_roles(tenant_id=tenant_id, user_id=user["id"]) or [role]
+    permissions = repository.get_user_permissions(tenant_id=tenant_id, user_id=user["id"], fallback_role=role)
     return {
         "user_id": user["id"],
         "id": user["id"],
         "email": user["email"],
-        "role": user["role"],
+        "role": role,
+        "roles": roles,
+        "permissions": permissions,
         "team": user.get("team", "default"),
         "tenant_id": tenant_id,
         "session_id": session_id,
     }
+
+
+def get_current_user_optional(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
+) -> dict[str, Any] | None:
+    if not credentials:
+        return None
+    try:
+        return get_current_user(request=request, credentials=credentials)
+    except HTTPException:
+        return None
 
 
 def get_authenticated_tenant_id(
