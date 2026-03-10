@@ -12,6 +12,53 @@ function _parseJson(val) {
   }
 }
 
+function _formatExplainSummary(rawExplain) {
+  const explain = _parseJson(rawExplain)
+  if (!explain || typeof explain !== 'object') return 'No explanation data.'
+  const parts = []
+  if (typeof explain.base_prob === 'number') {
+    parts.push(`base_prob=${explain.base_prob.toFixed(3)}`)
+  }
+  if (explain.model_version) {
+    parts.push(`model=${explain.model_version}`)
+  }
+  const reasons = Array.isArray(explain.risk_reason_codes) ? explain.risk_reason_codes.filter(Boolean) : []
+  if (reasons.length) {
+    parts.push(`reasons=${reasons.slice(0, 4).join(', ')}`)
+  }
+  const top = Array.isArray(explain.feature_attribution) && explain.feature_attribution.length
+    ? explain.feature_attribution
+    : (Array.isArray(explain.contributions) ? explain.contributions : [])
+  if (top.length) {
+    const head = top.slice(0, 3).map((item) => {
+      if (!item || typeof item !== 'object') return String(item)
+      const f = item.feature || item.name || 'feature'
+      const v = typeof item.value === 'number' ? item.value.toFixed(3) : String(item.value ?? '')
+      return `${f}:${v}`
+    })
+    parts.push(`top=${head.join(' | ')}`)
+  }
+  return parts.join('; ') || 'No explanation data.'
+}
+
+function _deriveBehavioralSignals(alertDetail) {
+  const direct = _parseJson(alertDetail?.ml_signals_json)
+  if (direct && typeof direct === 'object' && Object.keys(direct).length > 0) return direct
+  const explain = _parseJson(alertDetail?.risk_explain_json)
+  const contrib = _parseJson(alertDetail?.top_feature_contributions_json)
+  const top = Array.isArray(explain?.feature_attribution) && explain.feature_attribution.length
+    ? explain.feature_attribution
+    : (Array.isArray(explain?.contributions) && explain.contributions.length
+      ? explain.contributions
+      : (Array.isArray(contrib) ? contrib : []))
+  if (!top.length) return null
+  return {
+    model_version: explain?.model_version || alertDetail?.model_version || 'unknown',
+    top_feature_contributions: top,
+    risk_reason_codes: Array.isArray(explain?.risk_reason_codes) ? explain.risk_reason_codes : [],
+  }
+}
+
 function badgeClass(riskBand) {
   const b = (riskBand || '').toLowerCase()
   const base = 'inline-block px-2 py-0.5 text-[0.68rem] font-semibold rounded uppercase tracking-wide'
@@ -533,7 +580,7 @@ export function AlertQueue() {
                     )}
                     {_parseJson(alertDetail.risk_explain_json) && (
                       <div className="mt-3 p-4 rounded-md bg-blue-500/10 border-l-4 border-blue-500 text-[var(--text)] text-[0.8125rem]">
-                        Summary: {Object.entries(_parseJson(alertDetail.risk_explain_json)).map(([k, v]) => `${k}=${v}`).join('; ')}
+                        Summary: {_formatExplainSummary(alertDetail.risk_explain_json)}
                       </div>
                     )}
                     <div className="mt-3 p-4 rounded-md bg-amber-500/10 border-l-4 border-amber-500 text-[var(--text)] text-[0.8125rem]">
@@ -574,7 +621,7 @@ export function AlertQueue() {
                           <thead><tr><th className="py-1.5 px-2 text-left text-[var(--muted)] font-semibold">Component</th><th className="py-1.5 px-2 text-left text-[var(--muted)] font-semibold">Score</th></tr></thead>
                           <tbody>
                             {Object.entries(_parseJson(alertDetail.risk_explain_json)).map(([k, v]) => (
-                              <tr key={k} className="border-b border-[var(--border)]"><td className="py-1.5 px-2">{k}</td><td className="py-1.5 px-2">{String(v)}</td></tr>
+                              <tr key={k} className="border-b border-[var(--border)]"><td className="py-1.5 px-2">{k}</td><td className="py-1.5 px-2">{typeof v === 'object' ? JSON.stringify(v) : String(v)}</td></tr>
                             ))}
                           </tbody>
                         </table>
@@ -603,11 +650,11 @@ export function AlertQueue() {
                     </div>
                     <div className="mb-4">
                       <h5 className="m-0 mb-2 text-[0.8125rem]">Behavioral Signals</h5>
-                      <p className="m-0 text-sm">{_parseJson(alertDetail.ml_signals_json) && Object.keys(_parseJson(alertDetail.ml_signals_json)).length > 0 ? JSON.stringify(_parseJson(alertDetail.ml_signals_json)) : 'No behavioral deviation data.'}</p>
+                      <p className="m-0 text-sm">{_deriveBehavioralSignals(alertDetail) ? JSON.stringify(_deriveBehavioralSignals(alertDetail)) : 'No behavioral deviation data.'}</p>
                     </div>
                     <div>
                       <h5 className="m-0 mb-2 text-[0.8125rem]">Raw Data (Audit / Debug)</h5>
-                      <RawDataExpandable data={alertDetail} keys={['rules_json', 'rule_evidence_json', 'ml_signals_json', 'features_json', 'risk_explain_json']} parse={_parseJson} />
+                      <RawDataExpandable data={alertDetail} keys={['rules_json', 'rule_evidence_json', 'ml_signals_json', 'features_json', 'risk_explain_json', 'top_feature_contributions_json', 'top_features_json']} parse={_parseJson} />
                     </div>
                   </div>
                 )}

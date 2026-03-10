@@ -1,12 +1,37 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from pydantic import BaseModel
 
 from core.observability import metrics_response
 from core.security import get_authenticated_tenant_id
 from services.ingestion_service import IngestionError
 
 router = APIRouter(tags=["pipeline"])
+
+
+class StreamReplayRequest(BaseModel):
+    topic: str
+    start_event_id: str = "0-0"
+    batch_size: int = 500
+
+
+class StreamBackfillRequest(BaseModel):
+    topic: str
+    events: list[dict]
+
+
+class ModelRescoreRequest(BaseModel):
+    run_id: str
+    alert_ids: list[str]
+    model_version: str | None = None
+
+
+class GovernanceApprovalRequest(BaseModel):
+    model_version: str
+    stage: str
+    decision: str
+    notes: str = ""
 
 
 def _user_scope(request: Request) -> str:
@@ -150,3 +175,70 @@ def get_run_info(request: Request, tenant_id: str = Depends(get_authenticated_te
 def get_model_health(request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
     run_info = request.app.state.pipeline_service.get_run_info(tenant_id=tenant_id, user_scope=_user_scope(request))
     return request.app.state.pipeline_service.compute_health(run_info.get("run_id") or "", tenant_id=tenant_id)
+
+
+@router.post("/api/stream/replay")
+def replay_stream(payload: StreamReplayRequest, request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
+    count = request.app.state.streaming_orchestrator.replay_topic(
+        topic=payload.topic,
+        start_event_id=payload.start_event_id,
+        batch_size=max(1, min(payload.batch_size, 5000)),
+    )
+    return {"replayed_events": count, "topic": payload.topic}
+
+
+@router.post("/api/stream/backfill")
+def backfill_stream(payload: StreamBackfillRequest, request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
+    ids = request.app.state.streaming_backbone.backfill(
+        topic=payload.topic,
+        tenant_id=tenant_id,
+        payloads=payload.events,
+    )
+    request.app.state.streaming_orchestrator.process_once(batch_size=1000)
+    return {"published_events": len(ids), "topic": payload.topic}
+
+
+@router.post("/api/stream/rescore")
+def rescore_alerts(payload: ModelRescoreRequest, request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
+    event_id = request.app.state.streaming_backbone.rescore(
+        tenant_id=tenant_id,
+        run_id=payload.run_id,
+        alert_ids=payload.alert_ids,
+        model_version=payload.model_version,
+    )
+    request.app.state.streaming_orchestrator.process_once(batch_size=1000)
+    return {"event_id": event_id, "rescore_alerts": len(payload.alert_ids)}
+
+
+@router.get("/api/features/registry")
+def list_feature_registry(request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
+    return {"features": request.app.state.feature_registry.list_features(tenant_id)}
+
+
+@router.post("/api/model-governance/approve")
+def submit_model_governance_approval(
+    payload: GovernanceApprovalRequest,
+    request: Request,
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+):
+    actor = request.headers.get("X-Actor") or "system"
+    result = request.app.state.model_governance_lifecycle.submit_approval(
+        tenant_id=tenant_id,
+        model_version=payload.model_version,
+        stage=payload.stage,
+        actor_id=actor,
+        decision=payload.decision,
+        notes=payload.notes,
+    )
+    return result
+
+
+@router.get("/api/model-governance/monitoring/{model_version}")
+def get_model_governance_monitoring(model_version: str, request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
+    return {
+        "items": request.app.state.model_governance_lifecycle.list_monitoring(
+            tenant_id=tenant_id,
+            model_version=model_version,
+            limit=200,
+        )
+    }

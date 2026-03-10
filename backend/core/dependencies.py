@@ -5,7 +5,22 @@ from functools import lru_cache
 
 from core.config import Settings, get_settings
 from core.observability import MetricsRegistry
+from ai_copilot.copilot_service import AICopilotService
 from events.event_bus import EventBus
+from events.streaming.broker import StreamingBackbone
+from events.streaming.consumers import (
+    CaseCreationConsumer,
+    FeatureServiceConsumer,
+    GovernanceConsumer,
+    ModelScoringConsumer,
+    StreamingPipelineOrchestrator,
+)
+from features.feature_materialization import FeatureMaterializationService
+from features.feature_registry import FeatureRegistry
+from features.offline_feature_store import OfflineFeatureStore
+from features.online_feature_store import OnlineFeatureStore
+from model_governance.explainability import GovernanceExplainabilityService
+from model_governance.lifecycle import ModelGovernanceLifecycle
 from models.feature_schema import FeatureSchemaValidator
 from models.inference_service import InferenceService
 from models.ml_model_service import MLModelService
@@ -23,6 +38,7 @@ from services.scoring_service import EnterpriseScoringService
 from storage.object_storage import ObjectStorage
 from storage.postgres_repository import EnterpriseRepository
 from storage.redis_cache import RedisCache
+from workflows.workflow_engine import InvestigationWorkflowEngine
 
 
 def _validate_dependency_graph(
@@ -80,13 +96,44 @@ def get_feature_service() -> EnterpriseFeatureService:
 
 
 @lru_cache(maxsize=1)
+def get_feature_registry() -> FeatureRegistry:
+    return FeatureRegistry(get_repository())
+
+
+@lru_cache(maxsize=1)
+def get_online_feature_store() -> OnlineFeatureStore:
+    settings = get_settings()
+    return OnlineFeatureStore(get_cache(), ttl_seconds=settings.feature_online_ttl_seconds)
+
+
+@lru_cache(maxsize=1)
+def get_offline_feature_store() -> OfflineFeatureStore:
+    settings = get_settings()
+    return OfflineFeatureStore(get_repository(), root_dir=settings.object_storage_root)
+
+
+@lru_cache(maxsize=1)
+def get_feature_materialization_service() -> FeatureMaterializationService:
+    return FeatureMaterializationService(
+        registry=get_feature_registry(),
+        online_store=get_online_feature_store(),
+        offline_store=get_offline_feature_store(),
+    )
+
+
+@lru_cache(maxsize=1)
 def get_model_registry() -> ModelRegistry:
     return ModelRegistry(get_repository(), get_object_storage())
 
 
 @lru_cache(maxsize=1)
 def get_inference_service() -> InferenceService:
-    return InferenceService(registry=get_model_registry(), schema_validator=get_feature_schema_validator())
+    return InferenceService(
+        registry=get_model_registry(),
+        schema_validator=get_feature_schema_validator(),
+        online_feature_store=get_online_feature_store(),
+        feature_registry=get_feature_registry(),
+    )
 
 
 @lru_cache(maxsize=1)
@@ -121,7 +168,21 @@ def get_job_queue_service() -> JobQueueService:
 
 @lru_cache(maxsize=1)
 def get_governance_service() -> GovernanceService:
-    return GovernanceService()
+    return GovernanceService(
+        repository=get_repository(),
+        explainability_service=get_governance_explainability_service(),
+        lifecycle_service=get_model_governance_lifecycle(),
+    )
+
+
+@lru_cache(maxsize=1)
+def get_model_governance_lifecycle() -> ModelGovernanceLifecycle:
+    return ModelGovernanceLifecycle(get_repository())
+
+
+@lru_cache(maxsize=1)
+def get_governance_explainability_service() -> GovernanceExplainabilityService:
+    return GovernanceExplainabilityService()
 
 
 @lru_cache(maxsize=1)
@@ -142,12 +203,50 @@ def get_pipeline_service() -> PipelineService:
         inference_service=get_inference_service(),
         governance_service=get_governance_service(),
         model_monitoring_service=get_model_monitoring_service(),
+        streaming_orchestrator=get_streaming_orchestrator(),
     )
 
 
 @lru_cache(maxsize=1)
 def get_ops_service() -> OpsService:
     return OpsService()
+
+
+@lru_cache(maxsize=1)
+def get_workflow_engine() -> InvestigationWorkflowEngine:
+    return InvestigationWorkflowEngine(get_repository(), get_case_service())
+
+
+@lru_cache(maxsize=1)
+def get_ai_copilot_service() -> AICopilotService:
+    return AICopilotService(get_repository(), get_explain_service())
+
+
+@lru_cache(maxsize=1)
+def get_streaming_backbone() -> StreamingBackbone:
+    settings = get_settings()
+    return StreamingBackbone(
+        cache=get_cache(),
+        provider=settings.streaming_provider,
+        stream_prefix=settings.streaming_prefix,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_streaming_orchestrator() -> StreamingPipelineOrchestrator:
+    stream = get_streaming_backbone()
+    repository = get_repository()
+    feature_consumer = FeatureServiceConsumer(stream, repository, get_feature_service(), get_online_feature_store())
+    scoring_consumer = ModelScoringConsumer(stream, repository, get_inference_service())
+    governance_consumer = GovernanceConsumer(stream, repository, get_governance_service())
+    case_consumer = CaseCreationConsumer(stream, repository, get_workflow_engine())
+    return StreamingPipelineOrchestrator(
+        stream=stream,
+        feature_consumer=feature_consumer,
+        scoring_consumer=scoring_consumer,
+        governance_consumer=governance_consumer,
+        case_consumer=case_consumer,
+    )
 
 
 @lru_cache(maxsize=1)
@@ -168,18 +267,25 @@ def build_app_state() -> dict:
         "cache": cache,
         "object_storage": object_storage,
         "event_bus": get_event_bus(),
+        "streaming_backbone": get_streaming_backbone(),
+        "streaming_orchestrator": get_streaming_orchestrator(),
         "feature_service": get_feature_service(),
+        "feature_registry": get_feature_registry(),
+        "feature_materialization_service": get_feature_materialization_service(),
         "scoring_service": get_scoring_service(),
         "case_service": get_case_service(),
         "explain_service": get_explain_service(),
+        "governance_explainability_service": get_governance_explainability_service(),
+        "model_governance_lifecycle": get_model_governance_lifecycle(),
         "ingestion_service": get_ingestion_service(),
         "pipeline_service": get_pipeline_service(),
         "job_queue_service": get_job_queue_service(),
         "governance_service": get_governance_service(),
+        "workflow_engine": get_workflow_engine(),
+        "ai_copilot_service": get_ai_copilot_service(),
         "inference_service": get_inference_service(),
         "ml_service": get_ml_service(),
         "model_monitoring_service": get_model_monitoring_service(),
         "ops_service": get_ops_service(),
         "metrics": get_metrics_registry(),
     }
-

@@ -17,7 +17,14 @@ def run_pipeline_job(job_id: str, tenant_id: str, user_scope: str) -> dict:
     service._repository.set_tenant_context(tenant_id)
     job = service._repository.get_pipeline_job(tenant_id=tenant_id, job_id=job_id)
     if not job:
-        raise ValueError(f"Pipeline job {job_id} is missing or does not belong to tenant {tenant_id}")
+        # Stale Redis queue entries can outlive DB records during local restarts.
+        payload = {
+            "job_id": job_id,
+            "status": "discarded",
+            "detail": f"Pipeline job {job_id} is missing for tenant {tenant_id}; likely stale queue item.",
+        }
+        service._job_queue.set_status(job_id, payload)
+        return payload
     return service.execute_pipeline_job(job_id=job_id, tenant_id=tenant_id, user_scope=user_scope)
 
 
@@ -46,6 +53,7 @@ def execute_pipeline_job(service: Any, job_id: str, tenant_id: str, user_scope: 
     service._job_queue.set_status(job_id, {"job_id": job_id, "status": "running"})
     try:
         context = service.get_runtime_context(tenant_id, user_scope)
+        run_source = str(context.get("run_source") or "")
         runtime_stream = service._ingestion_service.stream_runtime_dataset(
             context=context,
             batch_size=service._settings.pipeline_batch_size,
@@ -64,6 +72,7 @@ def execute_pipeline_job(service: Any, job_id: str, tenant_id: str, user_scope: 
                 chunk,
                 tenant_id=tenant_id,
                 run_id=run_id,
+                run_source=run_source,
             )
             run_id = chunk_run_id
             persisted_count += int(chunk_persisted)
@@ -165,6 +174,7 @@ def run_rq_worker() -> None:
 
     redis_url = os.getenv("ALTHEA_REDIS_URL", "redis://localhost:6379/0")
     queue_name = os.getenv("ALTHEA_RQ_QUEUE", "althea-pipeline")
+    print(f"[pipeline_worker] starting queue={queue_name} redis={redis_url}", flush=True)
     connection = redis.Redis.from_url(redis_url)
     worker_cls = SimpleWorker if os.name == "nt" else Worker
     worker = worker_cls([queue_name], connection=connection)

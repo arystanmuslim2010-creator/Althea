@@ -26,6 +26,7 @@ class ModelMonitoringService:
 
     def record_run_monitoring(self, tenant_id: str, run_id: str, model_version: str, scores: list[float]) -> dict[str, Any]:
         current = np.asarray(scores, dtype=float)
+        current = current[np.isfinite(current)]
         previous = np.asarray([], dtype=float)
 
         for run in self._repository.list_pipeline_runs(tenant_id, limit=25):
@@ -34,6 +35,7 @@ class ModelMonitoringService:
                 prev_scores = [float(p.get("risk_score", 0.0) or 0.0) for p in payloads]
                 if prev_scores:
                     previous = np.asarray(prev_scores, dtype=float)
+                    previous = previous[np.isfinite(previous)]
                     break
 
         psi_score = self._psi(previous, current) if previous.size else 0.0

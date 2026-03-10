@@ -42,6 +42,10 @@ class Settings:
     database_url: str = os.getenv("ALTHEA_DATABASE_URL", "")
     redis_url: str = os.getenv("ALTHEA_REDIS_URL", "redis://localhost:6379/0")
     queue_mode: str = os.getenv("ALTHEA_QUEUE_MODE", "rq")
+    streaming_provider: str = os.getenv("ALTHEA_STREAMING_PROVIDER", "redis")
+    streaming_prefix: str = os.getenv("ALTHEA_STREAMING_PREFIX", "althea.streaming")
+    streaming_inline_processing: bool = os.getenv("ALTHEA_STREAMING_INLINE_PROCESSING", "false").lower() in {"1", "true", "yes"}
+    feature_online_ttl_seconds: int = int(os.getenv("ALTHEA_FEATURE_ONLINE_TTL_SECONDS", str(60 * 60 * 24)))
     jwt_secret: str = os.getenv("ALTHEA_JWT_SECRET", "change-me-in-production")
     jwt_algorithm: str = os.getenv("ALTHEA_JWT_ALGORITHM", "HS256")
     access_token_minutes: int = int(os.getenv("ALTHEA_ACCESS_TOKEN_MINUTES", "60"))

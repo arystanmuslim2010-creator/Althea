@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from typing import Any
 
@@ -17,6 +18,14 @@ SUBSCRIBED_EVENTS = {
     "case_created",
     "case_closed",
 }
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        parsed = float(value)
+    except Exception:
+        return float(default)
+    return parsed if math.isfinite(parsed) else float(default)
 
 
 def _handle_event(envelope: dict[str, Any]) -> None:
@@ -44,8 +53,8 @@ def _handle_event(envelope: dict[str, Any]) -> None:
                     "tenant_id": tenant_id,
                     "run_id": run_id,
                     "model_version": str(payload.get("model_version") or "unknown"),
-                    "psi_score": float(payload.get("psi_score") or 0.0),
-                    "drift_score": float(payload.get("drift_score") or 0.0),
+                    "psi_score": _safe_float(payload.get("psi_score"), 0.0),
+                    "drift_score": _safe_float(payload.get("drift_score"), 0.0),
                     "degradation_flag": str(health.get("status", "")).lower() in {"warning", "critical", "degraded"},
                     "metrics_json": {"health": health, "event": payload},
                 }

@@ -34,6 +34,7 @@ class PipelineService:
         inference_service: InferenceService,
         governance_service: GovernanceService,
         model_monitoring_service: ModelMonitoringService,
+        streaming_orchestrator=None,
     ) -> None:
         self._settings = settings
         self._repository = repository
@@ -44,6 +45,7 @@ class PipelineService:
         self._inference_service = inference_service
         self._governance_service = governance_service
         self._model_monitoring_service = model_monitoring_service
+        self._streaming_orchestrator = streaming_orchestrator
 
     def get_runtime_context(self, tenant_id: str, user_scope: str) -> dict[str, Any]:
         return self._repository.get_runtime_context(tenant_id, user_scope)
@@ -158,7 +160,18 @@ class PipelineService:
             raise ValueError("Pipeline produced no alerts from streamed dataset.")
         return run_id, total_persisted, model_version, score_sample
 
-    def _run_pipeline(self, source_df: pd.DataFrame, tenant_id: str, run_id: str | None = None) -> tuple[str, int, str, list[float]]:
+    @staticmethod
+    def _is_demo_source(source: str | None) -> bool:
+        normalized = str(source or "").strip().lower()
+        return normalized in {"synthetic", "bankcsv", "demo", "generated_demo"}
+
+    def _run_pipeline(
+        self,
+        source_df: pd.DataFrame,
+        tenant_id: str,
+        run_id: str | None = None,
+        run_source: str | None = None,
+    ) -> tuple[str, int, str, list[float]]:
         feature_bundle = self._feature_service.generate_features_batch(source_df)
         alerts_df = feature_bundle.get("alerts_df", pd.DataFrame()).copy()
         feature_matrix = feature_bundle.get("feature_matrix", pd.DataFrame()).copy()
@@ -184,6 +197,7 @@ class PipelineService:
         top_features_json: list[str] = []
         top_contrib_json: list[str] = []
         explain_json: list[str] = []
+        ml_signals_json: list[str] = []
         for idx in range(len(alerts_df)):
             row_explain = explanations[idx] if idx < len(explanations) else {}
             top = row_explain.get("top_features", []) if isinstance(row_explain, dict) else []
@@ -201,14 +215,27 @@ class PipelineService:
                     ensure_ascii=True,
                 )
             )
+            ml_signals_json.append(
+                json.dumps(
+                    {
+                        "model_version": model_version,
+                        "top_feature_contributions": top,
+                    },
+                    ensure_ascii=True,
+                )
+            )
 
         alerts_df["top_feature_contributions_json"] = top_contrib_json
         alerts_df["top_features_json"] = top_features_json
         alerts_df["risk_explain_json"] = explain_json
+        alerts_df["ml_signals_json"] = ml_signals_json
         alerts_df["rules_json"] = alerts_df.get("rules_json", "[]")
         alerts_df["rule_evidence_json"] = alerts_df.get("rule_evidence_json", "{}")
 
-        governed = self._governance_service.apply_governance(alerts_df)
+        governed = self._governance_service.apply_governance(
+            alerts_df,
+            stabilize_for_demo=self._is_demo_source(run_source),
+        )
         resolved_run_id = run_id or f"run_{uuid.uuid4().hex[:16]}"
         persisted = self._persist_outputs(
             tenant_id=tenant_id,
@@ -277,6 +304,7 @@ class PipelineService:
                     key: self._sanitize_value(value)
                     for key, value in feature_chunk.iloc[idx].to_dict().items()
                 }
+                row["features_json"] = dict(feature_payload)
                 records.append(row)
                 feature_rows.append({"alert_id": alert_id, **feature_payload})
 
@@ -312,6 +340,21 @@ class PipelineService:
         self._event_bus.publish("features_generated", tenant_id, base, correlation_id=job_id, version="2.0")
         self._event_bus.publish("alert_scored", tenant_id, base, correlation_id=job_id, version="2.0")
         self._event_bus.publish("alert_governed", tenant_id, base, correlation_id=job_id, version="2.0")
+        if self._streaming_orchestrator is not None:
+            payloads = self._repository.list_alert_payloads_by_run(tenant_id=tenant_id, run_id=run_id, limit=500000)
+            alert_ids = [str(row.get("alert_id")) for row in payloads if str(row.get("alert_id") or "").strip()]
+            if alert_ids:
+                self._streaming_orchestrator.trigger_ingestion(
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    alert_ids=alert_ids,
+                    feature_version="v1",
+                    correlation_id=job_id,
+                )
+                # Dedicated streaming worker is the primary executor for stream chain processing.
+                # Inline processing is optional and disabled by default to avoid double-processing.
+                if self._settings.streaming_inline_processing:
+                    self._streaming_orchestrator.process_once(batch_size=1000)
 
     def compute_health(self, run_id: str, tenant_id: str) -> dict[str, Any]:
         if not run_id:

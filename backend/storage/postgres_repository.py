@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -365,6 +366,7 @@ class EnterpriseRepository:
         self._ensure_user_email_uniqueness()
         self._ensure_rbac_seed()
         self._ensure_role_permissions_seed()
+        self._ensure_tier1_enterprise_tables()
 
     @property
     def _is_postgres(self) -> bool:
@@ -518,6 +520,115 @@ class EnterpriseRepository:
                         )
                     )
             session.flush()
+
+    def _ensure_tier1_enterprise_tables(self) -> None:
+        statements = [
+            """
+            CREATE TABLE IF NOT EXISTS features (
+                id VARCHAR(128) PRIMARY KEY,
+                tenant_id VARCHAR(128) NOT NULL,
+                feature_name VARCHAR(128) NOT NULL,
+                feature_type VARCHAR(64) NOT NULL,
+                description TEXT NULL,
+                owner VARCHAR(128) NULL,
+                source_system VARCHAR(128) NULL,
+                tags_json JSON NOT NULL,
+                created_at TIMESTAMP NULL
+            )
+            """,
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_features_tenant_name ON features (tenant_id, feature_name)",
+            """
+            CREATE TABLE IF NOT EXISTS feature_versions (
+                id VARCHAR(128) PRIMARY KEY,
+                tenant_id VARCHAR(128) NOT NULL,
+                feature_name VARCHAR(128) NOT NULL,
+                version VARCHAR(64) NOT NULL,
+                transformation_sql TEXT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                metadata_json JSON NOT NULL,
+                created_at TIMESTAMP NULL
+            )
+            """,
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_feature_versions_tenant_name_version ON feature_versions (tenant_id, feature_name, version)",
+            """
+            CREATE TABLE IF NOT EXISTS feature_dependencies (
+                id VARCHAR(128) PRIMARY KEY,
+                tenant_id VARCHAR(128) NOT NULL,
+                feature_name VARCHAR(128) NOT NULL,
+                depends_on VARCHAR(128) NOT NULL,
+                created_at TIMESTAMP NULL
+            )
+            """,
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_feature_dependencies_tenant_feature_dep ON feature_dependencies (tenant_id, feature_name, depends_on)",
+            """
+            CREATE TABLE IF NOT EXISTS offline_feature_store (
+                id VARCHAR(256) PRIMARY KEY,
+                tenant_id VARCHAR(128) NOT NULL,
+                run_id VARCHAR(128) NOT NULL,
+                alert_id VARCHAR(128) NOT NULL,
+                feature_version VARCHAR(64) NOT NULL,
+                features_json JSON NOT NULL,
+                parquet_uri VARCHAR(1024) NULL,
+                created_at TIMESTAMP NULL
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS ix_offline_feature_store_tenant_run ON offline_feature_store (tenant_id, run_id)",
+            """
+            CREATE TABLE IF NOT EXISTS model_governance_lifecycle (
+                id VARCHAR(128) PRIMARY KEY,
+                tenant_id VARCHAR(128) NOT NULL,
+                model_version VARCHAR(128) NOT NULL,
+                lifecycle_state VARCHAR(32) NOT NULL,
+                actor_role VARCHAR(64) NULL,
+                actor_id VARCHAR(128) NULL,
+                notes TEXT NULL,
+                created_at TIMESTAMP NULL
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS ix_model_governance_lifecycle_tenant_model ON model_governance_lifecycle (tenant_id, model_version)",
+            """
+            CREATE TABLE IF NOT EXISTS model_governance_approvals (
+                id VARCHAR(128) PRIMARY KEY,
+                tenant_id VARCHAR(128) NOT NULL,
+                model_version VARCHAR(128) NOT NULL,
+                stage VARCHAR(64) NOT NULL,
+                actor_id VARCHAR(128) NOT NULL,
+                decision VARCHAR(32) NOT NULL,
+                notes TEXT NULL,
+                created_at TIMESTAMP NULL
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS ix_model_governance_approvals_tenant_model ON model_governance_approvals (tenant_id, model_version)",
+            """
+            CREATE TABLE IF NOT EXISTS model_governance_monitoring (
+                id VARCHAR(128) PRIMARY KEY,
+                tenant_id VARCHAR(128) NOT NULL,
+                model_version VARCHAR(128) NOT NULL,
+                drift_metric FLOAT NOT NULL DEFAULT 0,
+                score_shift_metric FLOAT NOT NULL DEFAULT 0,
+                feedback_outcome_rate FLOAT NOT NULL DEFAULT 0,
+                metadata_json JSON NOT NULL,
+                created_at TIMESTAMP NULL
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS ix_model_governance_monitoring_tenant_model ON model_governance_monitoring (tenant_id, model_version)",
+            """
+            CREATE TABLE IF NOT EXISTS workflow_state_transitions (
+                id VARCHAR(128) PRIMARY KEY,
+                tenant_id VARCHAR(128) NOT NULL,
+                case_id VARCHAR(128) NOT NULL,
+                from_state VARCHAR(32) NOT NULL,
+                to_state VARCHAR(32) NOT NULL,
+                actor_id VARCHAR(128) NULL,
+                reason TEXT NULL,
+                created_at TIMESTAMP NULL
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS ix_workflow_state_transitions_tenant_case ON workflow_state_transitions (tenant_id, case_id)",
+        ]
+        with self.session() as session:
+            for statement in statements:
+                session.execute(text(statement))
 
     def set_tenant_context(self, tenant_id: str) -> None:
         tenant_id = self._require_tenant(tenant_id)
@@ -1307,8 +1418,16 @@ class EnterpriseRepository:
 
     def save_model_monitoring(self, payload: dict[str, Any]) -> dict[str, Any]:
         tenant_id = self._require_tenant(payload.get("tenant_id", ""))
+        safe_payload = dict(payload)
+        safe_payload["psi_score"] = self._json_safe(safe_payload.get("psi_score"))
+        safe_payload["drift_score"] = self._json_safe(safe_payload.get("drift_score"))
+        safe_payload["metrics_json"] = self._json_safe(dict(safe_payload.get("metrics_json") or {}))
+        if safe_payload.get("psi_score") is None:
+            safe_payload["psi_score"] = 0.0
+        if safe_payload.get("drift_score") is None:
+            safe_payload["drift_score"] = 0.0
         with self.session(tenant_id=tenant_id) as session:
-            row = ModelMonitoringRecord(**payload)
+            row = ModelMonitoringRecord(**safe_payload)
             session.add(row)
             session.flush()
             return self._to_dict(row)
@@ -1669,6 +1788,18 @@ class EnterpriseRepository:
             except Exception:
                 return {}
         return {}
+
+    @staticmethod
+    def _json_safe(value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, float):
+            return value if math.isfinite(value) else None
+        if isinstance(value, dict):
+            return {str(key): EnterpriseRepository._json_safe(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [EnterpriseRepository._json_safe(item) for item in value]
+        return value
 
     def _get_latest_runtime_context_record(self, session: Session, tenant_id: str, user_scope: str) -> RuntimeContext | None:
         records = list(

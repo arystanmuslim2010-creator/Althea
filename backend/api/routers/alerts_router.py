@@ -258,12 +258,35 @@ def get_ops_metrics(request: Request, analyst_capacity: int = 50, tenant_id: str
 
 @router.post("/internal/ml/predict")
 def internal_ml_predict(payload: dict, request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
+    alert_ids = [str(item) for item in (payload.get("alert_ids") or []) if str(item)]
     frame = pd.DataFrame(payload.get("rows", []))
-    feature_bundle = request.app.state.feature_service.generate_inference_features(frame)
-    result = request.app.state.inference_service.predict(tenant_id=tenant_id, feature_frame=feature_bundle["feature_matrix"])
+    if not frame.empty:
+        feature_bundle = request.app.state.feature_service.generate_inference_features(frame)
+        feature_frame = feature_bundle["feature_matrix"]
+    else:
+        feature_frame = pd.DataFrame()
+    result = request.app.state.inference_service.predict(
+        tenant_id=tenant_id,
+        feature_frame=feature_frame,
+        alert_ids=alert_ids,
+        feature_version=payload.get("feature_version"),
+    )
     return {
         "model_version": result["model_version"],
         "scores": result["scores"],
         "explanations": result["explanations"],
         "schema_validation": result["schema_validation"],
     }
+
+
+@router.get("/alerts/{alert_id}/copilot_summary")
+def get_alert_copilot_summary(alert_id: str, request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
+    run_id = _active_run_id(request, tenant_id)
+    try:
+        return request.app.state.ai_copilot_service.generate_copilot_summary(
+            tenant_id=tenant_id,
+            alert_id=alert_id,
+            run_id=run_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))

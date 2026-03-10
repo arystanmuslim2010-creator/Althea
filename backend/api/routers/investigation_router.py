@@ -408,6 +408,17 @@ def create_case(request: Request, payload: CreateCaseRequest, tenant_id: str = D
         run_id=run_info["run_id"],
         actor=payload.actor,
     )
+    try:
+        request.app.state.workflow_engine.transition_case(
+            tenant_id=tenant_id,
+            case_id=case["case_id"],
+            to_state="assigned",
+            actor=payload.actor,
+            reason="manual_case_creation",
+        )
+    except Exception:
+        # Keep existing API behavior unchanged if workflow transition cannot be persisted.
+        pass
     request.app.state.event_bus.publish(
         event_name="case_created",
         tenant_id=tenant_id,
@@ -445,6 +456,17 @@ def update_case(case_id: str, request: Request, payload: UpdateCaseRequest, tena
     )
     if not ok or not case:
         raise HTTPException(status_code=404 if "not found" in message.lower() else 400, detail=message)
+    if payload.status:
+        try:
+            request.app.state.workflow_engine.transition_case(
+                tenant_id=tenant_id,
+                case_id=case_id,
+                to_state=str(payload.status).lower(),
+                actor=actor,
+                reason="case_update_api",
+            )
+        except Exception:
+            pass
     return {"case_id": case_id, "status": case["status"], "assigned_to": case.get("assigned_to")}
 
 
@@ -467,3 +489,22 @@ def delete_case(case_id: str, request: Request, user: dict = Depends(get_current
 @router.get("/cases/{case_id}/audit")
 def get_case_audit(case_id: str, request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
     return {"events": request.app.state.case_service.get_case_audit(case_id, tenant_id)}
+
+
+@router.get("/workflows/sla-breaches")
+def get_sla_breaches(request: Request, user: dict = Depends(require_any_permission("view_team_queue", "view_all_alerts"))):
+    breaches = request.app.state.workflow_engine.monitor_sla(tenant_id=user["tenant_id"])
+    return {"breaches": breaches, "count": len(breaches), "sla_window_hours": 48}
+
+
+@router.post("/workflows/cases/{case_id}/escalate")
+def escalate_workflow_case(case_id: str, request: Request, user: dict = Depends(require_permissions("approve_escalations"))):
+    try:
+        result = request.app.state.workflow_engine.escalate_case(
+            tenant_id=user["tenant_id"],
+            case_id=case_id,
+            actor=user["user_id"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return result
