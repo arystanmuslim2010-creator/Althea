@@ -26,12 +26,17 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 class RegisterRequest(BaseModel):
     email: str
     password: str = Field(min_length=8)
-    role: str = "analyst"
+    role: str | None = None
     team: str = Field(min_length=1)
-    provision_mode: str = "ADMIN_INVITE"
+    provision_mode: str = "admin_invite_user"
 
 
-ALLOWED_PROVISION_MODES = {"ADMIN_INVITE", "TENANT_BOOTSTRAP", "SSO_PROVISIONING"}
+ALLOWED_PROVISION_MODES = {"ADMIN_INVITE_USER", "TENANT_BOOTSTRAP_USER", "SSO_PROVISION_USER"}
+PROVISION_MODE_ALIASES = {
+    "ADMIN_INVITE": "ADMIN_INVITE_USER",
+    "TENANT_BOOTSTRAP": "TENANT_BOOTSTRAP_USER",
+    "SSO_PROVISIONING": "SSO_PROVISION_USER",
+}
 
 
 class LoginRequest(BaseModel):
@@ -44,8 +49,9 @@ class RefreshRequest(BaseModel):
 
 
 @router.get("/providers")
-def list_identity_providers(request: Request):
+def list_identity_providers(request: Request, tenant_id: str = Depends(get_tenant_id)):
     settings = request.app.state.settings
+    configured = request.app.state.repository.list_identity_providers(tenant_id=tenant_id)
     return {
         "oidc": {
             "enabled": bool(settings.oidc_issuer_url),
@@ -63,6 +69,7 @@ def list_identity_providers(request: Request):
             "domain": settings.okta_domain,
             "client_id": settings.okta_client_id,
         },
+        "configured": configured,
     }
 
 
@@ -76,31 +83,34 @@ def register_user(
     repository = request.app.state.repository
     settings = request.app.state.settings
     provision_mode = str(payload.provision_mode or "").upper().strip()
+    provision_mode = PROVISION_MODE_ALIASES.get(provision_mode, provision_mode)
     if provision_mode not in ALLOWED_PROVISION_MODES:
         raise HTTPException(status_code=400, detail="Unsupported provisioning mode")
 
-    role = normalize_role(payload.role)
-    if role not in VALID_ROLES:
-        raise HTTPException(status_code=400, detail="Invalid role")
+    requested_role = normalize_role(payload.role)
+    role = "analyst"
 
-    if provision_mode == "TENANT_BOOTSTRAP":
+    if provision_mode == "TENANT_BOOTSTRAP_USER":
         if repository.count_users(tenant_id) > 0:
             raise HTTPException(status_code=403, detail="Tenant bootstrap is only allowed for empty tenants")
-        if role != "admin":
-            raise HTTPException(status_code=400, detail="Tenant bootstrap must create an admin account")
-    elif provision_mode == "ADMIN_INVITE":
+        # Bootstrap role is fixed and not user-selected.
+        role = "admin"
+    elif provision_mode == "ADMIN_INVITE_USER":
         if not current_user or normalize_role(current_user.get("role")) != "admin":
             raise HTTPException(status_code=403, detail="Admin invite registration requires admin authorization")
-    elif provision_mode == "SSO_PROVISIONING":
+        role = requested_role or "analyst"
+    elif provision_mode == "SSO_PROVISION_USER":
         provisioning_secret = (getattr(settings, "sso_provisioning_secret", None) or "").strip()
         provided_secret = (request.headers.get("X-SSO-Provisioning-Token") or "").strip()
         if not provisioning_secret or provided_secret != provisioning_secret:
             raise HTTPException(status_code=403, detail="Invalid SSO provisioning token")
+        # SSO provisioning defaults to least-privilege role unless changed later by admins.
+        role = "analyst"
 
-    # Prevent privilege escalation: role assignment is admin-controlled except tenant bootstrap.
-    if provision_mode != "TENANT_BOOTSTRAP" and (not current_user or normalize_role(current_user.get("role")) != "admin"):
-        if role != "analyst":
-            raise HTTPException(status_code=403, detail="Only admins can assign elevated roles")
+    if role not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail="Invalid role")
+    if provision_mode != "ADMIN_INVITE_USER" and role != "analyst" and provision_mode != "TENANT_BOOTSTRAP_USER":
+        raise HTTPException(status_code=403, detail="Only admins can assign elevated roles")
 
     existing = repository.get_user_by_email(tenant_id, payload.email.lower())
     if existing:
@@ -114,6 +124,8 @@ def register_user(
             "role": role,
             "team": payload.team,
             "created_at": datetime.now(timezone.utc),
+            "created_by_actor_id": (current_user or {}).get("user_id"),
+            "provision_mode": provision_mode,
         }
     )
     repository.assign_user_roles(

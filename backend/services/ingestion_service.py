@@ -7,6 +7,8 @@ from typing import Any, Iterator
 import numpy as np
 import pandas as pd
 
+from core.config import get_settings
+from services.dataset_streamer import stream_csv_dataset
 from storage.object_storage import ObjectStorage
 from storage.postgres_repository import EnterpriseRepository
 
@@ -165,7 +167,7 @@ class EnterpriseIngestionService:
         if not artifact_uri:
             raise ValueError("No dataset is staged for the current tenant/session.")
         path = self._object_storage.resolve_path(str(artifact_uri))
-        if not path.exists():
-            raise ValueError(f"Dataset artifact is missing: {artifact_uri}")
-        for chunk in pd.read_csv(path, chunksize=max(1000, int(batch_size))):
-            yield chunk
+        # Batch size is centrally controlled by ALTHEA_PIPELINE_BATCH_SIZE and can be overridden per call.
+        settings_batch_size = int(get_settings().pipeline_batch_size)
+        resolved_batch_size = int(batch_size or settings_batch_size or 20000)
+        yield from stream_csv_dataset(path=path, batch_size=resolved_batch_size)

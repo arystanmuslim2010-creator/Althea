@@ -13,6 +13,8 @@ from core.dependencies import get_pipeline_service
 
 def run_pipeline_job(job_id: str, tenant_id: str, user_scope: str) -> dict:
     service = get_pipeline_service()
+    # Worker jobs carry tenant_id in payload; set DB context before any query for RLS-safe execution.
+    service._repository.set_tenant_context(tenant_id)
     job = service._repository.get_pipeline_job(tenant_id=tenant_id, job_id=job_id)
     if not job:
         raise ValueError(f"Pipeline job {job_id} is missing or does not belong to tenant {tenant_id}")
@@ -32,6 +34,7 @@ def execute_pipeline_job(service: Any, job_id: str, tenant_id: str, user_scope: 
             "run_id": existing.get("run_id"),
             "alerts": int(existing.get("row_count") or 0),
         }
+    service._repository.set_tenant_context(tenant_id)
 
     started = time.perf_counter()
     service._repository.update_pipeline_job(
@@ -47,10 +50,40 @@ def execute_pipeline_job(service: Any, job_id: str, tenant_id: str, user_scope: 
             context=context,
             batch_size=service._settings.pipeline_batch_size,
         )
-        run_id, persisted_count, model_version, score_values = service.run_pipeline_stream(
-            tenant_id=tenant_id,
-            source_chunks=runtime_stream,
-        )
+        completed_chunks = service._repository.get_completed_pipeline_chunk_indexes(tenant_id=tenant_id, job_id=job_id)
+        run_id = str(existing.get("run_id") or f"run_{job_id.replace('job_', '')}")
+        persisted_count = 0
+        model_version = "unknown"
+        score_values: list[float] = []
+        max_monitoring_scores = 50000
+
+        for chunk_index, chunk in enumerate(runtime_stream):
+            if chunk_index in completed_chunks:
+                continue
+            chunk_run_id, chunk_persisted, chunk_model_version, chunk_scores = service._run_pipeline(
+                chunk,
+                tenant_id=tenant_id,
+                run_id=run_id,
+            )
+            run_id = chunk_run_id
+            persisted_count += int(chunk_persisted)
+            model_version = chunk_model_version or model_version
+            if len(score_values) < max_monitoring_scores:
+                remaining = max_monitoring_scores - len(score_values)
+                score_values.extend(list(chunk_scores or [])[:remaining])
+            service._repository.upsert_pipeline_checkpoint(
+                tenant_id=tenant_id,
+                job_id=job_id,
+                chunk_index=chunk_index,
+                processed_rows=int(len(chunk)),
+                run_id=run_id,
+                status="completed",
+            )
+
+        if persisted_count <= 0 and not completed_chunks:
+            raise ValueError("Pipeline produced no alerts from streamed dataset.")
+        if persisted_count <= 0 and completed_chunks:
+            persisted_count = int(existing.get("row_count") or 0)
 
         monitoring = service._model_monitoring_service.record_run_monitoring(
             tenant_id=tenant_id,
@@ -89,6 +122,14 @@ def execute_pipeline_job(service: Any, job_id: str, tenant_id: str, user_scope: 
         service._job_queue.set_status(job_id, payload)
         return payload
     except Exception as exc:
+        service._repository.upsert_pipeline_checkpoint(
+            tenant_id=tenant_id,
+            job_id=job_id,
+            chunk_index=-1,
+            processed_rows=0,
+            run_id=existing.get("run_id") if existing else None,
+            status="failed",
+        )
         record_pipeline_run(status="failed", duration_seconds=time.perf_counter() - started, alerts_processed=0)
         dead_letter_path = service._settings.dead_letter_dir / f"{job_id}_dead_letter.json"
         dead_letter_path.parent.mkdir(parents=True, exist_ok=True)

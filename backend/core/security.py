@@ -142,7 +142,7 @@ def require_permissions(*permissions: str):
         role = normalize_role(user["role"])
         if role == "admin":
             return user
-        granted = set(user.get("permissions") or ROLE_PERMISSIONS.get(role, set()))
+        granted = set(user.get("permissions") or [])
         if not set(permissions).issubset(granted):
             raise HTTPException(status_code=403, detail="Forbidden")
         return user
@@ -155,7 +155,7 @@ def require_any_permission(*permissions: str):
         role = normalize_role(user["role"])
         if role == "admin":
             return user
-        granted = set(user.get("permissions") or ROLE_PERMISSIONS.get(role, set()))
+        granted = set(user.get("permissions") or [])
         if not any(permission in granted for permission in permissions):
             raise HTTPException(status_code=403, detail="Forbidden")
         return user
@@ -169,7 +169,8 @@ def get_tenant_id(
 ) -> str:
     state = request.app.state
     settings: Settings = state.settings
-    return x_tenant_id or settings.default_tenant_id
+    request_scoped = getattr(request.state, "tenant_id", None)
+    return request_scoped or x_tenant_id or settings.default_tenant_id
 
 
 def get_current_user(
@@ -194,6 +195,8 @@ def get_current_user(
     user = repository.get_user_by_id(tenant_id, payload.get("sub", ""))
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    if not bool(user.get("is_active", True)):
+        raise HTTPException(status_code=403, detail="User disabled")
     role = normalize_role(user["role"])
     roles = repository.list_user_roles(tenant_id=tenant_id, user_id=user["id"]) or [role]
     permissions = repository.get_user_permissions(tenant_id=tenant_id, user_id=user["id"], fallback_role=role)

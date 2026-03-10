@@ -139,6 +139,10 @@ class EnterpriseFeatureService:
         # Training and inference intentionally share one builder.
         return self.generate_training_features(df)
 
+    def generate_features_batch(self, chunk: pd.DataFrame) -> dict[str, Any]:
+        # Explicit batch API for chunked pipeline execution.
+        return self.generate_inference_features(chunk)
+
     # Backward-compatible aliases for existing callers.
     def build_training_features(self, df: pd.DataFrame) -> dict[str, Any]:
         return self.generate_training_features(df)

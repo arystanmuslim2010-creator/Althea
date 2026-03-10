@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text, UniqueConstraint, create_engine, desc, func, select, text
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text, UniqueConstraint, create_engine, desc, event, func, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 
@@ -176,6 +176,17 @@ class UserRoleRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class RolePermissionRecord(Base):
+    __tablename__ = "role_permissions"
+    __table_args__ = (UniqueConstraint("tenant_id", "role_name", "permission_name", name="uq_role_permissions_tenant_role_perm"),)
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True, default=lambda: uuid.uuid4().hex)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    role_name: Mapped[str] = mapped_column(String(64), index=True)
+    permission_name: Mapped[str] = mapped_column(String(128), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class InvestigationLogRecord(Base):
     __tablename__ = "investigation_logs"
 
@@ -187,6 +198,61 @@ class InvestigationLogRecord(Base):
     performed_by: Mapped[str] = mapped_column(String(128))
     details_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class AuthAuditLogRecord(Base):
+    __tablename__ = "auth_audit_logs"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True, default=lambda: uuid.uuid4().hex)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    user_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    actor_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    action: Mapped[str] = mapped_column(String(128))
+    old_role: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    new_role: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    details_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+
+
+class IdentityProviderRecord(Base):
+    __tablename__ = "identity_provider"
+    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_identity_provider_tenant_name"),)
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True, default=lambda: uuid.uuid4().hex)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    provider_type: Mapped[str] = mapped_column(String(32))
+    name: Mapped[str] = mapped_column(String(128))
+    config_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
+class ExternalIdentityRecord(Base):
+    __tablename__ = "external_identity"
+    __table_args__ = (UniqueConstraint("tenant_id", "provider_id", "external_subject", name="uq_external_identity_subject"),)
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True, default=lambda: uuid.uuid4().hex)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    user_id: Mapped[str] = mapped_column(String(128), index=True)
+    provider_id: Mapped[str] = mapped_column(String(128), index=True)
+    external_subject: Mapped[str] = mapped_column(String(512))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class PipelineJobCheckpointRecord(Base):
+    __tablename__ = "pipeline_job_checkpoints"
+    __table_args__ = (UniqueConstraint("tenant_id", "job_id", "chunk_index", name="uq_pipeline_checkpoint_chunk"),)
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True, default=lambda: uuid.uuid4().hex)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    job_id: Mapped[str] = mapped_column(String(128), index=True)
+    run_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    chunk_index: Mapped[int] = mapped_column(Integer, index=True)
+    processed_rows: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(32), default="completed")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
 
 class AlertAssignmentRecord(Base):
@@ -273,17 +339,32 @@ class AISummaryRecord(Base):
 class EnterpriseRepository:
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
-        connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
+        connect_args = {}
+        if database_url.startswith("sqlite"):
+            # SQLite allows one writer at a time; timeout + WAL reduce transient "database is locked" errors in local dev.
+            connect_args = {"check_same_thread": False, "timeout": 30}
         self.engine = create_engine(database_url, future=True, connect_args=connect_args)
+        if database_url.startswith("sqlite"):
+            self._configure_sqlite_for_concurrency()
         self._session_factory = sessionmaker(bind=self.engine, autoflush=False, expire_on_commit=False, future=True)
         Base.metadata.create_all(self.engine)
         self._ensure_schema_compatibility()
+
+    def _configure_sqlite_for_concurrency(self) -> None:
+        @event.listens_for(self.engine, "connect")
+        def _set_sqlite_pragmas(dbapi_connection, connection_record) -> None:  # type: ignore[no-redef]
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA busy_timeout=30000")
+            cursor.close()
 
     def _ensure_schema_compatibility(self) -> None:
         self._ensure_model_versions_columns()
         self._ensure_alerts_columns()
         self._ensure_user_email_uniqueness()
         self._ensure_rbac_seed()
+        self._ensure_role_permissions_seed()
 
     @property
     def _is_postgres(self) -> bool:
@@ -414,6 +495,39 @@ class EnterpriseRepository:
                 )
             session.flush()
 
+    def _ensure_role_permissions_seed(self) -> None:
+        # Keep canonical role->permission mappings in relational form for DB-backed permission checks.
+        with self.session() as session:
+            for role_name, permissions in DEFAULT_RBAC_PERMISSIONS.items():
+                for permission_name in permissions:
+                    existing = session.execute(
+                        select(RolePermissionRecord).where(
+                            RolePermissionRecord.tenant_id == "_system",
+                            RolePermissionRecord.role_name == role_name,
+                            RolePermissionRecord.permission_name == permission_name,
+                        )
+                    ).scalar_one_or_none()
+                    if existing:
+                        continue
+                    session.add(
+                        RolePermissionRecord(
+                            tenant_id="_system",
+                            role_name=role_name,
+                            permission_name=permission_name,
+                            created_at=_utcnow(),
+                        )
+                    )
+            session.flush()
+
+    def set_tenant_context(self, tenant_id: str) -> None:
+        tenant_id = self._require_tenant(tenant_id)
+        if not self._is_postgres:
+            # SQLite and other local dev engines do not support PostgreSQL session settings.
+            return
+        with self.session(tenant_id=tenant_id) as session:
+            # Read back setting to force application on the active connection and fail fast if misconfigured.
+            session.execute(text("SELECT current_setting('app.tenant_id', true)"))
+
     @contextmanager
     def session(self, tenant_id: str | None = None) -> Iterator[Session]:
         session = self._session_factory()
@@ -519,6 +633,56 @@ class EnterpriseRepository:
                 .limit(limit)
             ).scalars()
             return [self._to_dict(row) for row in rows]
+
+    def get_completed_pipeline_chunk_indexes(self, tenant_id: str, job_id: str) -> set[int]:
+        tenant_id = self._require_tenant(tenant_id)
+        with self.session(tenant_id=tenant_id) as session:
+            rows = session.execute(
+                select(PipelineJobCheckpointRecord.chunk_index).where(
+                    PipelineJobCheckpointRecord.tenant_id == tenant_id,
+                    PipelineJobCheckpointRecord.job_id == job_id,
+                    PipelineJobCheckpointRecord.status == "completed",
+                )
+            ).all()
+            return {int(row[0]) for row in rows if row and row[0] is not None}
+
+    def upsert_pipeline_checkpoint(
+        self,
+        tenant_id: str,
+        job_id: str,
+        chunk_index: int,
+        processed_rows: int,
+        run_id: str | None,
+        status: str = "completed",
+    ) -> dict[str, Any]:
+        tenant_id = self._require_tenant(tenant_id)
+        with self.session(tenant_id=tenant_id) as session:
+            record = session.execute(
+                select(PipelineJobCheckpointRecord).where(
+                    PipelineJobCheckpointRecord.tenant_id == tenant_id,
+                    PipelineJobCheckpointRecord.job_id == job_id,
+                    PipelineJobCheckpointRecord.chunk_index == int(chunk_index),
+                )
+            ).scalar_one_or_none()
+            if record is None:
+                record = PipelineJobCheckpointRecord(
+                    tenant_id=tenant_id,
+                    job_id=job_id,
+                    chunk_index=int(chunk_index),
+                    processed_rows=int(processed_rows),
+                    run_id=run_id,
+                    status=status,
+                    created_at=_utcnow(),
+                    updated_at=_utcnow(),
+                )
+                session.add(record)
+            else:
+                record.processed_rows = int(processed_rows)
+                record.run_id = run_id
+                record.status = str(status or "completed")
+                record.updated_at = _utcnow()
+            session.flush()
+            return self._to_dict(record)
 
     def save_alert_payloads(self, tenant_id: str, run_id: str, records: list[dict[str, Any]]) -> int:
         tenant_id = self._require_tenant(tenant_id)
@@ -631,6 +795,8 @@ class EnterpriseRepository:
     def create_user(self, payload: dict[str, Any]) -> dict[str, Any]:
         payload["tenant_id"] = self._require_tenant(payload.get("tenant_id", ""))
         role_name = str(payload.get("role") or "analyst").lower().strip()
+        actor_id = str(payload.pop("created_by_actor_id", "") or payload.get("id") or "").strip() or None
+        provision_mode = str(payload.pop("provision_mode", "") or "ADMIN_INVITE").upper().strip()
         with self.session(tenant_id=payload["tenant_id"]) as session:
             record = UserRecord(**payload)
             session.add(record)
@@ -641,8 +807,20 @@ class EnterpriseRepository:
                 tenant_id=payload["tenant_id"],
                 user_id=record.id,
                 roles=[role_name],
-                created_by=payload.get("id"),
+                created_by=actor_id or payload.get("id"),
                 replace=True,
+            )
+            session.add(
+                AuthAuditLogRecord(
+                    tenant_id=payload["tenant_id"],
+                    user_id=record.id,
+                    actor_id=actor_id,
+                    action="user_created",
+                    old_role=None,
+                    new_role=role_name,
+                    details_json={"email": str(record.email or ""), "provision_mode": provision_mode},
+                    timestamp=_utcnow(),
+                )
             )
             return self._to_dict(record)
 
@@ -682,7 +860,7 @@ class EnterpriseRepository:
                     user["role"] = roles[0]
             return users
 
-    def update_user_role(self, tenant_id: str, user_id: str, role: str) -> dict[str, Any] | None:
+    def update_user_role(self, tenant_id: str, user_id: str, role: str, actor_id: str | None = None) -> dict[str, Any] | None:
         tenant_id = self._require_tenant(tenant_id)
         role = str(role or "").lower().strip()
         with self.session(tenant_id=tenant_id) as session:
@@ -691,6 +869,7 @@ class EnterpriseRepository:
             ).scalar_one_or_none()
             if row is None:
                 return None
+            old_role = str(row.role or "").lower().strip() or None
             row.role = role
             self._ensure_tenant_roles_seed(session, tenant_id)
             self._upsert_user_role_records(
@@ -698,8 +877,45 @@ class EnterpriseRepository:
                 tenant_id=tenant_id,
                 user_id=user_id,
                 roles=[role],
-                created_by=user_id,
+                created_by=actor_id or user_id,
                 replace=True,
+            )
+            session.add(
+                AuthAuditLogRecord(
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    actor_id=actor_id,
+                    action="role_changed",
+                    old_role=old_role,
+                    new_role=role,
+                    details_json={},
+                    timestamp=_utcnow(),
+                )
+            )
+            session.flush()
+            return self._to_dict(row)
+
+    def set_user_active(self, tenant_id: str, user_id: str, is_active: bool, actor_id: str | None = None) -> dict[str, Any] | None:
+        tenant_id = self._require_tenant(tenant_id)
+        with self.session(tenant_id=tenant_id) as session:
+            row = session.execute(
+                select(UserRecord).where(UserRecord.tenant_id == tenant_id, UserRecord.id == user_id)
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            row.is_active = bool(is_active)
+            action = "user_enabled" if bool(is_active) else "user_disabled"
+            session.add(
+                AuthAuditLogRecord(
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    actor_id=actor_id,
+                    action=action,
+                    old_role=str(row.role or "").lower().strip() or None,
+                    new_role=str(row.role or "").lower().strip() or None,
+                    details_json={"is_active": bool(is_active)},
+                    timestamp=_utcnow(),
+                )
             )
             session.flush()
             return self._to_dict(row)
@@ -891,6 +1107,92 @@ class EnterpriseRepository:
             session.flush()
             return self._to_dict(row)
 
+    def append_auth_audit_log(self, payload: dict[str, Any]) -> dict[str, Any]:
+        tenant_id = self._require_tenant(payload.get("tenant_id", ""))
+        with self.session(tenant_id=tenant_id) as session:
+            row = AuthAuditLogRecord(**payload)
+            session.add(row)
+            session.flush()
+            return self._to_dict(row)
+
+    def list_auth_audit_logs(self, tenant_id: str, limit: int = 300) -> list[dict[str, Any]]:
+        tenant_id = self._require_tenant(tenant_id)
+        with self.session(tenant_id=tenant_id) as session:
+            rows = session.execute(
+                select(AuthAuditLogRecord)
+                .where(AuthAuditLogRecord.tenant_id == tenant_id)
+                .order_by(AuthAuditLogRecord.timestamp.desc())
+                .limit(limit)
+            ).scalars()
+            return [self._to_dict(row) for row in rows]
+
+    def upsert_identity_provider(
+        self,
+        tenant_id: str,
+        provider_type: str,
+        name: str,
+        config_json: dict[str, Any] | None = None,
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        tenant_id = self._require_tenant(tenant_id)
+        with self.session(tenant_id=tenant_id) as session:
+            row = session.execute(
+                select(IdentityProviderRecord).where(
+                    IdentityProviderRecord.tenant_id == tenant_id,
+                    IdentityProviderRecord.name == name,
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                row = IdentityProviderRecord(
+                    tenant_id=tenant_id,
+                    provider_type=provider_type.lower().strip(),
+                    name=name,
+                    config_json=config_json or {},
+                    enabled=bool(enabled),
+                    created_at=_utcnow(),
+                    updated_at=_utcnow(),
+                )
+                session.add(row)
+            else:
+                row.provider_type = provider_type.lower().strip()
+                row.config_json = config_json or {}
+                row.enabled = bool(enabled)
+                row.updated_at = _utcnow()
+            session.flush()
+            return self._to_dict(row)
+
+    def list_identity_providers(self, tenant_id: str) -> list[dict[str, Any]]:
+        tenant_id = self._require_tenant(tenant_id)
+        with self.session(tenant_id=tenant_id) as session:
+            rows = session.execute(
+                select(IdentityProviderRecord).where(IdentityProviderRecord.tenant_id == tenant_id)
+            ).scalars().all()
+            return [self._to_dict(row) for row in rows]
+
+    def link_external_identity(self, tenant_id: str, user_id: str, provider_id: str, external_subject: str) -> dict[str, Any]:
+        tenant_id = self._require_tenant(tenant_id)
+        with self.session(tenant_id=tenant_id) as session:
+            row = session.execute(
+                select(ExternalIdentityRecord).where(
+                    ExternalIdentityRecord.tenant_id == tenant_id,
+                    ExternalIdentityRecord.provider_id == provider_id,
+                    ExternalIdentityRecord.external_subject == external_subject,
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                row = ExternalIdentityRecord(
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    provider_id=provider_id,
+                    external_subject=external_subject,
+                    created_at=_utcnow(),
+                )
+                session.add(row)
+            else:
+                row.user_id = user_id
+            session.flush()
+            return self._to_dict(row)
+
     def list_investigation_logs(
         self,
         tenant_id: str,
@@ -962,6 +1264,22 @@ class EnterpriseRepository:
     ) -> int:
         tenant_id = self._require_tenant(tenant_id)
         with self.session(tenant_id=tenant_id) as session:
+            alert_ids = [
+                str(row.get("alert_id") or row.get("id") or "").strip()
+                for row in feature_rows
+                if str(row.get("alert_id") or row.get("id") or "").strip()
+            ]
+            if alert_ids:
+                existing_rows = session.execute(
+                    select(FeatureStoreRecord).where(
+                        FeatureStoreRecord.tenant_id == tenant_id,
+                        FeatureStoreRecord.run_id == run_id,
+                        FeatureStoreRecord.alert_id.in_(alert_ids),
+                    )
+                ).scalars().all()
+                for existing in existing_rows:
+                    # Idempotent resume: replace previously persisted rows for the same run + alert id.
+                    session.delete(existing)
             for row in feature_rows:
                 alert_id = str(row.get("alert_id") or row.get("id") or uuid.uuid4().hex)
                 session.add(
@@ -1127,13 +1445,23 @@ class EnterpriseRepository:
             if not role_names:
                 return []
             permissions: set[str] = set()
-            role_rows = session.execute(
+            # Primary source of truth: relational role_permissions table.
+            permission_rows = session.execute(
+                select(RolePermissionRecord.permission_name).where(
+                    RolePermissionRecord.tenant_id.in_([tenant_id, "_system"]),
+                    RolePermissionRecord.role_name.in_(role_names),
+                )
+            ).all()
+            permissions.update(str(row[0]) for row in permission_rows if row and row[0])
+
+            # Compatibility fallback for legacy deployments that still use permissions_json in rbac_roles.
+            legacy_role_rows = session.execute(
                 select(RBACRoleRecord).where(
                     RBACRoleRecord.tenant_id.in_([tenant_id, "_system"]),
                     RBACRoleRecord.role_name.in_(role_names),
                 )
             ).scalars().all()
-            for row in role_rows:
+            for row in legacy_role_rows:
                 permissions.update(str(item) for item in (row.permissions_json or []) if item)
             return sorted(permissions)
 
@@ -1149,6 +1477,13 @@ class EnterpriseRepository:
         normalized = sorted({str(role).lower().strip() for role in roles if str(role).strip()})
         with self.session(tenant_id=tenant_id) as session:
             self._ensure_tenant_roles_seed(session, tenant_id)
+            before_rows = session.execute(
+                select(UserRoleRecord.role_name).where(
+                    UserRoleRecord.tenant_id == tenant_id,
+                    UserRoleRecord.user_id == user_id,
+                )
+            ).all()
+            before_roles = sorted({str(row[0]).lower() for row in before_rows if row and row[0]})
             self._upsert_user_role_records(
                 session=session,
                 tenant_id=tenant_id,
@@ -1163,7 +1498,65 @@ class EnterpriseRepository:
                     UserRoleRecord.user_id == user_id,
                 )
             ).all()
-            return sorted({str(row[0]).lower() for row in rows if row and row[0]})
+            final_roles = sorted({str(row[0]).lower() for row in rows if row and row[0]})
+            if before_roles != final_roles:
+                session.add(
+                    AuthAuditLogRecord(
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        actor_id=created_by,
+                        action="role_membership_changed",
+                        old_role=",".join(before_roles) if before_roles else None,
+                        new_role=",".join(final_roles) if final_roles else None,
+                        details_json={"replace": bool(replace)},
+                        timestamp=_utcnow(),
+                    )
+                )
+            return final_roles
+
+    def set_role_permissions(
+        self,
+        tenant_id: str,
+        role_name: str,
+        permissions: list[str],
+        actor_id: str | None = None,
+    ) -> list[str]:
+        tenant_id = self._require_tenant(tenant_id)
+        clean_role = str(role_name or "").lower().strip()
+        clean_permissions = sorted({str(item).strip() for item in permissions if str(item).strip()})
+        with self.session(tenant_id=tenant_id) as session:
+            existing_rows = session.execute(
+                select(RolePermissionRecord).where(
+                    RolePermissionRecord.tenant_id == tenant_id,
+                    RolePermissionRecord.role_name == clean_role,
+                )
+            ).scalars().all()
+            old_permissions = sorted({str(row.permission_name) for row in existing_rows})
+            for row in existing_rows:
+                session.delete(row)
+            for permission_name in clean_permissions:
+                session.add(
+                    RolePermissionRecord(
+                        tenant_id=tenant_id,
+                        role_name=clean_role,
+                        permission_name=permission_name,
+                        created_at=_utcnow(),
+                    )
+                )
+            session.add(
+                AuthAuditLogRecord(
+                    tenant_id=tenant_id,
+                    user_id=None,
+                    actor_id=actor_id,
+                    action="permissions_changed",
+                    old_role=clean_role,
+                    new_role=clean_role,
+                    details_json={"old_permissions": old_permissions, "new_permissions": clean_permissions},
+                    timestamp=_utcnow(),
+                )
+            )
+            session.flush()
+            return clean_permissions
 
     def _ensure_tenant_roles_seed(self, session: Session, tenant_id: str) -> None:
         existing = session.execute(select(RBACRoleRecord).where(RBACRoleRecord.tenant_id == tenant_id)).scalars().all()
@@ -1180,6 +1573,23 @@ class EnterpriseRepository:
                     created_at=_utcnow(),
                 )
             )
+            for permission_name in permissions:
+                role_permission = session.execute(
+                    select(RolePermissionRecord).where(
+                        RolePermissionRecord.tenant_id == tenant_id,
+                        RolePermissionRecord.role_name == role_name,
+                        RolePermissionRecord.permission_name == permission_name,
+                    )
+                ).scalar_one_or_none()
+                if role_permission is None:
+                    session.add(
+                        RolePermissionRecord(
+                            tenant_id=tenant_id,
+                            role_name=role_name,
+                            permission_name=permission_name,
+                            created_at=_utcnow(),
+                        )
+                    )
         session.flush()
 
     def _upsert_user_role_records(

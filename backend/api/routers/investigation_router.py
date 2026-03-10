@@ -85,6 +85,10 @@ class UpdateUserRoleRequest(BaseModel):
     role: str
 
 
+class UpdateUserStatusRequest(BaseModel):
+    is_active: bool
+
+
 class CreateCaseRequest(BaseModel):
     alert_ids: list[str]
     actor: str = "Analyst_1"
@@ -349,16 +353,42 @@ def admin_update_role(
     role = normalize_role(payload.role)
     if role not in VALID_ROLES:
         raise HTTPException(status_code=400, detail="Invalid role")
-    updated = request.app.state.repository.update_user_role(user["tenant_id"], user_id, role)
+    updated = request.app.state.repository.update_user_role(
+        user["tenant_id"],
+        user_id,
+        role,
+        actor_id=user["user_id"],
+    )
     if not updated:
         raise HTTPException(status_code=404, detail="User not found")
     _log_event(request, user["tenant_id"], "status_changed", user["user_id"], details={"target_user_id": user_id, "new_role": role})
     return {"user_id": user_id, "role": role}
 
 
+@router.post("/admin/users/{user_id}/status")
+def admin_update_user_status(
+    user_id: str,
+    payload: UpdateUserStatusRequest,
+    request: Request,
+    user: dict = Depends(require_permissions("manage_users")),
+):
+    updated = request.app.state.repository.set_user_active(
+        tenant_id=user["tenant_id"],
+        user_id=user_id,
+        is_active=payload.is_active,
+        actor_id=user["user_id"],
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"user_id": user_id, "is_active": bool(updated.get("is_active"))}
+
+
 @router.get("/admin/logs")
 def admin_logs(request: Request, user: dict = Depends(require_permissions("view_system_logs"))):
-    return {"logs": request.app.state.repository.list_investigation_logs(user["tenant_id"], limit=300)}
+    return {
+        "logs": request.app.state.repository.list_investigation_logs(user["tenant_id"], limit=300),
+        "auth_audit_logs": request.app.state.repository.list_auth_audit_logs(user["tenant_id"], limit=300),
+    }
 
 
 @router.get("/cases")

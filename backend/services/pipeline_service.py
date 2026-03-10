@@ -102,13 +102,28 @@ class PipelineService:
 
         payload = {"job_id": job_id, "status": "queued", "run_id": None, "alerts": 0}
         self._job_queue.set_status(job_id, payload)
-        self._job_queue.enqueue(
-            import_path="workers.pipeline_worker.run_pipeline_job",
-            kwargs={"job_id": job_id, "tenant_id": tenant_id, "user_scope": user_scope},
-            queue_mode=self._settings.queue_mode,
-            redis_url=self._settings.redis_url,
-            queue_name=self._settings.rq_queue_name,
-        )
+        try:
+            self._job_queue.enqueue(
+                import_path="workers.pipeline_worker.run_pipeline_job",
+                kwargs={"job_id": job_id, "tenant_id": tenant_id, "user_scope": user_scope},
+                queue_mode=self._settings.queue_mode,
+                redis_url=self._settings.redis_url,
+                queue_name=self._settings.rq_queue_name,
+            )
+        except Exception as exc:
+            # Provide a deterministic, user-actionable error instead of generic 500 when queue infra is unavailable.
+            self._repository.update_pipeline_job(
+                job_id,
+                tenant_id=tenant_id,
+                status="failed",
+                error_message=str(exc),
+                completed_at=pd.Timestamp.utcnow().to_pydatetime(),
+            )
+            self._repository.upsert_runtime_context(tenant_id, user_scope, active_job_id=None)
+            self._job_queue.set_status(job_id, {"job_id": job_id, "status": "failed", "detail": str(exc)})
+            raise ValueError(
+                "Pipeline queue is unavailable. Start Redis and pipeline worker, then retry."
+            ) from exc
         record_queue_depth(self._job_queue.queue_depth(self._settings.rq_queue_name))
         return payload
 
@@ -144,7 +159,7 @@ class PipelineService:
         return run_id, total_persisted, model_version, score_sample
 
     def _run_pipeline(self, source_df: pd.DataFrame, tenant_id: str, run_id: str | None = None) -> tuple[str, int, str, list[float]]:
-        feature_bundle = self._feature_service.generate_inference_features(source_df)
+        feature_bundle = self._feature_service.generate_features_batch(source_df)
         alerts_df = feature_bundle.get("alerts_df", pd.DataFrame()).copy()
         feature_matrix = feature_bundle.get("feature_matrix", pd.DataFrame()).copy()
         if alerts_df.empty or feature_matrix.empty:

@@ -35,10 +35,12 @@ def setup_telemetry(app: FastAPI, settings: Settings) -> None:
     )
     provider = TracerProvider(resource=resource)
 
-    otlp_endpoint = (
-        getattr(settings, "otel_exporter_otlp_endpoint", None)
-        or "http://localhost:4318/v1/traces"
-    )
+    configured_endpoint = getattr(settings, "otel_exporter_otlp_endpoint", None)
+    if not configured_endpoint and settings.app_env.lower() == "development":
+        logger.info("Skipping OTLP exporter in development: ALTHEA_OTEL_EXPORTER_OTLP_ENDPOINT is not set.")
+        return
+
+    otlp_endpoint = configured_endpoint or "http://localhost:4318/v1/traces"
     try:
         exporter = OTLPSpanExporter(endpoint=otlp_endpoint)
         provider.add_span_processor(BatchSpanProcessor(exporter))
@@ -49,4 +51,3 @@ def setup_telemetry(app: FastAPI, settings: Settings) -> None:
     trace.set_tracer_provider(provider)
     FastAPIInstrumentor.instrument_app(app, tracer_provider=provider)
     logger.info("OpenTelemetry initialized endpoint=%s env=%s", otlp_endpoint, settings.app_env)
-

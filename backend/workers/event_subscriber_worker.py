@@ -36,6 +36,7 @@ def _handle_event(envelope: dict[str, Any]) -> None:
     if event_name == "alert_scored":
         run_id = payload.get("run_id")
         if tenant_id and run_id:
+            get_repository().set_tenant_context(tenant_id)
             # Snapshot latest model health at scoring completion.
             health = get_pipeline_service().compute_health(run_id=run_id, tenant_id=tenant_id)
             get_repository().save_model_monitoring(
