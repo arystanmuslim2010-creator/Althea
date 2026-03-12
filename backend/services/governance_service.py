@@ -142,9 +142,27 @@ class GovernanceService:
         out["risk_score_model"] = out["risk_score"]
         if stabilize_for_demo:
             out["risk_score_model"] = self._stabilize_model_score_distribution(out["risk_score_model"])
-        out["risk_uplift"] = self._heuristic_uplift(out)
-        score_cap = 95.0 if stabilize_for_demo else 100.0
+
+        # Prevent score saturation in demo/bank modes by scaling heuristic uplift by remaining headroom.
+        # This preserves ordering while avoiding large score plateaus at the max cap.
+        out["risk_uplift_raw"] = self._heuristic_uplift(out)
+        headroom = np.clip((100.0 - out["risk_score_model"]) / 100.0, 0.15, 1.0)
+        base_multiplier = 0.55 if stabilize_for_demo else 0.75
+        uplift_cap = 22.0 if stabilize_for_demo else 35.0
+        out["risk_uplift"] = np.clip(out["risk_uplift_raw"] * headroom * base_multiplier, 0.0, uplift_cap)
+        score_cap = 98.0 if stabilize_for_demo else 100.0
         out["risk_score"] = np.clip(out["risk_score_model"] + out["risk_uplift"], 0.0, score_cap)
+
+        if stabilize_for_demo and len(out) > 1:
+            near_cap_mask = out["risk_score"] >= (score_cap - 0.25)
+            near_cap_ratio = float(near_cap_mask.mean())
+            if near_cap_ratio > 0.2:
+                cap_rows = out.loc[near_cap_mask, ["risk_score_model", "risk_uplift_raw"]].copy()
+                rank_pct = cap_rows["risk_score_model"].rank(method="first", pct=True).fillna(0.5)
+                uplift_rank = cap_rows["risk_uplift_raw"].rank(method="first", pct=True).fillna(0.5)
+                spread = (rank_pct * 0.7 + uplift_rank * 0.3).clip(0.0, 1.0)
+                out.loc[near_cap_mask, "risk_score"] = np.clip(score_cap - (1.0 - spread) * 3.0, 0.0, score_cap)
+
         out["risk_prob"] = np.clip(pd.to_numeric(out.get("risk_prob", out["risk_score"] / 100.0), errors="coerce").fillna(0.0), 0.0, 1.0)
         out["risk_prob"] = np.maximum(out["risk_prob"], out["risk_score"] / 100.0)
         out["risk_band"] = out["risk_score"].apply(self._risk_band)

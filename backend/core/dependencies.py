@@ -7,6 +7,13 @@ from core.config import Settings, get_settings
 from core.observability import MetricsRegistry
 from ai_copilot.copilot_service import AICopilotService
 from events.event_bus import EventBus
+from graph.relationship_graph_service import RelationshipGraphService
+from intelligence.global_pattern_service import GlobalPatternService
+from investigation.guidance_service import InvestigationGuidanceService
+from investigation.investigation_summary_service import InvestigationSummaryService
+from investigation.risk_explanation_service import RiskExplanationService
+from investigation.sar_generator import SARNarrativeGenerator
+from learning.feedback_collection_service import FeedbackCollectionService
 from events.streaming.broker import StreamingBackbone
 from events.streaming.consumers import (
     CaseCreationConsumer,
@@ -254,6 +261,44 @@ def get_metrics_registry() -> MetricsRegistry:
     return MetricsRegistry()
 
 
+# ── Investigation Intelligence Services ─────────────────────────────────────
+
+
+@lru_cache(maxsize=1)
+def get_investigation_summary_service() -> InvestigationSummaryService:
+    return InvestigationSummaryService(get_repository(), get_explain_service())
+
+
+@lru_cache(maxsize=1)
+def get_risk_explanation_service() -> RiskExplanationService:
+    return RiskExplanationService(get_repository(), get_explain_service())
+
+
+@lru_cache(maxsize=1)
+def get_guidance_service() -> InvestigationGuidanceService:
+    return InvestigationGuidanceService(get_repository())
+
+
+@lru_cache(maxsize=1)
+def get_sar_generator() -> SARNarrativeGenerator:
+    return SARNarrativeGenerator(get_repository(), get_explain_service())
+
+
+@lru_cache(maxsize=1)
+def get_relationship_graph_service() -> RelationshipGraphService:
+    return RelationshipGraphService(get_repository())
+
+
+@lru_cache(maxsize=1)
+def get_feedback_service() -> FeedbackCollectionService:
+    return FeedbackCollectionService(get_repository())
+
+
+@lru_cache(maxsize=1)
+def get_global_pattern_service() -> GlobalPatternService:
+    return GlobalPatternService(get_repository())
+
+
 def build_app_state() -> dict:
     settings = get_settings()
     repository = get_repository()
@@ -288,4 +333,12 @@ def build_app_state() -> dict:
         "model_monitoring_service": get_model_monitoring_service(),
         "ops_service": get_ops_service(),
         "metrics": get_metrics_registry(),
+        # Investigation Intelligence
+        "investigation_summary_service": get_investigation_summary_service(),
+        "risk_explanation_service": get_risk_explanation_service(),
+        "guidance_service": get_guidance_service(),
+        "sar_generator": get_sar_generator(),
+        "relationship_graph_service": get_relationship_graph_service(),
+        "feedback_service": get_feedback_service(),
+        "global_pattern_service": get_global_pattern_service(),
     }

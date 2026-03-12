@@ -1,0 +1,158 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║                    ALTHEA QUICK START REFERENCE                             ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+TERMINAL 1: BACKEND API
+───────────────────────
+cd "c:\Users\Users\OneDrive\Рабочий стол\Althea\backend"
+$env:ALTHEA_ENV="development"
+$env:ALTHEA_DEFAULT_TENANT_ID="default-bank"
+$env:ALTHEA_DATABASE_URL="sqlite:///data/althea.db"
+$env:ALTHEA_REDIS_URL="redis://localhost:6379"
+$env:ALTHEA_JWT_SECRET="your-32-character-secret-key-here-min32chars"
+$env:ALTHEA_OBJECT_STORAGE_DIR="./data/models"
+python -m uvicorn main:app --reload --port 8000
+
+WAIT FOR: "Uvicorn running on http://0.0.0.0:8000"
+
+
+TERMINAL 2: SETUP (One-time only)
+─────────────────────────────────
+cd "c:\Users\Users\OneDrive\Рабочий стол\Althea\backend"
+python create_users.py
+python cleanup_db.py
+
+
+TERMINAL 3: WORKER
+──────────────────
+cd "c:\Users\Users\OneDrive\Рабочий стол\Althea\backend"
+$env:ALTHEA_DATABASE_URL="sqlite:///data/althea.db"
+$env:ALTHEA_REDIS_URL="redis://localhost:6379"
+python -m workers.pipeline_worker
+
+WAIT FOR: "*** Listening on althea-pipeline..."
+
+
+TERMINAL 4: PIPELINE (One-time per run)
+───────────────────────────────────────
+cd "c:\Users\Users\OneDrive\Рабочий стол\Althea\backend"
+python simple_run.py
+
+WAIT FOR: "✅ Pipeline complete!"
+
+
+TERMINAL 5: FRONTEND
+────────────────────
+cd "c:\Users\Users\OneDrive\Рабочий стол\Althea\frontend"
+npm run dev
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                              LOGIN CREDENTIALS                              ║
+╠════════════════════════════════════════════════════════════════════════════╣
+║ Email:    analyst@bank.com                                                 ║
+║ Password: Password123!                                                     ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                                 URLS                                        ║
+╠════════════════════════════════════════════════════════════════════════════╣
+║ Frontend:     http://localhost:5173                                         ║
+║ API Docs:     http://localhost:8000/docs                                   ║
+║ Health Check: http://localhost:8000/health                                 ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                           KEY INVESTIGATION APIs                            ║
+╠════════════════════════════════════════════════════════════════════════════╣
+║                                                                             ║
+║ GET /api/alerts/{id}/investigation-summary                                ║
+║     → Structured alert summary with key observations                      ║
+║                                                                             ║
+║ GET /api/alerts/{id}/risk-explanation                                     ║
+║     → Human-readable risk drivers                                          ║
+║                                                                             ║
+║ GET /api/alerts/{id}/network-graph                                        ║
+║     → Entity relationship graph                                            ║
+║                                                                             ║
+║ GET /api/alerts/{id}/investigation-steps                                  ║
+║     → Recommended investigation steps                                      ║
+║                                                                             ║
+║ GET /api/alerts/{id}/sar-draft                                            ║
+║     → SAR narrative draft                                                  ║
+║                                                                             ║
+║ GET /api/alerts/{id}/investigation-context                                ║
+║     → ALL OF THE ABOVE IN ONE CALL (recommended)                          ║
+║                                                                             ║
+║ POST /api/alerts/{id}/outcome                                             ║
+║     → Record analyst decision (true_positive/false_positive/etc)          ║
+║                                                                             ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                              TYPICAL FLOW                                   ║
+╠════════════════════════════════════════════════════════════════════════════╣
+║                                                                             ║
+║ 1. Start Terminal 1 (Backend)       → Wait for "Uvicorn running"          ║
+║ 2. Terminal 2 (Setup once)          → Wait for "DATABASE CLEANED"         ║
+║ 3. Start Terminal 3 (Worker)        → Wait for "Listening on..."          ║
+║ 4. Terminal 4 (Pipeline run)        → Wait for "Pipeline complete"        ║
+║ 5. Start Terminal 5 (Frontend)      → Wait for "Local: localhost:5173"    ║
+║                                                                             ║
+║ 6. Open http://localhost:5173                                              ║
+║ 7. Login with analyst@bank.com / Password123!                              ║
+║ 8. View generated alerts in dashboard                                      ║
+║ 9. Click an alert to see investigation intelligence                        ║
+║                                                                             ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                            TROUBLESHOOTING                                  ║
+╠════════════════════════════════════════════════════════════════════════════╣
+║                                                                             ║
+║ Issue: "Connection refused" on port 8000                                  ║
+║ Fix:   Terminal 1 (Backend) not running or failed to start                ║
+║        Check output in Terminal 1                                          ║
+║                                                                             ║
+║ Issue: Worker says "Dataset artifact is missing"                          ║
+║ Fix:   Stop all terminals, re-run Terminal 2 (cleanup_db.py)             ║
+║        Restart Terminal 3 & 4                                              ║
+║                                                                             ║
+║ Issue: CSV upload fails                                                    ║
+║ Fix:   Ensure sample_data.csv exists in backend directory                ║
+║        Check Terminal 1 logs for error details                             ║
+║                                                                             ║
+║ Issue: "Missing bearer token" on API calls                                ║
+║ Fix:   simple_run.py automatically gets token and saves to TOKEN.txt     ║
+║        Use that token in Authorization: Bearer {token} header              ║
+║                                                                             ║
+║ Issue: No alerts appearing in dashboard                                    ║
+║ Fix:   Wait 10-30 seconds for pipeline to complete                        ║
+║        Check Terminal 4 output for "Generated X alerts"                    ║
+║        Refresh browser                                                      ║
+║                                                                             ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║                          SYSTEM FILES CREATED                               ║
+╠════════════════════════════════════════════════════════════════════════════╣
+║                                                                             ║
+║ ✓ backend/cleanup_db.py             Cleans database                       ║
+║ ✓ backend/create_users.py           Creates test users                    ║
+║ ✓ backend/simple_run.py             Runs complete pipeline                ║
+║ ✓ backend/sample_data.csv           Test data (10 alerts)                 ║
+║ ✓ PROPER_STARTUP.md                 Detailed documentation                ║
+║ ✓ QUICK_COMMANDS.txt                This file                             ║
+║                                                                             ║
+║ Generated after running:                                                    ║
+║ ✓ TOKEN.txt                         Your login token                      ║
+║ ✓ LOGIN_INFO.json                   Complete login info & metadata        ║
+║                                                                             ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+READY? Start with Terminal 1! 🚀

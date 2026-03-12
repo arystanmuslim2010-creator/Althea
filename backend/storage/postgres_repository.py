@@ -337,6 +337,35 @@ class AISummaryRecord(Base):
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
 
 
+class AlertOutcomeRecord(Base):
+    __tablename__ = "alert_outcomes"
+    __table_args__ = (UniqueConstraint("tenant_id", "alert_id", name="uq_alert_outcomes_tenant_alert"),)
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True, default=lambda: uuid.uuid4().hex)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    alert_id: Mapped[str] = mapped_column(String(128), index=True)
+    analyst_decision: Mapped[str] = mapped_column(String(64))
+    decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    analyst_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    model_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    risk_score_at_decision: Mapped[float | None] = mapped_column(Float, nullable=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+
+
+class GlobalPatternSignalRecord(Base):
+    __tablename__ = "global_pattern_signals"
+    __table_args__ = (UniqueConstraint("signal_type", "signal_hash", name="uq_global_pattern_signals_type_hash"),)
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True, default=lambda: uuid.uuid4().hex)
+    signal_type: Mapped[str] = mapped_column(String(64), index=True)
+    signal_hash: Mapped[str] = mapped_column(String(256), index=True)
+    tenant_count: Mapped[int] = mapped_column(Integer, default=1)
+    alert_count: Mapped[int] = mapped_column(Integer, default=1)
+    first_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
 class EnterpriseRepository:
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
@@ -367,6 +396,7 @@ class EnterpriseRepository:
         self._ensure_rbac_seed()
         self._ensure_role_permissions_seed()
         self._ensure_tier1_enterprise_tables()
+        self._ensure_investigation_intelligence_tables()
 
     @property
     def _is_postgres(self) -> bool:
@@ -625,6 +655,43 @@ class EnterpriseRepository:
             )
             """,
             "CREATE INDEX IF NOT EXISTS ix_workflow_state_transitions_tenant_case ON workflow_state_transitions (tenant_id, case_id)",
+        ]
+        with self.session() as session:
+            for statement in statements:
+                session.execute(text(statement))
+
+    def _ensure_investigation_intelligence_tables(self) -> None:
+        """Auto-provision investigation intelligence tables for SQLite dev and migration-less deploys."""
+        statements = [
+            """
+            CREATE TABLE IF NOT EXISTS alert_outcomes (
+                id VARCHAR(128) PRIMARY KEY,
+                tenant_id VARCHAR(128) NOT NULL,
+                alert_id VARCHAR(128) NOT NULL,
+                analyst_decision VARCHAR(64) NOT NULL,
+                decision_reason TEXT NULL,
+                analyst_id VARCHAR(128) NULL,
+                model_version VARCHAR(128) NULL,
+                risk_score_at_decision REAL NULL,
+                timestamp TIMESTAMP NULL
+            )
+            """,
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_alert_outcomes_tenant_alert ON alert_outcomes (tenant_id, alert_id)",
+            "CREATE INDEX IF NOT EXISTS ix_alert_outcomes_tenant_decision ON alert_outcomes (tenant_id, analyst_decision)",
+            """
+            CREATE TABLE IF NOT EXISTS global_pattern_signals (
+                id VARCHAR(128) PRIMARY KEY,
+                signal_type VARCHAR(64) NOT NULL,
+                signal_hash VARCHAR(256) NOT NULL,
+                tenant_count INTEGER NOT NULL DEFAULT 1,
+                alert_count INTEGER NOT NULL DEFAULT 1,
+                first_seen_at TIMESTAMP NULL,
+                last_seen_at TIMESTAMP NULL,
+                metadata_json JSON NOT NULL
+            )
+            """,
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_global_pattern_signals_type_hash ON global_pattern_signals (signal_type, signal_hash)",
+            "CREATE INDEX IF NOT EXISTS ix_global_pattern_signals_type ON global_pattern_signals (signal_type)",
         ]
         with self.session() as session:
             for statement in statements:
