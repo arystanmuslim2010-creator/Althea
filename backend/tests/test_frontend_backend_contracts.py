@@ -1,0 +1,472 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
+import pytest
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
+
+from api.routers.alerts_router import router as alerts_router
+from api.routers.intelligence_router import router as intelligence_router
+from api.routers.investigation_router import router as investigation_router
+from api.routers.pipeline_router import router as pipeline_router
+from core.config import Settings
+from core.security import (
+    build_access_token,
+    build_refresh_token,
+    decode_token,
+    get_authenticated_tenant_id,
+    get_current_user,
+    require_permissions,
+)
+
+
+class _FakeRepo:
+    def __init__(self) -> None:
+        self._assignment = {
+            "id": "as1",
+            "tenant_id": "tenant-a",
+            "alert_id": "A1",
+            "assigned_to": "u1",
+            "assigned_by": "u1",
+            "status": "open",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self._outcome = None
+
+    def list_alert_payloads_by_run(self, tenant_id: str, run_id: str, limit: int = 200000):
+        return [
+            {
+                "alert_id": "A1",
+                "risk_score": 91.3,
+                "risk_band": "critical",
+                "priority": "high",
+                "typology": "sanctions",
+                "segment": "retail",
+                "user_id": "U1",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "model_version": "model-v1",
+                "governance_status": "eligible",
+            }
+        ]
+
+    def list_cases(self, tenant_id: str):
+        return [{"case_id": "CASE_001", "alert_id": "A1", "status": "open", "assigned_to": "u1"}]
+
+    def get_latest_assignment(self, tenant_id: str, alert_id: str):
+        return dict(self._assignment) if alert_id == "A1" else None
+
+    def upsert_assignment(self, payload: dict):
+        self._assignment = dict(payload)
+        return dict(self._assignment)
+
+    def list_alert_notes(self, tenant_id: str, alert_id: str):
+        return []
+
+    def create_alert_note(self, payload: dict):
+        return payload
+
+    def append_investigation_log(self, payload: dict):
+        return payload
+
+    def list_investigation_logs(self, tenant_id: str, case_id: str | None = None, limit: int = 200):
+        return []
+
+    def get_case(self, tenant_id: str, case_id: str):
+        return {
+            "case_id": case_id,
+            "tenant_id": tenant_id,
+            "status": "open",
+            "alert_id": "A1",
+            "created_by": "u1",
+            "assigned_to": "u1",
+            "payload_json": {"status": "open"},
+            "immutable_timeline_json": [],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def save_case(self, payload: dict):
+        return payload
+
+    def get_model_version(self, tenant_id: str, model_version: str):
+        return {"model_version": model_version, "approval_status": "approved"}
+
+    def list_model_monitoring(self, tenant_id: str, limit: int = 200):
+        return [{"run_id": "run-1", "model_version": "model-v1", "created_at": datetime.now(timezone.utc).isoformat()}]
+
+    def save_ai_summary(self, payload: dict):
+        return {"summary": payload.get("summary"), "ts": datetime.now(timezone.utc).isoformat()}
+
+    def get_ai_summary(self, tenant_id: str, entity_type: str, entity_id: str):
+        return None
+
+    def delete_ai_summary(self, tenant_id: str, entity_type: str, entity_id: str):
+        return True
+
+    def ping(self):
+        return True
+
+    def set_tenant_context(self, tenant_id: str):
+        return None
+
+
+class _FakePipeline:
+    def get_run_info(self, tenant_id: str, user_scope: str):
+        return {"run_id": "run-1"}
+
+    def list_runs(self, tenant_id: str):
+        return [{"run_id": "run-1"}]
+
+
+class _FakeCaseService:
+    def list_cases(self, tenant_id: str):
+        return {"CASE_001": {"case_id": "CASE_001", "status": "OPEN", "alert_ids": ["A1"]}}
+
+    def get_actor(self, tenant_id: str, user_scope: str):
+        return "u1"
+
+    def create_case(self, tenant_id: str, user_scope: str, alert_ids: list[str], run_id: str, actor: str):
+        return {"case_id": "CASE_001", "status": "OPEN"}
+
+    def update_case(self, **kwargs):
+        return True, "ok", {"status": kwargs.get("status", "open"), "closed_at": None}
+
+    def delete_case(self, tenant_id: str, case_id: str):
+        return True
+
+    def get_case_audit(self, case_id: str, tenant_id: str):
+        return []
+
+
+class _FakeWorkflow:
+    def create_case_from_alert(self, tenant_id: str, alert_id: str, run_id: str, actor: str = "analyst"):
+        return "CASE_001"
+
+    def transition_case(self, tenant_id: str, case_id: str, to_state: str, actor: str, reason: str, escalation_level=None):
+        return {"case_id": case_id, "from_state": "assigned", "to_state": to_state, "reason": reason}
+
+    def escalate_case(self, tenant_id: str, case_id: str, actor: str):
+        return {"case_id": case_id, "from_state": "investigating", "to_state": "escalated", "reason": "manual"}
+
+    def monitor_sla(self, tenant_id: str):
+        return []
+
+
+class _FakeFeedback:
+    def __init__(self):
+        self._store = {}
+
+    def record_outcome(self, tenant_id: str, alert_id: str, **kwargs):
+        self._store[(tenant_id, alert_id)] = {"alert_id": alert_id, **kwargs}
+        return self._store[(tenant_id, alert_id)]
+
+    def get_outcome(self, tenant_id: str, alert_id: str):
+        return self._store.get((tenant_id, alert_id))
+
+    def list_outcomes(self, tenant_id: str, limit: int = 200):
+        return list(self._store.values())[:limit]
+
+    def get_outcome_statistics(self, tenant_id: str):
+        return {"total_outcomes": len(self._store)}
+
+
+class _FakeGraphService:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def build_graph(self, tenant_id: str, alert_id: str, run_id: str | None = None):
+        self.calls.append({"tenant_id": tenant_id, "alert_id": alert_id, "run_id": run_id})
+        if alert_id == "A1":
+            return {
+                "alert_id": alert_id,
+                "nodes": [
+                    {"id": "alert:A1", "label": "Alert A1", "type": "alert", "risk": "high", "meta": {}},
+                    {"id": "customer:U1", "label": "Customer U1", "type": "customer", "risk": "medium", "meta": {}},
+                ],
+                "edges": [
+                    {
+                        "source": "alert:A1",
+                        "target": "customer:U1",
+                        "type": "associated_with",
+                        "relation": "associated_with",
+                        "weight": 1,
+                        "meta": {},
+                    }
+                ],
+                "summary": {"node_count": 2, "edge_count": 1, "high_risk_nodes": 1},
+                "node_count": 2,
+                "edge_count": 1,
+                "risk_signals": ["customer"],
+            }
+        if alert_id == "A2":
+            return {
+                "alert_id": alert_id,
+                "nodes": [{"id": "alert:A2", "label": "Alert A2", "type": "alert", "risk": "low", "meta": {}}],
+                "edges": [],
+                "summary": {"node_count": 1, "edge_count": 0, "high_risk_nodes": 0},
+                "node_count": 1,
+                "edge_count": 0,
+                "risk_signals": [],
+            }
+        return {
+            "alert_id": alert_id,
+            "nodes": [],
+            "edges": [],
+            "summary": {"node_count": 0, "edge_count": 0, "high_risk_nodes": 0},
+            "node_count": 0,
+            "edge_count": 0,
+            "risk_signals": [],
+        }
+
+
+class _FakeNarrativeService:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def generate_draft(self, tenant_id: str, alert_id: str, run_id: str | None = None):
+        self.calls.append({"tenant_id": tenant_id, "alert_id": alert_id, "run_id": run_id})
+        if alert_id == "A1":
+            return {
+                "alert_id": alert_id,
+                "title": "Investigation Narrative Draft",
+                "narrative": "Between review periods, account activity indicated elevated movement to linked counterparties.",
+                "sections": {
+                    "activity_summary": "Customer U1 moved funds to a linked destination account.",
+                    "risk_indicators": ["Risk score above threshold", "High-risk typology signal"],
+                    "recommended_follow_up": ["Validate counterparties", "Review source of funds evidence"],
+                },
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "source_signals": {"risk_score": 91.3, "reason_codes": ["R1"], "countries": ["US"]},
+            }
+        if alert_id == "A2":
+            return {
+                "alert_id": alert_id,
+                "title": "Investigation Narrative Draft",
+                "narrative": "Limited source details available; analyst review is required.",
+                "sections": {
+                    "activity_summary": "Only partial activity context was available.",
+                    "risk_indicators": [],
+                    "recommended_follow_up": ["Review transaction history"],
+                },
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "source_signals": {"risk_score": 55.0, "reason_codes": [], "countries": []},
+            }
+        return {
+            "alert_id": alert_id,
+            "title": "Investigation Narrative Draft",
+            "narrative": "Draft unavailable due to limited source data; analyst validation is required.",
+            "sections": {
+                "activity_summary": "Insufficient transaction context available at draft time.",
+                "risk_indicators": [],
+                "recommended_follow_up": ["Review available alert and case history"],
+            },
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "source_signals": {"risk_score": None, "reason_codes": [], "countries": []},
+        }
+
+
+@pytest.fixture
+def client():
+    app = FastAPI()
+    app.include_router(pipeline_router)
+    app.include_router(alerts_router)
+    app.include_router(investigation_router)
+    app.include_router(intelligence_router)
+
+    app.state.settings = SimpleNamespace(default_tenant_id="tenant-a", rq_queue_name="althea-pipeline")
+    app.state.repository = _FakeRepo()
+    app.state.pipeline_service = _FakePipeline()
+    app.state.case_service = _FakeCaseService()
+    app.state.workflow_engine = _FakeWorkflow()
+    app.state.feedback_service = _FakeFeedback()
+    app.state.investigation_summary_service = SimpleNamespace(generate_summary=lambda **_: {"summary": "ok"})
+    app.state.risk_explanation_service = SimpleNamespace(generate_explanation=lambda **_: {"model_version": "model-v1"})
+    app.state.relationship_graph_service = _FakeGraphService()
+    app.state.guidance_service = SimpleNamespace(generate_steps=lambda **_: {"steps": [{"step": 1, "description": "Do X"}]})
+    app.state.sar_generator = SimpleNamespace(generate_sar_draft=lambda **_: {"narrative": "draft"})
+    app.state.narrative_service = _FakeNarrativeService()
+    app.state.global_pattern_service = SimpleNamespace(get_signals_for_alert=lambda **_: [{"signal_type": "cross_tenant"}])
+    app.state.event_bus = SimpleNamespace(publish=lambda **_: None)
+    app.state.metrics = SimpleNamespace(set_gauge=lambda *args, **kwargs: None)
+    app.state.ops_service = SimpleNamespace(compute_ops_metrics=lambda *_: {"precision_k": 0.0, "alerts_per_case": 0.0, "suppression_rate": 0.0})
+    app.state.explain_service = SimpleNamespace(explain_alert=lambda **_: {"model_version": "model-v1"})
+    app.state.ai_copilot_service = SimpleNamespace(generate_copilot_summary=lambda **_: {"summary": "copilot"})
+    app.state.cache = SimpleNamespace(
+        ping=lambda: True,
+        get_json=lambda key, default=None: {"ts": datetime.now(timezone.utc).isoformat()}
+        if key.startswith("heartbeat:worker")
+        else default,
+    )
+    app.state.job_queue_service = SimpleNamespace(queue_depth=lambda _: 0)
+    app.state.ml_service = SimpleNamespace(list_versions=lambda _: [{"model_version": "model-v1"}])
+    app.state.feature_registry = SimpleNamespace(list_features=lambda tenant_id: [{"name": "f1"}])
+
+    user = {
+        "user_id": "u1",
+        "id": "u1",
+        "role": "admin",
+        "permissions": [
+            "change_alert_status",
+            "reassign_alerts",
+            "view_all_alerts",
+            "view_team_queue",
+            "approve_escalations",
+        ],
+        "tenant_id": "tenant-a",
+    }
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_authenticated_tenant_id] = lambda: "tenant-a"
+
+    return TestClient(app)
+
+
+def test_health_endpoint_contract_shape(client: TestClient):
+    res = client.get("/health")
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["status"] in {"healthy", "degraded"}
+    assert "worker_heartbeat" in payload["checks"]
+    assert "feature_store" in payload["checks"]
+
+
+def test_work_queue_includes_sla_fields(client: TestClient):
+    res = client.get("/api/work/queue")
+    assert res.status_code == 200
+    item = res.json()["queue"][0]
+    assert "alert_age_hours" in item
+    assert "assignment_age_hours" in item
+    assert "overdue_review" in item
+
+
+def test_investigation_context_contract_for_ui(client: TestClient):
+    res = client.get("/api/alerts/A1/investigation-context")
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["alert_id"] == "A1"
+    assert "network_graph" in payload
+    assert "global_signals" in payload
+    assert "model_metadata" in payload
+
+
+def test_network_graph_endpoint_contract_for_normal_alert(client: TestClient):
+    res = client.get("/api/alerts/A1/network-graph")
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["alert_id"] == "A1"
+    assert payload["summary"]["node_count"] >= 1
+    assert isinstance(payload["nodes"], list)
+    assert isinstance(payload["edges"], list)
+
+
+def test_network_graph_endpoint_handles_partial_data(client: TestClient):
+    res = client.get("/api/alerts/A2/network-graph")
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["alert_id"] == "A2"
+    assert payload["summary"]["node_count"] == 1
+    assert payload["summary"]["edge_count"] == 0
+
+
+def test_network_graph_endpoint_returns_empty_graph_when_missing(client: TestClient):
+    res = client.get("/api/alerts/A404/network-graph")
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["alert_id"] == "A404"
+    assert payload["nodes"] == []
+    assert payload["edges"] == []
+    assert payload["summary"]["node_count"] == 0
+
+
+def test_narrative_draft_endpoint_contract_for_normal_alert(client: TestClient):
+    res = client.get("/api/alerts/A1/narrative-draft")
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["alert_id"] == "A1"
+    assert payload["title"] == "Investigation Narrative Draft"
+    assert "narrative" in payload
+    assert "sections" in payload
+    assert "source_signals" in payload
+
+
+def test_narrative_draft_endpoint_minimal_fallback(client: TestClient):
+    res = client.get("/api/alerts/A404/narrative-draft")
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["alert_id"] == "A404"
+    assert payload["title"] == "Investigation Narrative Draft"
+    assert "analyst" in payload["narrative"].lower()
+    assert isinstance(payload["sections"]["recommended_follow_up"], list)
+
+
+def test_graph_and_narrative_endpoints_respect_authenticated_tenant_context(client: TestClient):
+    graph_res = client.get("/api/alerts/A1/network-graph", headers={"X-Tenant-ID": "tenant-b"})
+    draft_res = client.get("/api/alerts/A1/narrative-draft", headers={"X-Tenant-ID": "tenant-b"})
+    assert graph_res.status_code == 200
+    assert draft_res.status_code == 200
+
+    graph_call = client.app.state.relationship_graph_service.calls[-1]
+    draft_call = client.app.state.narrative_service.calls[-1]
+    assert graph_call["tenant_id"] == "tenant-a"
+    assert draft_call["tenant_id"] == "tenant-a"
+
+
+def test_bulk_status_endpoint_round_trip(client: TestClient):
+    res = client.post("/api/alerts/bulk-status", json={"alert_ids": ["A1"], "status": "escalated"})
+    assert res.status_code == 200
+    assert res.json()["updated"] == 1
+    assert res.json()["new_state"] == "escalated"
+
+
+def test_alert_status_accepts_canonical_aliases_and_returns_unified_fields(client: TestClient):
+    res = client.post("/api/alerts/A1/status", json={"status": "under_review"})
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["status"] == "in_review"
+    assert payload["case_status"] == "under_review"
+    assert payload["workflow_state"] in {"investigating", "assigned", "escalated", "closed", "sar_candidate"}
+
+
+def test_workflow_assign_alias_keeps_unified_case_status_shape(client: TestClient):
+    res = client.post("/api/workflows/alerts/A1/assign", json={"assigned_to": "u1", "actor": "u1"})
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["status"] == "assigned"
+    assert payload["case_status"] == "open"
+    assert payload["workflow_state"] == "assigned"
+
+
+def test_outcome_feedback_round_trip(client: TestClient):
+    write = client.post("/api/alerts/A1/outcome", json={"analyst_decision": "true_positive"})
+    assert write.status_code == 200
+    read = client.get("/api/alerts/A1/outcome")
+    assert read.status_code == 200
+    assert read.json()["analyst_decision"] == "true_positive"
+
+
+def test_copilot_summary_endpoint_keeps_contract(client: TestClient):
+    res = client.get("/alerts/A1/copilot_summary")
+    assert res.status_code == 200
+    assert "summary" in res.json()
+
+
+def test_token_and_tenant_security_guards():
+    settings = Settings(jwt_secret="x" * 48, app_env="development")
+    user = {"id": "u1", "role": "analyst", "team": "t1"}
+    access = build_access_token(settings, "tenant-a", user, "session-1")
+    refresh = build_refresh_token(settings, "tenant-a", user, "session-1")
+
+    access_claims = decode_token(settings, access)
+    refresh_claims = decode_token(settings, refresh)
+    assert access_claims["tenant_id"] == "tenant-a"
+    assert refresh_claims["type"] == "refresh"
+
+    with pytest.raises(HTTPException):
+        get_authenticated_tenant_id(request=SimpleNamespace(headers={}), user={"tenant_id": "tenant-a"}, x_tenant_id="tenant-b")
+
+
+def test_rbac_permission_guard_enforced():
+    dependency = require_permissions("manage_users")
+    with pytest.raises(HTTPException):
+        dependency(user={"role": "analyst", "permissions": []})

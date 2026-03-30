@@ -6,6 +6,7 @@ New endpoints:
   GET  /api/alerts/{id}/network-graph
   GET  /api/alerts/{id}/investigation-steps
   GET  /api/alerts/{id}/sar-draft
+  GET  /api/alerts/{id}/narrative-draft
   POST /api/alerts/{id}/outcome
   GET  /api/alerts/{id}/global-signals
   POST /api/alerts/{id}/assign
@@ -24,7 +25,9 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from core.observability import record_narrative_generation, record_narrative_generation_failure
 from core.security import get_authenticated_tenant_id
+from workflows.alert_workflow_service import apply_alert_assignment_transition
 
 router = APIRouter(prefix="/api", tags=["intelligence"])
 logger = logging.getLogger("althea.api.intelligence")
@@ -209,6 +212,33 @@ def get_sar_draft(
     return result
 
 
+@router.get("/alerts/{alert_id}/narrative-draft")
+def get_narrative_draft(
+    alert_id: str,
+    request: Request,
+    run_id: Optional[str] = None,
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+) -> dict[str, Any]:
+    started = time.perf_counter()
+    rid = run_id or _active_run_id(request, tenant_id)
+    try:
+        payload = request.app.state.narrative_service.generate_draft(
+            tenant_id=tenant_id,
+            alert_id=alert_id,
+            run_id=rid,
+        )
+        record_narrative_generation(time.perf_counter() - started)
+        logger.info(
+            "Narrative draft served",
+            extra={"alert_id": alert_id, "latency_s": round(time.perf_counter() - started, 3)},
+        )
+        return payload
+    except Exception:
+        record_narrative_generation_failure()
+        logger.exception("Narrative draft generation failed", extra={"alert_id": alert_id})
+        raise HTTPException(status_code=500, detail="Failed to generate narrative draft")
+
+
 # ── Analyst Feedback / Outcome ────────────────────────────────────────────────
 
 
@@ -290,108 +320,106 @@ def get_global_signals(
 
 
 @router.post("/alerts/{alert_id}/assign")
+@router.post("/workflows/alerts/{alert_id}/assign")
 def assign_alert(
     alert_id: str,
     body: AssignRequest,
     request: Request,
     tenant_id: str = Depends(get_authenticated_tenant_id),
 ) -> dict[str, Any]:
-    """Assign an alert to an analyst. Creates a case if one does not exist."""
-    run_id = _active_run_id(request, tenant_id) or ""
-    actor = body.actor or body.assigned_to
-
-    # Ensure a case exists
-    case_id = request.app.state.workflow_engine.create_case_from_alert(
-        tenant_id=tenant_id,
-        alert_id=alert_id,
-        run_id=run_id,
-        actor=actor,
-    )
-    if not case_id:
-        raise HTTPException(status_code=500, detail="Failed to create or locate case for alert")
-
-    # Assign the case
+    actor = body.actor or body.assigned_to or "system"
     try:
-        request.app.state.case_service.assign_case(
+        result = apply_alert_assignment_transition(
+            request=request,
             tenant_id=tenant_id,
-            case_id=case_id,
-            user_scope=actor,
+            alert_id=alert_id,
+            actor=actor,
             assigned_to=body.assigned_to,
+            status="open",
+            reason="workflow_assign",
+            strict_workflow=True,
         )
-    except Exception as exc:
-        logger.warning("Case assign failed: %s", exc)
-
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not result.get("case_id"):
+        raise HTTPException(status_code=500, detail="Failed to create or locate case for alert")
     return {
         "alert_id": alert_id,
-        "case_id": case_id,
+        "case_id": result.get("case_id"),
         "assigned_to": body.assigned_to,
         "status": "assigned",
+        "workflow_state": result.get("workflow_state"),
+        "case_status": result.get("case_status"),
     }
 
 
 @router.post("/alerts/{alert_id}/escalate")
+@router.post("/workflows/alerts/{alert_id}/escalate")
 def escalate_alert(
     alert_id: str,
     body: EscalateRequest,
     request: Request,
     tenant_id: str = Depends(get_authenticated_tenant_id),
 ) -> dict[str, Any]:
-    """Escalate an alert's investigation case."""
-    run_id = _active_run_id(request, tenant_id) or ""
     actor = body.actor or "system"
-
-    case_id = request.app.state.workflow_engine.create_case_from_alert(
-        tenant_id=tenant_id,
-        alert_id=alert_id,
-        run_id=run_id,
-        actor=actor,
-    )
-    if not case_id:
-        raise HTTPException(status_code=500, detail="No case found for alert")
-
     try:
-        result = request.app.state.workflow_engine.escalate_case(
-            tenant_id=tenant_id, case_id=case_id, actor=actor
+        result = apply_alert_assignment_transition(
+            request=request,
+            tenant_id=tenant_id,
+            alert_id=alert_id,
+            actor=actor,
+            status="escalated",
+            reason=body.reason or "workflow_escalate",
+            strict_workflow=True,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-
-    return {"alert_id": alert_id, "case_id": case_id, **result}
+    if not result.get("case_id"):
+        raise HTTPException(status_code=500, detail="No case found for alert")
+    return {
+        "alert_id": alert_id,
+        "case_id": result.get("case_id"),
+        "from_state": result.get("workflow_from_state"),
+        "to_state": result.get("workflow_state"),
+        "reason": result.get("workflow_reason"),
+        "status": "escalated",
+        "case_status": result.get("case_status"),
+    }
 
 
 @router.post("/alerts/{alert_id}/close")
+@router.post("/workflows/alerts/{alert_id}/close")
 def close_alert(
     alert_id: str,
     body: CloseRequest,
     request: Request,
     tenant_id: str = Depends(get_authenticated_tenant_id),
 ) -> dict[str, Any]:
-    """Close an alert's investigation case."""
-    run_id = _active_run_id(request, tenant_id) or ""
     actor = body.actor or "system"
     reason = body.reason or "analyst_closed"
-
-    case_id = request.app.state.workflow_engine.create_case_from_alert(
-        tenant_id=tenant_id,
-        alert_id=alert_id,
-        run_id=run_id,
-        actor=actor,
-    )
-    if not case_id:
-        raise HTTPException(status_code=500, detail="No case found for alert")
-
     try:
-        result = request.app.state.workflow_engine.transition_case(
+        result = apply_alert_assignment_transition(
+            request=request,
             tenant_id=tenant_id,
-            case_id=case_id,
-            to_state="closed",
+            alert_id=alert_id,
             actor=actor,
+            status="closed",
             reason=reason,
+            strict_workflow=True,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-
-    return {"alert_id": alert_id, "case_id": case_id, **result}
+    if not result.get("case_id"):
+        raise HTTPException(status_code=500, detail="No case found for alert")
+    return {
+        "alert_id": alert_id,
+        "case_id": result.get("case_id"),
+        "from_state": result.get("workflow_from_state"),
+        "to_state": result.get("workflow_state"),
+        "reason": result.get("workflow_reason"),
+        "status": "closed",
+        "case_status": result.get("case_status"),
+    }
 
 
 # ── Unified Investigation Context ─────────────────────────────────────────────
@@ -436,6 +464,11 @@ def get_investigation_context(
             tenant_id=tenant_id, alert_id=alert_id, run_id=rid
         )
     )
+    narrative_draft = _safe_get(
+        lambda: request.app.state.narrative_service.generate_draft(
+            tenant_id=tenant_id, alert_id=alert_id, run_id=rid
+        )
+    )
     global_signals = _safe_get(
         lambda: request.app.state.global_pattern_service.get_signals_for_alert(
             tenant_id=tenant_id, alert_id=alert_id, run_id=rid
@@ -446,6 +479,37 @@ def get_investigation_context(
             tenant_id=tenant_id, alert_id=alert_id
         )
     )
+
+    model_metadata = {}
+    try:
+        payloads = request.app.state.repository.list_alert_payloads_by_run(
+            tenant_id=tenant_id, run_id=rid or "", limit=500000
+        )
+        payload = next((p for p in payloads if str(p.get("alert_id")) == str(alert_id)), {})
+        model_version = str(
+            (risk_explanation or {}).get("model_version")
+            or payload.get("model_version")
+            or "unknown"
+        )
+        monitoring = request.app.state.repository.list_model_monitoring(tenant_id=tenant_id, limit=200)
+        latest_monitoring = next(
+            (
+                row for row in monitoring
+                if str(row.get("run_id") or "") == str(rid or "")
+                and str(row.get("model_version") or "") == model_version
+            ),
+            None,
+        )
+        model_record = request.app.state.repository.get_model_version(tenant_id=tenant_id, model_version=model_version)
+        model_metadata = {
+            "model_version": model_version,
+            "approval_state": (model_record or {}).get("approval_status"),
+            "scoring_timestamp": payload.get("timestamp") or payload.get("created_at"),
+            "monitoring_timestamp": (latest_monitoring or {}).get("created_at"),
+            "explanation_version": "v1",
+        }
+    except Exception:
+        model_metadata = {}
 
     # Case status from existing case service
     case_status = None
@@ -475,9 +539,11 @@ def get_investigation_context(
         "network_graph": network_graph,
         "investigation_steps": investigation_steps,
         "sar_draft": sar_draft,
+        "narrative_draft": narrative_draft,
         "global_signals": global_signals or [],
         "outcome": outcome,
         "case_status": case_status,
+        "model_metadata": model_metadata,
         "assembled_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
         "assembly_latency_seconds": round(elapsed, 3),
     }

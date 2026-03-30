@@ -1,3 +1,0 @@
-# Local dev: keep empty to use Vite proxy (/api -> backend).
-# For production (Vercel), set VITE_API_BASE_URL in project env to your backend URL.
-VITE_API_BASE_URL=

@@ -2,12 +2,167 @@ param(
     [ValidateSet('api','worker','event','streaming','all-workers','clear-queue','bootstrap-model','reset-stream')]
     [string]$Role = 'api',
     [string]$Tenant = 'default-bank',
-    [string]$DbUrl = 'postgresql+psycopg://althea:althea_dev_password@localhost:5432/althea',
-    [string]$RedisUrl = 'redis://localhost:6379/0',
+    [string]$DbUrl = $env:ALTHEA_DATABASE_URL,
+    [string]$RedisUrl = $(if ($env:ALTHEA_REDIS_URL) { $env:ALTHEA_REDIS_URL } else { 'redis://localhost:6379/0' }),
     [string]$Queue = 'althea-pipeline',
-    [string]$JwtSecret = 'replace-with-strong-secret',
+    [string]$JwtSecret = $env:ALTHEA_JWT_SECRET,
     [int]$Port = 8000
 )
+
+function Get-ListeningPid {
+    param([int]$LocalPort)
+    $conn = Get-NetTCPConnection -LocalPort $LocalPort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $conn) {
+        return $null
+    }
+    return [int]$conn.OwningProcess
+}
+
+function Get-ProcessCommandLine {
+    param([int]$Pid)
+    try {
+        $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $Pid" -ErrorAction Stop
+        return [string]($proc.CommandLine)
+    }
+    catch {
+        return ""
+    }
+}
+
+function Test-AltheaApiHealth {
+    param([int]$ApiPort)
+    try {
+        $res = Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:$ApiPort/health" -TimeoutSec 2
+        if ($null -ne $res) {
+            return $true
+        }
+    }
+    catch {}
+    return $false
+}
+
+function Ensure-ApiPortReady {
+    param([int]$ApiPort)
+    $listenerProcessId = Get-ListeningPid -LocalPort $ApiPort
+    if ($null -eq $listenerProcessId) {
+        return
+    }
+
+    if (Test-AltheaApiHealth -ApiPort $ApiPort) {
+        Write-Host "ALTHEA API is already running on port $ApiPort (PID $listenerProcessId). Reusing existing process."
+        exit 0
+    }
+
+    $processName = ""
+    try {
+        $processName = (Get-Process -Id $listenerProcessId -ErrorAction Stop).ProcessName
+    }
+    catch {}
+    $commandLine = Get-ProcessCommandLine -Pid $listenerProcessId
+
+    if ($commandLine -match 'uvicorn\s+main:app' -or $commandLine -match 'backend\\main\.py') {
+        Write-Warning "Port $ApiPort is occupied by a stale backend process (PID $listenerProcessId). Restarting it."
+        Stop-Process -Id $listenerProcessId -Force -ErrorAction Stop
+        Start-Sleep -Milliseconds 400
+        return
+    }
+
+    Write-Error "Port $ApiPort is already in use by PID $listenerProcessId ($processName). Stop that process or run with -Port <other-port>."
+    exit 1
+}
+
+function Test-IsPlaceholderDbUrl {
+    param([string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return $true
+    }
+    $normalized = $Value.ToLowerInvariant()
+    return (
+        $normalized.Contains("<password>") -or
+        $normalized.Contains("your_password") -or
+        $normalized.Contains("your-password")
+    )
+}
+
+function ConvertTo-DbUriPart {
+    param([string]$Value)
+    if ($null -eq $Value) { return "" }
+    return [System.Uri]::EscapeDataString($Value)
+}
+
+function Get-DockerPostgresDbUrl {
+    $docker = Get-Command docker -ErrorAction SilentlyContinue
+    if ($null -eq $docker) {
+        return $null
+    }
+
+    $containerName = ""
+    try {
+        $containerName = (& docker ps --filter "publish=5432" --filter "ancestor=postgres:16" --format "{{.Names}}" | Select-Object -First 1).Trim()
+        if ([string]::IsNullOrWhiteSpace($containerName)) {
+            $containerName = (& docker ps --filter "publish=5432" --format "{{.Names}}" | Select-Object -First 1).Trim()
+        }
+    }
+    catch {
+        return $null
+    }
+    if ([string]::IsNullOrWhiteSpace($containerName)) {
+        return $null
+    }
+
+    try {
+        $envLines = & docker inspect $containerName --format "{{range .Config.Env}}{{println .}}{{end}}"
+    }
+    catch {
+        return $null
+    }
+
+    $pairs = @{}
+    foreach ($line in $envLines) {
+        if ($line -match '^[^=]+=') {
+            $parts = $line -split '=', 2
+            $pairs[$parts[0]] = $parts[1]
+        }
+    }
+
+    $dbUser = if ($pairs.ContainsKey("POSTGRES_USER")) { $pairs["POSTGRES_USER"] } else { "althea" }
+    $dbPass = if ($pairs.ContainsKey("POSTGRES_PASSWORD")) { $pairs["POSTGRES_PASSWORD"] } else { "" }
+    $dbName = if ($pairs.ContainsKey("POSTGRES_DB")) { $pairs["POSTGRES_DB"] } else { "althea" }
+    if ([string]::IsNullOrWhiteSpace($dbPass)) {
+        return $null
+    }
+
+    $u = ConvertTo-DbUriPart -Value $dbUser
+    $p = ConvertTo-DbUriPart -Value $dbPass
+    $d = ConvertTo-DbUriPart -Value $dbName
+    return ("postgresql+psycopg://{0}:{1}@127.0.0.1:5432/{2}" -f $u, $p, $d)
+}
+
+function Test-DbConnection {
+    param(
+        [string]$PythonExe,
+        [string]$DbUrl
+    )
+    if ([string]::IsNullOrWhiteSpace($DbUrl)) {
+        return $false
+    }
+    $env:ALTHEA_DB_TEST_URL = $DbUrl
+    & $PythonExe -c "import os,sys,psycopg; url=os.environ.get('ALTHEA_DB_TEST_URL','').strip().replace('postgresql+psycopg://','postgresql://',1); 
+try:
+ conn=psycopg.connect(url); conn.close(); print('db-ok')
+except Exception as e:
+ print(f'db-auth-failed: {e.__class__.__name__}')
+ sys.exit(2)"
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Get-RedactedDbUrl {
+    param([string]$DbUrl)
+    if ([string]::IsNullOrWhiteSpace($DbUrl)) {
+        return ""
+    }
+    return ($DbUrl -replace '://([^:/]+):([^@]+)@', '://$1:***@')
+}
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $backend = Join-Path $repoRoot 'backend'
@@ -19,11 +174,43 @@ if (!(Test-Path $py)) {
 }
 
 $env:ALTHEA_ENV = 'development'
-$env:ALTHEA_DATABASE_URL = $DbUrl
+$resolvedDbUrl = if (Test-IsPlaceholderDbUrl -Value $DbUrl) { $null } else { $DbUrl }
+if ([string]::IsNullOrWhiteSpace($resolvedDbUrl) -and -not (Test-IsPlaceholderDbUrl -Value $env:ALTHEA_DATABASE_URL)) {
+    $resolvedDbUrl = $env:ALTHEA_DATABASE_URL
+}
+if ([string]::IsNullOrWhiteSpace($resolvedDbUrl)) {
+    $resolvedDbUrl = Get-DockerPostgresDbUrl
+}
+
+$requiresDb = @('api','worker','event','streaming','all-workers','bootstrap-model') -contains $Role
+if ($requiresDb) {
+    if ([string]::IsNullOrWhiteSpace($resolvedDbUrl)) {
+        Write-Error "Cannot resolve database URL. Set -DbUrl explicitly or start docker postgres first."
+        exit 1
+    }
+
+    if (-not (Test-DbConnection -PythonExe $py -DbUrl $resolvedDbUrl)) {
+        $dockerDbUrl = Get-DockerPostgresDbUrl
+        if (-not [string]::IsNullOrWhiteSpace($dockerDbUrl) -and $dockerDbUrl -ne $resolvedDbUrl -and (Test-DbConnection -PythonExe $py -DbUrl $dockerDbUrl)) {
+            Write-Warning "Provided database URL failed. Falling back to docker postgres credentials."
+            $resolvedDbUrl = $dockerDbUrl
+        }
+        else {
+            $masked = Get-RedactedDbUrl -DbUrl $resolvedDbUrl
+            Write-Error "Database auth failed for $masked . Fix credentials or reset postgres password, then retry."
+            exit 1
+        }
+    }
+}
+
+$env:ALTHEA_DATABASE_URL = $resolvedDbUrl
 $env:ALTHEA_REDIS_URL = $RedisUrl
 $env:ALTHEA_QUEUE_MODE = 'rq'
 $env:ALTHEA_RQ_QUEUE = $Queue
 $env:ALTHEA_DEFAULT_TENANT_ID = $Tenant
+if (!$JwtSecret) {
+    $JwtSecret = [Guid]::NewGuid().ToString("N") + [Guid]::NewGuid().ToString("N")
+}
 $env:ALTHEA_JWT_SECRET = $JwtSecret
 $env:PYTHONUNBUFFERED = '1'
 
@@ -31,6 +218,7 @@ Push-Location $backend
 try {
     switch ($Role) {
         'api' {
+            Ensure-ApiPortReady -ApiPort $Port
             & $py -m uvicorn main:app --host 127.0.0.1 --port $Port
         }
         'worker' {

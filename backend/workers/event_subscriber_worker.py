@@ -3,9 +3,11 @@ from __future__ import annotations
 import logging
 import math
 import time
+import threading
+from datetime import datetime, timezone
 from typing import Any
 
-from core.dependencies import get_event_bus, get_pipeline_service, get_repository
+from core.dependencies import get_cache, get_event_bus, get_pipeline_service, get_repository
 from core.observability import record_worker_task
 
 logger = logging.getLogger("althea.event_worker")
@@ -63,8 +65,22 @@ def _handle_event(envelope: dict[str, Any]) -> None:
 
 def run_event_subscriber(start_from: str = "0-0") -> None:
     bus = get_event_bus()
+    cache = get_cache()
     cursor = start_from
     logger.info("Starting event subscriber worker from %s", cursor)
+
+    def _heartbeat_loop() -> None:
+        while True:
+            cache.set_json(
+                "heartbeat:worker:event",
+                {"worker": "event", "ts": datetime.now(timezone.utc).isoformat()},
+                ttl_seconds=30,
+            )
+            time.sleep(10)
+
+    heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True, name="event-worker-heartbeat")
+    heartbeat_thread.start()
+
     while True:
         events = bus.consume_after(last_event_id=cursor, limit=200, block_ms=1000)
         if not events:

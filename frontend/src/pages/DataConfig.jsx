@@ -16,7 +16,9 @@ export function DataConfig() {
       if (res.job_id && res.status !== 'completed') {
         setMsg(`Pipeline job queued: ${res.job_id}. Waiting for completion...`)
         let final = res
-        for (let i = 0; i < 120; i += 1) {
+        // Local development with full models can exceed 2 minutes for medium datasets.
+        const maxWaitSeconds = 360
+        for (let i = 0; i < maxWaitSeconds; i += 1) {
           // eslint-disable-next-line no-await-in-loop
           await new Promise((resolve) => setTimeout(resolve, 1000))
           // eslint-disable-next-line no-await-in-loop
@@ -25,6 +27,11 @@ export function DataConfig() {
         }
         if (final.status === 'failed') {
           throw new Error(final.detail || 'Pipeline failed')
+        }
+        if (final.status === 'discarded') {
+          throw new Error(
+            `Pipeline job was discarded (job: ${res.job_id}). Ensure API and workers use the same PostgreSQL/Redis connection settings.`
+          )
         }
         if (final.status !== 'completed') {
           throw new Error(

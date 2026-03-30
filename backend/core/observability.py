@@ -51,6 +51,42 @@ _EVENT_COUNT = Counter(
     "Total events processed by ALTHEA event bus.",
     ["event_name"],
 )
+_FEATURE_RETRIEVAL_LATENCY = Histogram(
+    "althea_feature_retrieval_latency_seconds",
+    "Latency of feature retrieval and registry operations.",
+    ["operation"],
+)
+_COPILOT_LATENCY = Histogram(
+    "althea_copilot_generation_latency_seconds",
+    "Latency of AI copilot generation endpoints.",
+    ["operation"],
+)
+_WORKFLOW_TRANSITIONS = Counter(
+    "althea_workflow_transitions_total",
+    "Workflow transitions grouped by source and target states.",
+    ["from_state", "to_state", "result"],
+)
+_INTEGRATION_ERRORS = Counter(
+    "althea_integration_errors_total",
+    "Frontend-backend integration errors by area.",
+    ["area"],
+)
+_GRAPH_GENERATION_LATENCY = Histogram(
+    "althea_graph_generation_latency_seconds",
+    "Latency for investigation graph generation.",
+)
+_GRAPH_GENERATION_FAILURES = Counter(
+    "althea_graph_generation_failures_total",
+    "Total failures while generating investigation graphs.",
+)
+_NARRATIVE_GENERATION_LATENCY = Histogram(
+    "althea_narrative_generation_latency_seconds",
+    "Latency for investigation narrative draft generation.",
+)
+_NARRATIVE_GENERATION_FAILURES = Counter(
+    "althea_narrative_generation_failures_total",
+    "Total failures while generating investigation narrative drafts.",
+)
 _DYNAMIC_GAUGES: dict[str, Gauge] = {}
 _ALERTS_PROCESSED_TOTAL = Counter("alerts_processed_total", "Total number of alerts processed by pipeline jobs.")
 _PIPELINE_RUNTIME_SECONDS = Histogram(
@@ -164,6 +200,42 @@ def record_ml_inference(model_version: str, duration_seconds: float) -> None:
 
 def record_event(event_name: str) -> None:
     _EVENT_COUNT.labels(event_name=event_name or "unknown").inc()
+
+
+def record_feature_retrieval(operation: str, duration_seconds: float) -> None:
+    _FEATURE_RETRIEVAL_LATENCY.labels(operation=operation or "unknown").observe(max(0.0, float(duration_seconds)))
+
+
+def record_copilot_generation(operation: str, duration_seconds: float) -> None:
+    _COPILOT_LATENCY.labels(operation=operation or "unknown").observe(max(0.0, float(duration_seconds)))
+
+
+def record_workflow_transition(from_state: str, to_state: str, result: str = "success") -> None:
+    _WORKFLOW_TRANSITIONS.labels(
+        from_state=(from_state or "unknown"),
+        to_state=(to_state or "unknown"),
+        result=(result or "unknown"),
+    ).inc()
+
+
+def record_integration_error(area: str) -> None:
+    _INTEGRATION_ERRORS.labels(area=area or "unknown").inc()
+
+
+def record_graph_generation(duration_seconds: float) -> None:
+    _GRAPH_GENERATION_LATENCY.observe(max(0.0, float(duration_seconds)))
+
+
+def record_graph_generation_failure() -> None:
+    _GRAPH_GENERATION_FAILURES.inc()
+
+
+def record_narrative_generation(duration_seconds: float) -> None:
+    _NARRATIVE_GENERATION_LATENCY.observe(max(0.0, float(duration_seconds)))
+
+
+def record_narrative_generation_failure() -> None:
+    _NARRATIVE_GENERATION_FAILURES.inc()
 
 
 def record_queue_depth(depth: int) -> None:

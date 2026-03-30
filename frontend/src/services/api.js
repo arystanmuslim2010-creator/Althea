@@ -1,6 +1,14 @@
 /**
  * API client with access+refresh token lifecycle.
  */
+import {
+  mapCaseStatusForUpdate,
+  normalizeHealthResponse,
+  normalizeInvestigationContext,
+  normalizeNarrativeDraft,
+  normalizeNetworkGraph,
+} from './contracts'
+
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
 const API_CANDIDATES = API_BASE
   ? [`${API_BASE}/api`, '/api', 'http://127.0.0.1:8000/api', 'http://localhost:8000/api']
@@ -62,6 +70,19 @@ function clearTokens() {
   localStorage.removeItem(REFRESH_TOKEN_KEY)
 }
 
+function decodeJwtPayload(token) {
+  if (!token) return null
+  try {
+    const parts = token.split('.')
+    if (parts.length !== 3) return null
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const normalized = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=')
+    return JSON.parse(atob(normalized))
+  } catch {
+    return null
+  }
+}
+
 async function refreshAccessToken(apiBase) {
   if (refreshInFlight) return refreshInFlight
 
@@ -113,6 +134,8 @@ async function runFetchWithLifecycle(apiBase, path, options, allowRefresh = true
 async function req(method, path, body = null, allowRefresh = true) {
   const token = getAccessToken()
   const headers = token ? { Authorization: `Bearer ${token}` } : {}
+  const tenantId = decodeJwtPayload(token)?.tenant_id
+  if (tenantId) headers['X-Tenant-ID'] = tenantId
   if (body !== null && body !== undefined) {
     headers['Content-Type'] = 'application/json'
   }
@@ -148,6 +171,10 @@ async function req(method, path, body = null, allowRefresh = true) {
 async function reqForm(path, formData) {
   const token = getAccessToken()
   const headers = token ? { Authorization: `Bearer ${token}` } : undefined
+  if (headers) {
+    const tenantId = decodeJwtPayload(token)?.tenant_id
+    if (tenantId) headers['X-Tenant-ID'] = tenantId
+  }
   let lastNetworkError = null
 
   for (const apiBase of API_CANDIDATES) {
@@ -198,7 +225,7 @@ export const api = {
   updateInvestigationCaseStatus: (caseId, status) => req('POST', `/cases/${caseId}/status`, { status }),
   getAdminUsers: () => req('GET', '/admin/users'),
   updateUserRole: (userId, role) => req('POST', `/admin/users/${userId}/role`, { role }),
-  getHealth: () => req('GET', '/health'),
+  getHealth: async () => normalizeHealthResponse(await req('GET', '/health')),
   getRunInfo: () => req('GET', '/run-info'),
   getQueueMetrics: () => req('GET', '/queue-metrics'),
   getAlerts: (params) => {
@@ -215,7 +242,13 @@ export const api = {
   getCases: () => req('GET', '/cases'),
   getCaseAudit: (caseId) => req('GET', `/cases/${caseId}/audit`),
   createCase: (alertIds, actor = 'Analyst_1') => req('POST', '/cases', { alert_ids: alertIds, actor }),
-  updateCase: (caseId, payload) => req('PUT', `/cases/${caseId}`, payload),
+  updateCase: (caseId, payload) => {
+    const normalized = { ...(payload || {}) }
+    if (normalized.status) {
+      normalized.status = mapCaseStatusForUpdate(normalized.status)
+    }
+    return req('PUT', `/cases/${caseId}`, normalized)
+  },
   deleteCase: (caseId) => req('DELETE', `/cases/${caseId}`),
   getActor: () => req('GET', '/actor'),
   setActor: (actor) => req('PUT', '/actor', { actor }),
@@ -234,4 +267,15 @@ export const api = {
   runPipeline: () => req('POST', '/pipeline/run'),
   getPipelineJob: (jobId) => req('GET', `/pipeline/jobs/${jobId}`),
   clearRun: () => req('POST', '/pipeline/clear'),
+  bulkAssignAlerts: (alertIds, assignedTo) => req('POST', '/alerts/bulk-assign', { alert_ids: alertIds, assigned_to: assignedTo }),
+  bulkUpdateAlertStatus: (alertIds, status) => req('POST', '/alerts/bulk-status', { alert_ids: alertIds, status }),
+  getInvestigationContext: async (alertId) => normalizeInvestigationContext(await req('GET', `/alerts/${alertId}/investigation-context`)),
+  getNetworkGraph: async (alertId) => normalizeNetworkGraph(await req('GET', `/alerts/${alertId}/network-graph`)),
+  getNarrativeDraft: async (alertId) => normalizeNarrativeDraft(await req('GET', `/alerts/${alertId}/narrative-draft`), alertId),
+  getAlertOutcome: (alertId) => req('GET', `/alerts/${alertId}/outcome`),
+  recordAlertOutcome: (alertId, payload) => req('POST', `/alerts/${alertId}/outcome`, payload),
+  workflowAssignAlert: (alertId, assignedTo, actor) => req('POST', `/workflows/alerts/${alertId}/assign`, { assigned_to: assignedTo, actor }),
+  workflowEscalateAlert: (alertId, actor, reason) => req('POST', `/workflows/alerts/${alertId}/escalate`, { actor, reason }),
+  workflowCloseAlert: (alertId, actor, reason) => req('POST', `/workflows/alerts/${alertId}/close`, { actor, reason }),
+  getSlaBreaches: () => req('GET', '/workflows/sla-breaches'),
 }

@@ -3,19 +3,27 @@ from __future__ import annotations
 import json
 import os
 import time
+import threading
+from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
 
 from core.observability import record_pipeline_run
-from core.dependencies import get_pipeline_service
+from core.dependencies import get_cache, get_pipeline_service
 
 
 def run_pipeline_job(job_id: str, tenant_id: str, user_scope: str) -> dict:
     service = get_pipeline_service()
     # Worker jobs carry tenant_id in payload; set DB context before any query for RLS-safe execution.
     service._repository.set_tenant_context(tenant_id)
-    job = service._repository.get_pipeline_job(tenant_id=tenant_id, job_id=job_id)
+    job = None
+    # Guard against transient commit/visibility lag between API enqueue and worker pickup.
+    for _ in range(8):
+        job = service._repository.get_pipeline_job(tenant_id=tenant_id, job_id=job_id)
+        if job:
+            break
+        time.sleep(0.25)
     if not job:
         # Stale Redis queue entries can outlive DB records during local restarts.
         payload = {
@@ -176,6 +184,24 @@ def run_rq_worker() -> None:
     queue_name = os.getenv("ALTHEA_RQ_QUEUE", "althea-pipeline")
     print(f"[pipeline_worker] starting queue={queue_name} redis={redis_url}", flush=True)
     connection = redis.Redis.from_url(redis_url)
+    cache = get_cache()
+
+    def _heartbeat_loop() -> None:
+        while True:
+            cache.set_json(
+                "heartbeat:worker:pipeline",
+                {
+                    "worker": "pipeline",
+                    "queue": queue_name,
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                },
+                ttl_seconds=30,
+            )
+            time.sleep(10)
+
+    heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True, name="pipeline-worker-heartbeat")
+    heartbeat_thread.start()
+
     worker_cls = SimpleWorker if os.name == "nt" else Worker
     worker = worker_cls([queue_name], connection=connection)
     if os.name == "nt":

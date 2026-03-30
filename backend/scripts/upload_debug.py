@@ -1,10 +1,13 @@
 #!/usr/bin/env python
 """Test where files are being saved during upload."""
+import os
 import requests
 import json
 
-BASE_URL = "http://localhost:8000"
-TENANT = "default-bank"
+BASE_URL = os.getenv("ALTHEA_API_URL", "http://localhost:8000")
+TENANT = os.getenv("ALTHEA_DEFAULT_TENANT_ID", "default-bank")
+EMAIL = os.getenv("ALTHEA_TEST_EMAIL", "analyst@bank.com")
+PASSWORD = os.getenv("ALTHEA_TEST_PASSWORD", "")
 
 print("=" * 70)
 print("TEST UPLOAD - Debug file storage location")
@@ -13,9 +16,11 @@ print("=" * 70 + "\n")
 # Step 1: Login
 print("[1] Logging in...")
 try:
+    if not PASSWORD:
+        raise RuntimeError("Set ALTHEA_TEST_PASSWORD before running this script.")
     login_resp = requests.post(
         f"{BASE_URL}/api/auth/login",
-        json={"email": "analyst@bank.com", "password": "Password123!"},
+        json={"email": EMAIL, "password": PASSWORD},
         headers={"X-Tenant-ID": TENANT},
         timeout=5
     )
@@ -59,8 +64,6 @@ try:
 
         # Now check where the file was saved
         print("[3] Checking file location...")
-        import os
-
         locations_to_check = [
             f"../data/object_storage/datasets/{TENANT}/public/{dataset_hash}.csv",
             f"data/object_storage/datasets/{TENANT}/public/{dataset_hash}.csv",

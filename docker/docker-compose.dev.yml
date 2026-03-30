@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-althea}
       POSTGRES_USER: ${POSTGRES_USER:-althea}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-althea_dev_password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set_POSTGRES_PASSWORD}
     ports:
       - "5432:5432"
     volumes:
@@ -21,7 +21,7 @@ services:
       dockerfile: backend/Dockerfile
     environment:
       ALTHEA_ENV: development
-      ALTHEA_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-althea}:${POSTGRES_PASSWORD:-althea_dev_password}@postgres:5432/${POSTGRES_DB:-althea}
+      ALTHEA_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-althea}:${POSTGRES_PASSWORD:?set_POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-althea}
       ALTHEA_REDIS_URL: redis://redis:6379/0
       ALTHEA_QUEUE_MODE: rq
       ALTHEA_JWT_SECRET: ${ALTHEA_JWT_SECRET:?set_ALTHEA_JWT_SECRET}
@@ -40,7 +40,7 @@ services:
     command: python -m workers.pipeline_worker
     environment:
       ALTHEA_ENV: development
-      ALTHEA_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-althea}:${POSTGRES_PASSWORD:-althea_dev_password}@postgres:5432/${POSTGRES_DB:-althea}
+      ALTHEA_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-althea}:${POSTGRES_PASSWORD:?set_POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-althea}
       ALTHEA_REDIS_URL: redis://redis:6379/0
       ALTHEA_QUEUE_MODE: rq
       ALTHEA_JWT_SECRET: ${ALTHEA_JWT_SECRET:?set_ALTHEA_JWT_SECRET}
@@ -55,7 +55,7 @@ services:
     command: python -m workers.event_worker
     environment:
       ALTHEA_ENV: development
-      ALTHEA_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-althea}:${POSTGRES_PASSWORD:-althea_dev_password}@postgres:5432/${POSTGRES_DB:-althea}
+      ALTHEA_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-althea}:${POSTGRES_PASSWORD:?set_POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-althea}
       ALTHEA_REDIS_URL: redis://redis:6379/0
       ALTHEA_QUEUE_MODE: rq
       ALTHEA_JWT_SECRET: ${ALTHEA_JWT_SECRET:?set_ALTHEA_JWT_SECRET}

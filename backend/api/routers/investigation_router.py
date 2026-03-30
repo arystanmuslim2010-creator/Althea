@@ -6,12 +6,14 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from core.observability import record_integration_error, record_workflow_transition
 from core.security import VALID_ROLES, get_authenticated_tenant_id, get_current_user, normalize_role, require_any_permission, require_permissions
+from workflows.alert_workflow_service import apply_alert_assignment_transition
+from workflows.state_model import ALLOWED_CASE_TRANSITIONS, normalize_assignment_status, normalize_case_state, workflow_state_from_case
 
 router = APIRouter(prefix="/api", tags=["investigation"])
 
-CASE_STATUSES = {"open", "under_review", "escalated", "sar_filed", "closed"}
-ASSIGNMENT_STATUSES = {"open", "in_review", "escalated", "closed"}
+CASE_STATUSES = set(ALLOWED_CASE_TRANSITIONS.keys())
 
 
 def _user_scope(request: Request, user: dict | None = None) -> str:
@@ -23,6 +25,27 @@ def _load_alerts_df(request: Request, tenant_id: str, run_id: str):
     import pandas as pd
 
     return pd.DataFrame(payloads)
+
+
+def _parse_utc(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _to_hours(delta_seconds: float | int | None) -> float | None:
+    if delta_seconds is None:
+        return None
+    try:
+        return round(float(delta_seconds) / 3600.0, 2)
+    except Exception:
+        return None
 
 
 def _log_event(
@@ -69,6 +92,16 @@ class AlertStatusRequest(BaseModel):
     status: str
 
 
+class BulkAssignRequest(BaseModel):
+    alert_ids: list[str]
+    assigned_to: str
+
+
+class BulkStatusRequest(BaseModel):
+    alert_ids: list[str]
+    status: str
+
+
 class AddNoteRequest(BaseModel):
     note_text: str = Field(min_length=1)
 
@@ -104,13 +137,37 @@ class UpdateCaseRequest(BaseModel):
     notes: str | None = None
 
 
+class WorkflowStateTransitionRequest(BaseModel):
+    to_state: str
+    reason: str = "manual_transition"
+
+
 @router.get("/work/queue")
 def get_work_queue(
     request: Request,
+    queue_view: str | None = None,
     user: dict = Depends(require_any_permission("view_assigned_alerts", "view_all_alerts")),
 ):
-    run_info = request.app.state.pipeline_service.get_run_info(user["tenant_id"], _user_scope(request, user))
-    run_id = run_info.get("run_id")
+    # Resolve active run with compatibility fallbacks because different screens may persist
+    # runtime context under different scopes ("public" vs user-specific).
+    scope_candidates: list[str] = []
+    header_scope = (request.headers.get("X-User-Scope") or "").strip()
+    if header_scope:
+        scope_candidates.append(header_scope)
+    scope_candidates.extend(["public", str(user.get("user_id") or "").strip()])
+    deduped_scopes: list[str] = []
+    for scope in scope_candidates:
+        if scope and scope not in deduped_scopes:
+            deduped_scopes.append(scope)
+
+    run_info = {}
+    run_id = None
+    for scope in deduped_scopes:
+        info = request.app.state.pipeline_service.get_run_info(user["tenant_id"], scope)
+        if info.get("run_id"):
+            run_info = info
+            run_id = info.get("run_id")
+            break
     if not run_id:
         return {"queue": [], "count": 0}
     alerts_df = _load_alerts_df(request, user["tenant_id"], run_id)
@@ -119,10 +176,33 @@ def get_work_queue(
     repo = request.app.state.repository
     cases = repo.list_cases(user["tenant_id"])
     records = []
+    now = datetime.now(timezone.utc)
+    normalized_view = str(queue_view or "").lower().strip()
     for record in alerts_df.to_dict("records"):
         alert_id = str(record.get("alert_id", ""))
         assignment = repo.get_latest_assignment(user["tenant_id"], alert_id)
         case_id = next((case["case_id"] for case in cases if case.get("alert_id") == alert_id), None)
+        case_status = next((case.get("status") for case in cases if case.get("alert_id") == alert_id), None)
+
+        created_at = (
+            _parse_utc(record.get("created_at"))
+            or _parse_utc(record.get("timestamp"))
+            or _parse_utc(record.get("event_time"))
+        )
+        assignment_updated_at = _parse_utc((assignment or {}).get("updated_at"))
+        alert_age_hours = _to_hours((now - created_at).total_seconds()) if created_at else None
+        assignment_age_hours = _to_hours((now - assignment_updated_at).total_seconds()) if assignment_updated_at else None
+        overdue_review = bool(alert_age_hours is not None and alert_age_hours >= 24.0 and (assignment or {}).get("status") != "closed")
+
+        if normalized_view == "analyst" and (assignment or {}).get("status") == "escalated":
+            continue
+        if normalized_view == "manager" and user["role"] not in {"manager", "admin"}:
+            continue
+        if normalized_view == "compliance" and user["role"] not in {"manager", "admin"}:
+            continue
+        if normalized_view == "compliance" and str(record.get("typology") or "").lower() != "sanctions":
+            continue
+
         if user["role"] in {"manager", "admin"}:
             pass
         elif user["role"] == "investigator":
@@ -137,6 +217,11 @@ def get_work_queue(
                 "assigned_to": assignment.get("assigned_to") if assignment else None,
                 "status": assignment.get("status") if assignment else "open",
                 "case_id": case_id,
+                "case_status": case_status,
+                "created_at": created_at.isoformat() if created_at else None,
+                "alert_age_hours": alert_age_hours,
+                "assignment_age_hours": assignment_age_hours,
+                "overdue_review": overdue_review,
             }
         )
     return {"queue": records, "count": len(records)}
@@ -150,21 +235,34 @@ def assign_alert(
     user: dict = Depends(require_permissions("reassign_alerts")),
 ):
     repo = request.app.state.repository
-    existing = repo.get_latest_assignment(user["tenant_id"], alert_id)
-    repo.upsert_assignment(
-        {
-            "id": existing["id"] if existing else uuid.uuid4().hex,
-            "tenant_id": user["tenant_id"],
-            "alert_id": alert_id,
-            "assigned_to": payload.assigned_to,
-            "assigned_by": user["user_id"],
-            "status": "open",
-            "created_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
-        }
+    existing = repo.get_latest_assignment(user["tenant_id"], alert_id) or {}
+    previous_assignee = existing.get("assigned_to")
+    result = apply_alert_assignment_transition(
+        request=request,
+        tenant_id=user["tenant_id"],
+        alert_id=alert_id,
+        actor=user["user_id"],
+        status="open",
+        reason="assignment_updated",
+        assigned_to=payload.assigned_to,
     )
-    _log_event(request, user["tenant_id"], "alert_assigned", user["user_id"], alert_id=alert_id, details={"assigned_to": payload.assigned_to})
-    return {"status": "assigned", "alert_id": alert_id, "assigned_to": payload.assigned_to}
+    _log_event(
+        request,
+        user["tenant_id"],
+        "alert_assigned",
+        user["user_id"],
+        alert_id=alert_id,
+        case_id=result.get("case_id"),
+        details={"assigned_to": payload.assigned_to, "previous_assigned_to": previous_assignee},
+    )
+    return {
+        "status": "assigned",
+        "alert_id": alert_id,
+        "assigned_to": payload.assigned_to,
+        "case_id": result.get("case_id"),
+        "workflow_state": result.get("workflow_state"),
+        "case_status": result.get("case_status"),
+    }
 
 
 @router.post("/alerts/{alert_id}/status")
@@ -174,25 +272,82 @@ def update_alert_status(
     request: Request,
     user: dict = Depends(require_permissions("change_alert_status")),
 ):
-    status = payload.status.lower().strip()
-    if status not in ASSIGNMENT_STATUSES:
+    status = normalize_assignment_status(payload.status)
+    if not status:
         raise HTTPException(status_code=400, detail="Invalid status")
     repo = request.app.state.repository
-    existing = repo.get_latest_assignment(user["tenant_id"], alert_id)
-    repo.upsert_assignment(
-        {
-            "id": existing["id"] if existing else uuid.uuid4().hex,
-            "tenant_id": user["tenant_id"],
-            "alert_id": alert_id,
-            "assigned_to": existing["assigned_to"] if existing else user["user_id"],
-            "assigned_by": existing["assigned_by"] if existing else user["user_id"],
-            "status": status,
-            "created_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
-        }
+    existing = repo.get_latest_assignment(user["tenant_id"], alert_id) or {}
+    old_status = existing.get("status") or "open"
+    result = apply_alert_assignment_transition(
+        request=request,
+        tenant_id=user["tenant_id"],
+        alert_id=alert_id,
+        actor=user["user_id"],
+        status=status,
+        reason="alert_status_updated",
+        assigned_to=existing.get("assigned_to") or user["user_id"],
     )
-    _log_event(request, user["tenant_id"], "status_changed", user["user_id"], alert_id=alert_id, details={"status": status})
-    return {"alert_id": alert_id, "status": status}
+    _log_event(
+        request,
+        user["tenant_id"],
+        "status_changed",
+        user["user_id"],
+        alert_id=alert_id,
+        case_id=result.get("case_id"),
+        details={"old_state": old_status, "new_state": status, "reason": "alert_status_updated"},
+    )
+    return {
+        "alert_id": alert_id,
+        "status": status,
+        "workflow_state": result.get("workflow_state"),
+        "case_id": result.get("case_id"),
+        "case_status": result.get("case_status"),
+    }
+
+
+@router.post("/alerts/bulk-assign")
+def bulk_assign_alerts(
+    payload: BulkAssignRequest,
+    request: Request,
+    user: dict = Depends(require_permissions("reassign_alerts")),
+):
+    alert_ids = [str(item).strip() for item in (payload.alert_ids or []) if str(item).strip()]
+    if not alert_ids:
+        raise HTTPException(status_code=400, detail="alert_ids is required")
+    updated = 0
+    for alert_id in alert_ids:
+        assign_alert(
+            alert_id=alert_id,
+            payload=AssignAlertRequest(assigned_to=payload.assigned_to),
+            request=request,
+            user=user,
+        )
+        updated += 1
+    return {"status": "ok", "updated": updated, "assigned_to": payload.assigned_to}
+
+
+@router.post("/alerts/bulk-status")
+def bulk_update_alert_status(
+    payload: BulkStatusRequest,
+    request: Request,
+    user: dict = Depends(require_permissions("change_alert_status")),
+):
+    alert_ids = [str(item).strip() for item in (payload.alert_ids or []) if str(item).strip()]
+    if not alert_ids:
+        raise HTTPException(status_code=400, detail="alert_ids is required")
+    status = normalize_assignment_status(payload.status)
+    if not status:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    updated = 0
+    for alert_id in alert_ids:
+        update_alert_status(
+            alert_id=alert_id,
+            payload=AlertStatusRequest(status=status),
+            request=request,
+            user=user,
+        )
+        updated += 1
+    return {"status": "ok", "updated": updated, "new_state": status}
 
 
 @router.post("/alerts/{alert_id}/note")
@@ -289,8 +444,8 @@ def update_investigation_case_status(
     request: Request,
     user: dict = Depends(get_current_user),
 ):
-    new_status = payload.status.lower().strip()
-    if new_status not in CASE_STATUSES:
+    new_status = normalize_case_state(payload.status)
+    if not new_status or new_status not in CASE_STATUSES:
         raise HTTPException(status_code=400, detail="Invalid case status")
     if new_status == "sar_filed" and user["role"] not in {"manager", "admin"}:
         raise HTTPException(status_code=403, detail="Only manager/admin can approve SAR cases")
@@ -298,44 +453,62 @@ def update_investigation_case_status(
     case = repo.get_case(user["tenant_id"], case_id)
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
-    payload_json = dict(case["payload_json"])
-    payload_json["status"] = new_status
-    payload_json["closed_at"] = datetime.now(timezone.utc).isoformat() if new_status == "closed" else None
-    approval_chain = list(payload_json.get("approval_chain") or [])
-    if new_status in {"sar_filed", "closed"}:
-        if not approval_chain:
-            approval_chain = [{"step": "manager_approval", "status": "pending", "actor": None, "timestamp": None}]
-        for step in approval_chain:
-            if step.get("step") == "manager_approval":
-                step["status"] = "completed"
-                step["actor"] = user["user_id"]
-                step["timestamp"] = datetime.now(timezone.utc).isoformat()
-    payload_json["approval_chain"] = approval_chain
-    timeline = list(case.get("immutable_timeline_json") or [])
-    timeline.append(
-        {
-            "action": "case_closed" if new_status == "closed" else "status_changed",
-            "performed_by": user["user_id"],
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "status": new_status,
-        }
+    old_status = str(case.get("status") or "").lower().strip() or "open"
+    run_info = request.app.state.pipeline_service.get_run_info(user["tenant_id"], _user_scope(request, user))
+    actor = user["user_id"]
+    ok, message, updated_case = request.app.state.case_service.update_case(
+        tenant_id=user["tenant_id"],
+        user_scope=_user_scope(request, user),
+        case_id=case_id,
+        run_id=run_info.get("run_id") or "",
+        actor=actor,
+        status=new_status,
     )
-    repo.save_case(
-        {
-            "case_id": case_id,
-            "tenant_id": user["tenant_id"],
-            "status": new_status,
-            "created_by": case.get("created_by"),
-            "assigned_to": case.get("assigned_to"),
-            "alert_id": case.get("alert_id"),
-            "payload_json": payload_json,
-            "immutable_timeline_json": timeline,
-            "created_at": datetime.fromisoformat(case["created_at"]),
-            "updated_at": datetime.now(timezone.utc),
-        }
+    if not ok or not updated_case:
+        raise HTTPException(status_code=400, detail=message)
+
+    workflow_target = workflow_state_from_case(new_status)
+    workflow_result = None
+    if workflow_target:
+        try:
+            workflow_result = request.app.state.workflow_engine.transition_case(
+                tenant_id=user["tenant_id"],
+                case_id=case_id,
+                to_state=workflow_target,
+                actor=actor,
+                reason="case_status_api",
+            )
+        except Exception:
+            workflow_result = None
+
+    _log_event(
+        request,
+        user["tenant_id"],
+        "case_closed" if new_status == "closed" else "status_changed",
+        actor,
+        alert_id=case.get("alert_id"),
+        case_id=case_id,
+        details={
+            "old_state": old_status,
+            "new_state": new_status,
+            "workflow_state": (workflow_result or {}).get("to_state"),
+            "reason": "case_status_api",
+        },
     )
-    _log_event(request, user["tenant_id"], "case_closed" if new_status == "closed" else "status_changed", user["user_id"], alert_id=case.get("alert_id"), case_id=case_id, details={"status": new_status})
-    return {"case_id": case_id, "status": new_status, "closed_at": payload_json.get("closed_at")}
+    if workflow_result:
+        record_workflow_transition(
+            from_state=workflow_result.get("from_state"),
+            to_state=workflow_result.get("to_state"),
+            result="success",
+        )
+    else:
+        record_integration_error("case_status_workflow_sync")
+    return {
+        "case_id": case_id,
+        "status": new_status,
+        "closed_at": updated_case.get("closed_at"),
+        "workflow_state": (workflow_result or {}).get("to_state"),
+    }
 
 
 @router.get("/admin/users")
@@ -444,24 +617,28 @@ def set_actor(request: Request, payload: SetActorRequest, tenant_id: str = Depen
 def update_case(case_id: str, request: Request, payload: UpdateCaseRequest, tenant_id: str = Depends(get_authenticated_tenant_id)):
     run_info = request.app.state.pipeline_service.get_run_info(tenant_id, _user_scope(request))
     actor = request.app.state.case_service.get_actor(tenant_id, _user_scope(request))
+    normalized_status = normalize_case_state(payload.status) if payload.status is not None else None
+    if payload.status is not None and not normalized_status:
+        raise HTTPException(status_code=400, detail="Invalid case status")
     ok, message, case = request.app.state.case_service.update_case(
         tenant_id=tenant_id,
         user_scope=_user_scope(request),
         case_id=case_id,
         run_id=run_info.get("run_id") or "",
         actor=actor,
-        status=payload.status,
+        status=normalized_status,
         assigned_to=payload.assigned_to,
         notes=payload.notes,
     )
     if not ok or not case:
         raise HTTPException(status_code=404 if "not found" in message.lower() else 400, detail=message)
-    if payload.status:
+    if normalized_status:
+        target_state = workflow_state_from_case(normalized_status)
         try:
             request.app.state.workflow_engine.transition_case(
                 tenant_id=tenant_id,
                 case_id=case_id,
-                to_state=str(payload.status).lower(),
+                to_state=target_state or str(normalized_status).lower(),
                 actor=actor,
                 reason="case_update_api",
             )
@@ -507,4 +684,37 @@ def escalate_workflow_case(case_id: str, request: Request, user: dict = Depends(
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    return result
+
+
+@router.post("/workflows/cases/{case_id}/state")
+def transition_workflow_case_state(
+    case_id: str,
+    payload: WorkflowStateTransitionRequest,
+    request: Request,
+    user: dict = Depends(require_permissions("change_alert_status")),
+):
+    try:
+        result = request.app.state.workflow_engine.transition_case(
+            tenant_id=user["tenant_id"],
+            case_id=case_id,
+            to_state=str(payload.to_state or "").lower().strip(),
+            actor=user["user_id"],
+            reason=payload.reason or "manual_transition",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    _log_event(
+        request,
+        user["tenant_id"],
+        "workflow_transition",
+        user["user_id"],
+        case_id=case_id,
+        details={
+            "old_state": result.get("from_state"),
+            "new_state": result.get("to_state"),
+            "reason": result.get("reason"),
+        },
+    )
+    record_workflow_transition(from_state=result.get("from_state"), to_state=result.get("to_state"), result="success")
     return result

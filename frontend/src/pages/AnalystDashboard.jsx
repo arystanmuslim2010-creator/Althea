@@ -22,6 +22,7 @@ export function AnalystDashboard() {
   const [selectedIds, setSelectedIds] = useState([])
   const [filters, setFilters] = useState({ search: '', status: 'all', assigned: 'all' })
   const [bulkStatus, setBulkStatus] = useState('in_review')
+  const [actionBusy, setActionBusy] = useState(false)
 
   const load = async () => {
     try {
@@ -72,14 +73,24 @@ export function AnalystDashboard() {
 
   const assignToMe = async (alertId) => {
     if (!user?.user_id) return
-    await api.assignAlert(alertId, user.user_id)
-    await load()
+    setActionBusy(true)
+    try {
+      await api.assignAlert(alertId, user.user_id)
+      await load()
+    } finally {
+      setActionBusy(false)
+    }
   }
 
   const saveStatus = async (alertId) => {
     const newStatus = statusEdits[alertId] || 'open'
-    await api.updateAlertStatus(alertId, newStatus)
-    await load()
+    setActionBusy(true)
+    try {
+      await api.updateAlertStatus(alertId, newStatus)
+      await load()
+    } finally {
+      setActionBusy(false)
+    }
   }
 
   const toggleSelected = (alertId) => {
@@ -96,16 +107,34 @@ export function AnalystDashboard() {
 
   const bulkAssignToMe = async () => {
     if (!user?.user_id || !selectedIds.length) return
-    await Promise.all(selectedIds.map((alertId) => api.assignAlert(alertId, user.user_id)))
-    setSelectedIds([])
-    await load()
+    setActionBusy(true)
+    try {
+      await api.bulkAssignAlerts(selectedIds, user.user_id)
+      setSelectedIds([])
+      await load()
+    } catch {
+      await Promise.all(selectedIds.map((alertId) => api.assignAlert(alertId, user.user_id)))
+      setSelectedIds([])
+      await load()
+    } finally {
+      setActionBusy(false)
+    }
   }
 
   const bulkUpdateStatus = async () => {
     if (!selectedIds.length) return
-    await Promise.all(selectedIds.map((alertId) => api.updateAlertStatus(alertId, bulkStatus)))
-    setSelectedIds([])
-    await load()
+    setActionBusy(true)
+    try {
+      await api.bulkUpdateAlertStatus(selectedIds, bulkStatus)
+      setSelectedIds([])
+      await load()
+    } catch {
+      await Promise.all(selectedIds.map((alertId) => api.updateAlertStatus(alertId, bulkStatus)))
+      setSelectedIds([])
+      await load()
+    } finally {
+      setActionBusy(false)
+    }
   }
 
   return (
@@ -167,7 +196,7 @@ export function AnalystDashboard() {
         </div>
         <div className="flex flex-wrap gap-3">
           {canReassign(user?.role) ? (
-            <button className="px-3 py-2 border rounded text-sm disabled:opacity-50" disabled={!selectedIds.length} onClick={bulkAssignToMe}>
+            <button className="px-3 py-2 border rounded text-sm disabled:opacity-50" disabled={!selectedIds.length || actionBusy} onClick={bulkAssignToMe}>
               Assign Selected To Me
             </button>
           ) : null}
@@ -176,7 +205,7 @@ export function AnalystDashboard() {
               <select className="border rounded px-3 py-2 text-sm" value={bulkStatus} onChange={(e) => setBulkStatus(e.target.value)}>
                 {ALERT_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
               </select>
-              <button className="px-3 py-2 border rounded text-sm disabled:opacity-50" disabled={!selectedIds.length} onClick={bulkUpdateStatus}>
+              <button className="px-3 py-2 border rounded text-sm disabled:opacity-50" disabled={!selectedIds.length || actionBusy} onClick={bulkUpdateStatus}>
                 Update Selected Status
               </button>
             </>

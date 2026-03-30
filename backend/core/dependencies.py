@@ -11,6 +11,7 @@ from graph.relationship_graph_service import RelationshipGraphService
 from intelligence.global_pattern_service import GlobalPatternService
 from investigation.guidance_service import InvestigationGuidanceService
 from investigation.investigation_summary_service import InvestigationSummaryService
+from investigation.narrative_service import InvestigationNarrativeService
 from investigation.risk_explanation_service import RiskExplanationService
 from investigation.sar_generator import SARNarrativeGenerator
 from learning.feedback_collection_service import FeedbackCollectionService
@@ -285,6 +286,11 @@ def get_sar_generator() -> SARNarrativeGenerator:
 
 
 @lru_cache(maxsize=1)
+def get_narrative_service() -> InvestigationNarrativeService:
+    return InvestigationNarrativeService(get_repository(), get_explain_service())
+
+
+@lru_cache(maxsize=1)
 def get_relationship_graph_service() -> RelationshipGraphService:
     return RelationshipGraphService(get_repository())
 
@@ -338,6 +344,7 @@ def build_app_state() -> dict:
         "risk_explanation_service": get_risk_explanation_service(),
         "guidance_service": get_guidance_service(),
         "sar_generator": get_sar_generator(),
+        "narrative_service": get_narrative_service(),
         "relationship_graph_service": get_relationship_graph_service(),
         "feedback_service": get_feedback_service(),
         "global_pattern_service": get_global_pattern_service(),

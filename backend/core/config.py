@@ -1,10 +1,24 @@
 from __future__ import annotations
 
 import os
+import logging
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import List
+
+logger = logging.getLogger("althea.config")
+
+
+def _existing_insecure_artifacts(project_root: Path, backend_root: Path) -> list[str]:
+    candidates = [
+        backend_root / "TOKEN.txt",
+        backend_root / "LOGIN_INFO.json",
+        project_root / "tmp_env_dev.txt",
+        project_root / "uvicorn.out.log",
+        project_root / "uvicorn.err.log",
+    ]
+    return [str(path) for path in candidates if path.exists()]
 
 
 def _split_csv(raw: str | None, fallback: List[str]) -> List[str]:
@@ -52,6 +66,7 @@ class Settings:
     refresh_token_minutes: int = int(os.getenv("ALTHEA_REFRESH_TOKEN_MINUTES", str(60 * 24 * 14)))
     model_selection_strategy: str = os.getenv("ALTHEA_MODEL_SELECTION", "active_approved")
     rq_queue_name: str = os.getenv("ALTHEA_RQ_QUEUE", "althea-pipeline")
+    rq_job_timeout_seconds: int = int(os.getenv("ALTHEA_RQ_JOB_TIMEOUT_SECONDS", "900"))
     object_storage_dirname: str = os.getenv("ALTHEA_OBJECT_STORAGE_DIR", "object_storage")
     reports_dirname: str = os.getenv("ALTHEA_REPORTS_DIR", "reports")
     dead_letter_dirname: str = os.getenv("ALTHEA_DEAD_LETTER_DIR", "dead_letter")
@@ -149,6 +164,22 @@ class Settings:
             raise RuntimeError("ALTHEA_JWT_SECRET must be rotated for non-development environments.")
         if self.is_non_dev and len(self.jwt_secret.strip()) < 32:
             raise RuntimeError("ALTHEA_JWT_SECRET must be at least 32 characters in non-development environments.")
+
+        weak_secret_tokens = {"replace-with-strong-secret", "your-secret-key", "your-32-character-secret-key-here-min32chars"}
+        if self.is_non_dev and any(token in (self.jwt_secret or "").lower() for token in weak_secret_tokens):
+            raise RuntimeError("ALTHEA_JWT_SECRET uses an insecure placeholder value in non-development environment.")
+
+        insecure_artifacts = _existing_insecure_artifacts(self.project_root, self.backend_root)
+        if insecure_artifacts and self.is_non_dev:
+            raise RuntimeError(
+                "Insecure runtime artifacts detected for non-development environment: "
+                + ", ".join(insecure_artifacts)
+            )
+        if insecure_artifacts and self.is_dev:
+            logger.warning(
+                "Insecure local artifacts detected. Remove them before committing. artifacts=%s",
+                insecure_artifacts,
+            )
 
 
 @lru_cache(maxsize=1)

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Optional
 
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from core.observability import record_copilot_generation, record_integration_error
 from core.security import get_authenticated_tenant_id
 
 router = APIRouter(tags=["alerts"])
@@ -282,11 +284,15 @@ def internal_ml_predict(payload: dict, request: Request, tenant_id: str = Depend
 @router.get("/alerts/{alert_id}/copilot_summary")
 def get_alert_copilot_summary(alert_id: str, request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
     run_id = _active_run_id(request, tenant_id)
+    started = time.perf_counter()
     try:
-        return request.app.state.ai_copilot_service.generate_copilot_summary(
+        payload = request.app.state.ai_copilot_service.generate_copilot_summary(
             tenant_id=tenant_id,
             alert_id=alert_id,
             run_id=run_id,
         )
+        record_copilot_generation("copilot_summary", time.perf_counter() - started)
+        return payload
     except ValueError as exc:
+        record_integration_error("copilot_summary")
         raise HTTPException(status_code=404, detail=str(exc))

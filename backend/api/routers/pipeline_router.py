@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
-from core.observability import metrics_response
+from core.observability import metrics_response, record_feature_retrieval, record_integration_error
 from core.security import get_authenticated_tenant_id
 from services.ingestion_service import IngestionError
 
@@ -49,7 +51,9 @@ def health_check(request: Request) -> dict:
         "database": False,
         "redis": False,
         "worker_queue": False,
+        "worker_heartbeat": False,
         "model_registry": False,
+        "feature_store": False,
     }
     details: dict[str, str] = {}
 
@@ -73,14 +77,37 @@ def health_check(request: Request) -> dict:
         depth = -1
 
     try:
+        heartbeat_keys = (
+            "heartbeat:worker:pipeline",
+            "heartbeat:worker:event",
+            "heartbeat:worker:streaming",
+            "heartbeat:worker:all_in_one",
+        )
+        checks["worker_heartbeat"] = any(
+            bool(request.app.state.cache.get_json(key, default=None)) for key in heartbeat_keys
+        )
+        if not checks["worker_heartbeat"]:
+            details["worker_heartbeat"] = "No active worker heartbeat keys found."
+    except Exception as exc:
+        details["worker_heartbeat"] = str(exc)
+
+    try:
         tenant_id = request.app.state.settings.default_tenant_id
         request.app.state.ml_service.list_versions(tenant_id)
         checks["model_registry"] = True
     except Exception as exc:
         details["model_registry"] = str(exc)
 
+    try:
+        tenant_id = request.app.state.settings.default_tenant_id
+        request.app.state.feature_registry.list_features(tenant_id=tenant_id)
+        checks["feature_store"] = True
+    except Exception as exc:
+        details["feature_store"] = str(exc)
+
     ok = all(checks.values())
-    return {"ok": ok, "checks": checks, "queue_depth": depth, "details": details}
+    status = "healthy" if ok else "degraded"
+    return {"ok": ok, "status": status, "checks": checks, "queue_depth": depth, "details": details}
 
 
 @router.get("/metrics")
@@ -179,40 +206,55 @@ def get_model_health(request: Request, tenant_id: str = Depends(get_authenticate
 
 @router.post("/api/stream/replay")
 def replay_stream(payload: StreamReplayRequest, request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
-    count = request.app.state.streaming_orchestrator.replay_topic(
-        topic=payload.topic,
-        start_event_id=payload.start_event_id,
-        batch_size=max(1, min(payload.batch_size, 5000)),
-    )
-    return {"replayed_events": count, "topic": payload.topic}
+    try:
+        count = request.app.state.streaming_orchestrator.replay_topic(
+            topic=payload.topic,
+            start_event_id=payload.start_event_id,
+            batch_size=max(1, min(payload.batch_size, 5000)),
+        )
+        return {"replayed_events": count, "topic": payload.topic}
+    except Exception:
+        record_integration_error("stream_replay")
+        raise
 
 
 @router.post("/api/stream/backfill")
 def backfill_stream(payload: StreamBackfillRequest, request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
-    ids = request.app.state.streaming_backbone.backfill(
-        topic=payload.topic,
-        tenant_id=tenant_id,
-        payloads=payload.events,
-    )
-    request.app.state.streaming_orchestrator.process_once(batch_size=1000)
-    return {"published_events": len(ids), "topic": payload.topic}
+    try:
+        ids = request.app.state.streaming_backbone.backfill(
+            topic=payload.topic,
+            tenant_id=tenant_id,
+            payloads=payload.events,
+        )
+        request.app.state.streaming_orchestrator.process_once(batch_size=1000)
+        return {"published_events": len(ids), "topic": payload.topic}
+    except Exception:
+        record_integration_error("stream_backfill")
+        raise
 
 
 @router.post("/api/stream/rescore")
 def rescore_alerts(payload: ModelRescoreRequest, request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
-    event_id = request.app.state.streaming_backbone.rescore(
-        tenant_id=tenant_id,
-        run_id=payload.run_id,
-        alert_ids=payload.alert_ids,
-        model_version=payload.model_version,
-    )
-    request.app.state.streaming_orchestrator.process_once(batch_size=1000)
-    return {"event_id": event_id, "rescore_alerts": len(payload.alert_ids)}
+    try:
+        event_id = request.app.state.streaming_backbone.rescore(
+            tenant_id=tenant_id,
+            run_id=payload.run_id,
+            alert_ids=payload.alert_ids,
+            model_version=payload.model_version,
+        )
+        request.app.state.streaming_orchestrator.process_once(batch_size=1000)
+        return {"event_id": event_id, "rescore_alerts": len(payload.alert_ids)}
+    except Exception:
+        record_integration_error("stream_rescore")
+        raise
 
 
 @router.get("/api/features/registry")
 def list_feature_registry(request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
-    return {"features": request.app.state.feature_registry.list_features(tenant_id)}
+    started = time.perf_counter()
+    features = request.app.state.feature_registry.list_features(tenant_id)
+    record_feature_retrieval("feature_registry", time.perf_counter() - started)
+    return {"features": features}
 
 
 @router.post("/api/model-governance/approve")

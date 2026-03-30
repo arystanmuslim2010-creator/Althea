@@ -5,22 +5,15 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import text
+from workflows.state_model import ALLOWED_CASE_TRANSITIONS, CASE_STATE_TO_WORKFLOW, WORKFLOW_TO_CASE_STATE
 
-WORKFLOW_STATES = {
-    "new",
-    "assigned",
-    "investigating",
-    "escalated",
-    "sar_candidate",
-    "closed",
-}
-
+WORKFLOW_STATES = set(WORKFLOW_TO_CASE_STATE.keys())
 VALID_TRANSITIONS: dict[str, set[str]] = {
     "new": {"assigned", "closed"},
-    "assigned": {"investigating", "escalated", "closed"},
-    "investigating": {"sar_candidate", "escalated", "closed"},
-    "escalated": {"investigating", "sar_candidate", "closed"},
-    "sar_candidate": {"closed"},
+    "assigned": {CASE_STATE_TO_WORKFLOW[s] for s in ALLOWED_CASE_TRANSITIONS["open"]},
+    "investigating": {CASE_STATE_TO_WORKFLOW[s] for s in ALLOWED_CASE_TRANSITIONS["under_review"]},
+    "escalated": {CASE_STATE_TO_WORKFLOW[s] for s in ALLOWED_CASE_TRANSITIONS["escalated"]},
+    "sar_candidate": {CASE_STATE_TO_WORKFLOW[s] for s in ALLOWED_CASE_TRANSITIONS["sar_filed"]},
     "closed": set(),
 }
 
@@ -94,8 +87,10 @@ class InvestigationWorkflowEngine:
         if target not in VALID_TRANSITIONS.get(from_state, set()):
             raise ValueError(f"Invalid transition: {from_state} -> {target}")
 
+        case_state = WORKFLOW_TO_CASE_STATE.get(target, "open")
         payload["workflow_state"] = target
-        payload["status"] = target.upper()
+        payload["status"] = case_state.upper()
+        payload["state"] = case_state.upper()
         payload["sla_due_at"] = payload.get("sla_due_at") or (self._now() + timedelta(hours=48)).isoformat()
         payload["escalation_level"] = escalation_level or payload.get("escalation_level") or "analyst"
         payload["updated_at"] = self._now().isoformat()
@@ -104,7 +99,7 @@ class InvestigationWorkflowEngine:
             {
                 "case_id": case_id,
                 "tenant_id": tenant_id,
-                "status": target,
+                "status": case_state,
                 "created_by": case.get("created_by"),
                 "assigned_to": case.get("assigned_to"),
                 "alert_id": case.get("alert_id"),

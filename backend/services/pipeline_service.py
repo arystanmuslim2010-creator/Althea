@@ -74,10 +74,25 @@ class PipelineService:
     def get_job_status(self, tenant_id: str, job_id: str) -> dict[str, Any]:
         record_queue_depth(self._job_queue.queue_depth(self._settings.rq_queue_name))
         cached = self._job_queue.get_status(job_id)
-        if cached:
-            return cached
         job = self._repository.get_pipeline_job(tenant_id, job_id)
-        return job or {"job_id": job_id, "status": "unknown"}
+        if job:
+            db_status = str(job.get("status") or "").lower().strip()
+            if not cached:
+                return job
+
+            cached_status = str(cached.get("status") or "").lower().strip()
+            # A stale worker can emit "discarded" when API and worker are briefly out of sync.
+            # If DB still tracks this job as active/terminal, treat DB as source of truth.
+            if cached_status == "discarded" and db_status not in {"unknown", ""}:
+                return job
+
+            # Prefer more advanced cached progression when DB still lags behind queue state.
+            if cached_status in {"running", "completed", "failed"} and db_status in {"queued", "running"}:
+                merged = dict(job)
+                merged.update(cached)
+                return merged
+            return job
+        return cached or {"job_id": job_id, "status": "unknown"}
 
     def enqueue_pipeline_run(self, tenant_id: str, user_scope: str, initiated_by: str | None) -> dict[str, Any]:
         context = self.get_runtime_context(tenant_id, user_scope)
@@ -111,6 +126,7 @@ class PipelineService:
                 queue_mode=self._settings.queue_mode,
                 redis_url=self._settings.redis_url,
                 queue_name=self._settings.rq_queue_name,
+                job_timeout_seconds=self._settings.rq_job_timeout_seconds,
             )
         except Exception as exc:
             # Provide a deterministic, user-actionable error instead of generic 500 when queue infra is unavailable.

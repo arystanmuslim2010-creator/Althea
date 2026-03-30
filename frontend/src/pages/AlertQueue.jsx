@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api, isConnectionError } from '../services/api'
 import { useLanguage } from '../contexts/LanguageContext'
 
@@ -258,6 +259,7 @@ const ALERT_QUEUE_I18N = {
 }
 
 export function AlertQueue() {
+  const navigate = useNavigate()
   const { language, t } = useLanguage()
   const ui = ALERT_QUEUE_I18N[language] ?? ALERT_QUEUE_I18N.en
   const tabs = TAB_IDS.map((id) => ({ id, label: ui.tabs[id] ?? id }))
@@ -271,6 +273,9 @@ export function AlertQueue() {
   const [caseCreated, setCaseCreated] = useState(null)
   const [aiSummary, setAiSummary] = useState(null)
   const [aiSummaryLoading, setAiSummaryLoading] = useState(false)
+  const [outcome, setOutcome] = useState(null)
+  const [outcomeReason, setOutcomeReason] = useState('')
+  const [outcomeLoading, setOutcomeLoading] = useState(false)
   const [activeTab, setActiveTab] = useState('overview')
   const [moreFiltersOpen, setMoreFiltersOpen] = useState(false)
   const [filters, setFilters] = useState({
@@ -318,6 +323,7 @@ export function AlertQueue() {
   const loadDetail = async (id) => {
     setSelected(id)
     setAiSummary(null)
+    setOutcome(null)
     try {
       const [d, summaryRes] = await Promise.all([
         api.getAlert(id),
@@ -325,9 +331,12 @@ export function AlertQueue() {
       ])
       setAlertDetail(d)
       setAiSummary(summaryRes?.summary || null)
+      const existingOutcome = await api.getAlertOutcome(id).catch(() => null)
+      setOutcome(existingOutcome)
     } catch {
       setAlertDetail(null)
       setAiSummary(null)
+      setOutcome(null)
     }
   }
 
@@ -363,9 +372,37 @@ export function AlertQueue() {
       const { actor } = await api.getActor().catch(() => ({ actor: 'Analyst_1' }))
       const res = await api.createCase([selected], actor)
       setCaseCreated(res.case_id)
+      if (res?.case_id) {
+        navigate(`/investigation/alerts/${selected}`, {
+          state: {
+            created_case_id: res.case_id,
+            source_alert_id: selected,
+          },
+        })
+        return
+      }
       setTimeout(() => setCaseCreated(null), 3000)
     } catch (e) {
       setError(e.message)
+    }
+  }
+
+  const submitOutcome = async (decision) => {
+    if (!selected || !decision) return
+    setOutcomeLoading(true)
+    try {
+      const payload = {
+        analyst_decision: decision,
+        decision_reason: outcomeReason || null,
+        risk_score_at_decision: Number(alertDetail?.risk_score ?? 0),
+      }
+      const res = await api.recordAlertOutcome(selected, payload)
+      setOutcome(res)
+      setOutcomeReason('')
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setOutcomeLoading(false)
     }
   }
 
@@ -584,7 +621,7 @@ export function AlertQueue() {
                       </div>
                     )}
                     <div className="mt-3 p-4 rounded-md bg-amber-500/10 border-l-4 border-amber-500 text-[var(--text)] text-[0.8125rem]">
-                      Outcome feedback: not yet available
+                      Outcome feedback: {outcome?.analyst_decision || 'not yet recorded'}
                     </div>
                     <div className="flex items-center gap-2 mt-3">
                       <button type="button" className="px-4 py-2 text-sm font-medium rounded-md bg-[var(--accent2)] text-white dark:bg-white dark:text-[#0c0c0c] hover:brightness-105" onClick={handleCreateCase}>
@@ -675,11 +712,20 @@ export function AlertQueue() {
                     <div className="mb-4">
                       <h5 className="m-0 mb-2 text-[0.8125rem]">Outcome Feedback</h5>
                       <p className="text-xs text-[var(--muted)] m-0 mb-2">Record TP or FP. Stored for analysis.</p>
+                      <input
+                        type="text"
+                        className="w-full min-w-[140px] py-1.5 px-2 text-[0.8125rem] rounded-md border border-[var(--border)] bg-[var(--surface)] mb-2"
+                        placeholder="Outcome reason (optional)"
+                        value={outcomeReason}
+                        onChange={(e) => setOutcomeReason(e.target.value)}
+                      />
                       <div className="flex gap-2">
-                        <button type="button" className="px-4 py-2 text-sm font-medium rounded-md border border-[var(--border)] bg-transparent">Mark TP</button>
-                        <button type="button" className="px-4 py-2 text-sm font-medium rounded-md border border-[var(--border)] bg-transparent">Mark FP</button>
+                        <button type="button" className="px-4 py-2 text-sm font-medium rounded-md border border-[var(--border)] bg-transparent disabled:opacity-60" disabled={outcomeLoading} onClick={() => submitOutcome('true_positive')}>Mark TP</button>
+                        <button type="button" className="px-4 py-2 text-sm font-medium rounded-md border border-[var(--border)] bg-transparent disabled:opacity-60" disabled={outcomeLoading} onClick={() => submitOutcome('false_positive')}>Mark FP</button>
                       </div>
-                      <p className="text-xs text-[var(--muted)] mt-2 m-0">No outcome recorded yet.</p>
+                      <p className="text-xs text-[var(--muted)] mt-2 m-0">
+                        {outcome ? `Recorded: ${outcome.analyst_decision}` : 'No outcome recorded yet.'}
+                      </p>
                     </div>
                   </div>
                 )}

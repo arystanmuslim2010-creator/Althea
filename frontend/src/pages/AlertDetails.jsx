@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
+import { InvestigationGraph } from '../components/InvestigationGraph'
 
 function tryParseJson(value, fallback) {
   if (value == null) return fallback
@@ -23,28 +24,91 @@ export function AlertDetails() {
   const [noteText, setNoteText] = useState('')
   const [queueItem, setQueueItem] = useState(null)
   const [caseInfo, setCaseInfo] = useState(null)
+  const [context, setContext] = useState(null)
+  const [networkGraph, setNetworkGraph] = useState(null)
+  const [graphLoading, setGraphLoading] = useState(false)
+  const [graphError, setGraphError] = useState('')
+  const [narrativeDraft, setNarrativeDraft] = useState(null)
+  const [narrativeLoading, setNarrativeLoading] = useState(false)
+  const [narrativeError, setNarrativeError] = useState('')
+  const [copyStatus, setCopyStatus] = useState('')
+  const [outcome, setOutcome] = useState(null)
+  const [outcomeReason, setOutcomeReason] = useState('')
+  const [actionBusy, setActionBusy] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
   const canAddNotes = user?.role === 'analyst' || user?.role === 'investigator' || user?.role === 'lead' || user?.role === 'admin'
   const canCreateCase = canAddNotes
 
-  const load = async () => {
+  const loadGraph = async (alertId) => {
+    setGraphLoading(true)
+    setGraphError('')
     try {
-      const [a, e, n, q] = await Promise.all([
+      const graph = await api.getNetworkGraph(alertId)
+      setNetworkGraph(graph)
+    } catch (err) {
+      setGraphError(err.message || 'Failed to load network graph')
+    } finally {
+      setGraphLoading(false)
+    }
+  }
+
+  const loadNarrativeDraft = async (alertId) => {
+    setNarrativeLoading(true)
+    setNarrativeError('')
+    try {
+      const draft = await api.getNarrativeDraft(alertId)
+      setNarrativeDraft(draft)
+    } catch (err) {
+      setNarrativeError(err.message || 'Failed to load narrative draft')
+    } finally {
+      setNarrativeLoading(false)
+    }
+  }
+
+  const copyNarrative = async () => {
+    const text = narrativeDraft?.narrative || ''
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopyStatus('Copied')
+    } catch {
+      setCopyStatus('Copy failed')
+    } finally {
+      setTimeout(() => setCopyStatus(''), 1600)
+    }
+  }
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const [a, e, n, q, ctx, o] = await Promise.all([
         api.getAlert(id),
         api.getAlertExplain(id),
         api.getAlertNotes(id),
         api.getWorkQueue(),
+        api.getInvestigationContext(id).catch(() => null),
+        api.getAlertOutcome(id).catch(() => null),
       ])
       setAlert(a)
       setExplain(e)
       setNotes(n.notes || [])
+      setContext(ctx)
+      setNetworkGraph(ctx?.network_graph || null)
+      setNarrativeDraft(ctx?.narrative_draft || null)
+      setOutcome(o)
       const matched = (q.queue || []).find((item) => String(item.alert_id) === String(id)) || null
       setQueueItem(matched)
-      setCaseInfo(matched?.case_id ? { case_id: matched.case_id, status: matched.case_status } : null)
+      const resolvedCase = ctx?.case_status || (matched?.case_id ? { case_id: matched.case_id, status: matched.case_status || matched.status } : null)
+      setCaseInfo(resolvedCase)
       setError('')
     } catch (err) {
       setError(err.message || 'Failed to load alert')
+    } finally {
+      setLoading(false)
+      void loadGraph(id)
+      void loadNarrativeDraft(id)
     }
   }
 
@@ -70,11 +134,83 @@ export function AlertDetails() {
 
   const createCase = async () => {
     try {
+      setActionBusy(true)
       const c = await api.createInvestigationCase(id)
       setCaseInfo(c)
+      if (c?.case_id) {
+        navigate(`/investigation/alerts/${id}`, {
+          state: {
+            created_case_id: c.case_id,
+            source_alert_id: id,
+          },
+        })
+        return
+      }
       await load()
     } catch (err) {
       setError(err.message || 'Failed to create case')
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
+  const assignToMe = async () => {
+    if (!user?.user_id) return
+    try {
+      setActionBusy(true)
+      await api.workflowAssignAlert(id, user.user_id, user.user_id)
+      await load()
+    } catch (err) {
+      setError(err.message || 'Failed to assign alert')
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
+  const escalateAlert = async () => {
+    if (!user?.user_id) return
+    try {
+      setActionBusy(true)
+      await api.workflowEscalateAlert(id, user.user_id, 'manual_escalation')
+      await load()
+    } catch (err) {
+      setError(err.message || 'Failed to escalate alert')
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
+  const closeAlert = async () => {
+    if (!user?.user_id) return
+    try {
+      setActionBusy(true)
+      await api.workflowCloseAlert(id, user.user_id, 'manual_close')
+      await load()
+    } catch (err) {
+      setError(err.message || 'Failed to close alert')
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
+  const saveOutcome = async (decision) => {
+    if (!decision) return
+    try {
+      setActionBusy(true)
+      const payload = {
+        analyst_decision: decision,
+        decision_reason: outcomeReason || null,
+        analyst_id: user?.user_id || null,
+        model_version: context?.model_metadata?.model_version || alert?.model_version || null,
+        risk_score_at_decision: Number(alert?.risk_score ?? 0),
+      }
+      const res = await api.recordAlertOutcome(id, payload)
+      setOutcome(res)
+      setOutcomeReason('')
+    } catch (err) {
+      setError(err.message || 'Failed to record outcome')
+    } finally {
+      setActionBusy(false)
     }
   }
 
@@ -88,6 +224,7 @@ export function AlertDetails() {
         </div>
       </div>
       {error && <p className="text-sm text-red-600">{error}</p>}
+      {loading && <p className="text-sm text-slate-500">Loading investigation context...</p>}
 
       <div className="grid md:grid-cols-2 gap-4">
         <div className="border rounded p-4 bg-white space-y-1">
@@ -97,6 +234,8 @@ export function AlertDetails() {
           <p>Risk Score: {alert?.risk_score ?? '-'}</p>
           <p>Assigned To: {queueItem?.assigned_to || 'Unassigned'}</p>
           <p>Status: {queueItem?.status || 'open'}</p>
+          <p>Alert Age: {queueItem?.alert_age_hours != null ? `${queueItem.alert_age_hours}h` : '-'}</p>
+          <p>Overdue Review: {queueItem?.overdue_review ? 'Yes' : 'No'}</p>
         </div>
         <div className="border rounded p-4 bg-white space-y-2">
           <h2 className="font-semibold">Case Status</h2>
@@ -105,10 +244,19 @@ export function AlertDetails() {
           {caseInfo?.case_id ? (
             <Link className="text-blue-600" to={`/investigation/cases/${caseInfo.case_id}`}>Open Case</Link>
           ) : canCreateCase ? (
-            <button className="px-3 py-1 border rounded" onClick={createCase}>Create Case</button>
+            <button className="px-3 py-1 border rounded" onClick={createCase} disabled={actionBusy}>Create Case</button>
           ) : (
             <span className="text-xs text-slate-500">Not permitted for your role.</span>
           )}
+        </div>
+      </div>
+
+      <div className="border rounded p-4 bg-white space-y-2">
+        <h2 className="font-semibold">Workflow Actions</h2>
+        <div className="flex gap-2 flex-wrap">
+          <button className="px-3 py-1 border rounded" onClick={assignToMe} disabled={actionBusy}>Assign To Me</button>
+          <button className="px-3 py-1 border rounded" onClick={escalateAlert} disabled={actionBusy}>Escalate</button>
+          <button className="px-3 py-1 border rounded" onClick={closeAlert} disabled={actionBusy}>Close</button>
         </div>
       </div>
 
@@ -125,6 +273,86 @@ export function AlertDetails() {
       <div className="border rounded p-4 bg-white space-y-2">
         <h2 className="font-semibold">Rule Signals</h2>
         <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(rulesJson, null, 2)}</pre>
+      </div>
+
+      <div className="border rounded p-4 bg-white space-y-2">
+        <h2 className="font-semibold">Investigation Intelligence</h2>
+        <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(context?.investigation_summary || {}, null, 2)}</pre>
+        <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(context?.risk_explanation || {}, null, 2)}</pre>
+      </div>
+
+      <div className="border rounded p-4 bg-white space-y-2">
+        <h2 className="font-semibold">Network Graph</h2>
+        <p className="text-sm">
+          Nodes: {networkGraph?.summary?.node_count ?? networkGraph?.node_count ?? 0} | Edges: {networkGraph?.summary?.edge_count ?? networkGraph?.edge_count ?? 0}
+        </p>
+        {graphLoading && <p className="text-xs text-slate-500">Loading graph...</p>}
+        {graphError && <p className="text-xs text-amber-600">{graphError}</p>}
+        <InvestigationGraph graph={networkGraph} />
+        <details>
+          <summary className="cursor-pointer text-xs text-slate-500">Raw graph payload</summary>
+          <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(networkGraph || {}, null, 2)}</pre>
+        </details>
+      </div>
+
+      <div className="border rounded p-4 bg-white space-y-2">
+        <h2 className="font-semibold">Investigation Narrative Draft</h2>
+        {narrativeLoading && <p className="text-xs text-slate-500">Loading narrative draft...</p>}
+        {narrativeError && <p className="text-xs text-amber-600">{narrativeError}</p>}
+        <p className="text-sm font-medium">{narrativeDraft?.title || 'Investigation Narrative Draft'}</p>
+        <p className="text-xs text-slate-500">Draft for analyst review. Validate all statements before finalizing case notes.</p>
+        <pre className="text-xs whitespace-pre-wrap">{narrativeDraft?.narrative || 'Draft unavailable.'}</pre>
+        <div className="grid md:grid-cols-3 gap-3 text-xs">
+          <div>
+            <h3 className="font-semibold mb-1">Activity Summary</h3>
+            <p>{narrativeDraft?.sections?.activity_summary || '-'}</p>
+          </div>
+          <div>
+            <h3 className="font-semibold mb-1">Risk Indicators</h3>
+            <ul className="list-disc pl-4">
+              {(narrativeDraft?.sections?.risk_indicators || []).map((item, idx) => <li key={`risk-${idx}`}>{item}</li>)}
+            </ul>
+          </div>
+          <div>
+            <h3 className="font-semibold mb-1">Recommended Follow-up</h3>
+            <ul className="list-disc pl-4">
+              {(narrativeDraft?.sections?.recommended_follow_up || []).map((item, idx) => <li key={`follow-${idx}`}>{item}</li>)}
+            </ul>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button className="px-3 py-1 border rounded" onClick={copyNarrative} disabled={!narrativeDraft?.narrative}>Copy Narrative</button>
+          {copyStatus && <span className="text-xs text-slate-500">{copyStatus}</span>}
+        </div>
+      </div>
+
+      <div className="border rounded p-4 bg-white space-y-2">
+        <h2 className="font-semibold">Guidance and SAR Draft</h2>
+        <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(context?.investigation_steps || {}, null, 2)}</pre>
+        <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(context?.sar_draft || {}, null, 2)}</pre>
+      </div>
+
+      <div className="border rounded p-4 bg-white space-y-2">
+        <h2 className="font-semibold">Cross-Tenant Signals and Model Metadata</h2>
+        <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(context?.global_signals || [], null, 2)}</pre>
+        <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(context?.model_metadata || {}, null, 2)}</pre>
+      </div>
+
+      <div className="border rounded p-4 bg-white space-y-2">
+        <h2 className="font-semibold">Outcome Feedback</h2>
+        <div className="flex gap-2 flex-wrap">
+          <button className="px-3 py-1 border rounded" onClick={() => saveOutcome('true_positive')} disabled={actionBusy}>Mark TP</button>
+          <button className="px-3 py-1 border rounded" onClick={() => saveOutcome('false_positive')} disabled={actionBusy}>Mark FP</button>
+          <button className="px-3 py-1 border rounded" onClick={() => saveOutcome('escalated')} disabled={actionBusy}>Mark Escalated</button>
+          <button className="px-3 py-1 border rounded" onClick={() => saveOutcome('sar_filed')} disabled={actionBusy}>Mark SAR Filed</button>
+        </div>
+        <input
+          className="w-full border rounded px-3 py-2 text-sm"
+          value={outcomeReason}
+          onChange={(e) => setOutcomeReason(e.target.value)}
+          placeholder="Outcome reason (optional)"
+        />
+        <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(outcome || context?.outcome || {}, null, 2)}</pre>
       </div>
 
       <div className="border rounded p-4 bg-white space-y-3">

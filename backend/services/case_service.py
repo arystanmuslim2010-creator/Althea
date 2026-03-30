@@ -6,14 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from storage.postgres_repository import EnterpriseRepository
-
-ALLOWED_CASE_TRANSITIONS: dict[str, set[str]] = {
-    "open": {"under_review", "escalated", "closed"},
-    "under_review": {"escalated", "sar_filed", "closed"},
-    "escalated": {"under_review", "sar_filed", "closed"},
-    "sar_filed": {"closed"},
-    "closed": set(),
-}
+from workflows.state_model import ALLOWED_CASE_TRANSITIONS, normalize_case_state
 
 
 class CaseWorkflowService:
@@ -142,8 +135,9 @@ class CaseWorkflowService:
             return False, "Case not found", None
 
         payload = dict(existing.get("payload_json") or {})
-        current_state = str(payload.get("status", "OPEN")).lower()
-        new_state = (status or current_state).lower()
+        current_state = normalize_case_state(payload.get("status")) or "open"
+        requested_state = normalize_case_state(status) if status is not None else current_state
+        new_state = requested_state or current_state
         if new_state not in ALLOWED_CASE_TRANSITIONS:
             return False, f"Invalid status: {new_state}", None
         if new_state != current_state and new_state not in ALLOWED_CASE_TRANSITIONS.get(current_state, set()):

@@ -163,3 +163,24 @@ backend/data/reports/
 backend/data/model_cache/
 backend/data/object_storage/
 backend/data/dead_letter/
+
+# Sensitive local auth/session artifacts
+backend/TOKEN.txt
+backend/LOGIN_INFO.json
+**/*TOKEN*.txt
+**/*token*.txt
+**/*login*info*.json
+**/auth_dump*.json
+!backend/examples/sample_login_info.json
+
+# Local runtime and exports
+*.sqlite
+*.sqlite3
+*.parquet
+*.csv.tmp
+tmp/
+tmp/**
+tmp_env*.txt
+exports/
+exports/**
+**/.ipynb_checkpoints/

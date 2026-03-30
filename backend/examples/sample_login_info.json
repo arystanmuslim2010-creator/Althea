@@ -1,0 +1,10 @@
+﻿{
+  "token": "<access-token-from-api-auth-login>",
+  "email": "analyst@bank.com",
+  "password": "<set-via-env-or-vault>",
+  "frontend_url": "http://localhost:5173",
+  "api_url": "http://localhost:8000",
+  "tenant_id": "default-bank",
+  "run_id": null,
+  "notes": "Sample structure only. Do not commit real credentials."
+}

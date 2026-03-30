@@ -6,6 +6,7 @@ export function OpsGovernance() {
   const [health, setHealth] = useState(null)
   const [capacity, setCapacity] = useState(50)
   const [queue, setQueue] = useState([])
+  const [slaBreachesApi, setSlaBreachesApi] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -15,16 +16,19 @@ export function OpsGovernance() {
       api.getOpsMetrics(capacity),
       api.getHealth(),
       api.getWorkQueue(),
+      api.getSlaBreaches().catch(() => ({ breaches: [] })),
     ])
-      .then(([opsRes, healthRes, queueRes]) => {
+      .then(([opsRes, healthRes, queueRes, slaRes]) => {
         setOps(opsRes)
         setHealth(healthRes)
         setQueue(queueRes?.queue || [])
+        setSlaBreachesApi(slaRes?.breaches || [])
       })
       .catch((e) => {
         setOps(null)
         setHealth(null)
         setQueue([])
+        setSlaBreachesApi([])
         setError(e?.message || 'Failed to load metrics')
       })
       .finally(() => setLoading(false))
@@ -98,6 +102,7 @@ export function OpsGovernance() {
           <div className="flex flex-col gap-0.5"><span className="text-[0.7rem] text-[var(--muted)] uppercase">Open Queue</span><span className="font-semibold text-[0.9375rem]">{openQueue.length}</span></div>
           <div className="flex flex-col gap-0.5"><span className="text-[0.7rem] text-[var(--muted)] uppercase">High Risk Open</span><span className="font-semibold text-[0.9375rem]">{highRiskOpen.length}</span></div>
           <div className="flex flex-col gap-0.5"><span className="text-[0.7rem] text-[var(--muted)] uppercase">SLA Breaches (&gt;24h)</span><span className="font-semibold text-[0.9375rem]">{slaBreaches.length}</span></div>
+          <div className="flex flex-col gap-0.5"><span className="text-[0.7rem] text-[var(--muted)] uppercase">Workflow SLA Breaches</span><span className="font-semibold text-[0.9375rem]">{slaBreachesApi.length}</span></div>
         </div>
       </section>
       <section className="p-5 rounded-lg border border-[var(--border)] bg-[var(--surface)] shadow-md mb-4">
