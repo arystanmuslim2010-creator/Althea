@@ -49,7 +49,7 @@ class SARNarrativeGenerator:
             for item in contrib[:3]:
                 if isinstance(item, dict) and item.get("feature"):
                     feat = str(item["feature"]).replace("_", " ")
-                    impact = float(item.get("contribution", item.get("shap_value", 0.0)) or 0.0)
+                    impact = float(item.get("contribution", item.get("shap_value", item.get("value", 0.0))) or 0.0)
                     if abs(impact) > 0.05:
                         drivers.append(f"{feat} anomaly")
 

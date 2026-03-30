@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   mapCaseStatusForUpdate,
+  normalizeExplanationPayload,
   normalizeInvestigationContext,
   normalizeNarrativeDraft,
   normalizeNetworkGraph,
@@ -40,5 +41,35 @@ describe('contracts mappers', () => {
     expect(draft.title).toBe('Investigation Narrative Draft')
     expect(Array.isArray(draft.sections.risk_indicators)).toBe(true)
     expect(Array.isArray(draft.source_signals.reason_codes)).toBe(true)
+  })
+
+  it('normalizes explanation payload for SHAP method', () => {
+    const explain = normalizeExplanationPayload({
+      feature_attribution: [{ feature: 'amount', value: 0.77, shap_value: 0.77 }],
+      risk_reason_codes: ['amount:increase'],
+      explanation_method: 'shap',
+      explanation_status: 'ok',
+    })
+    expect(explain.explanation_method).toBe('shap')
+    expect(explain.explanation_status).toBe('ok')
+    expect(explain.is_fallback).toBe(false)
+    expect(explain.feature_attribution[0].feature).toBe('amount')
+  })
+
+  it('normalizes fallback explanation payload and provides disclaimer', () => {
+    const explain = normalizeExplanationPayload({
+      feature_attribution: [{ feature: 'amount', value: 10000 }],
+      explanation_method: 'numeric_fallback',
+    })
+    expect(explain.explanation_method).toBe('numeric_fallback')
+    expect(explain.explanation_status).toBe('fallback')
+    expect(explain.is_fallback).toBe(true)
+    expect(String(explain.explanation_warning || '').toLowerCase()).toContain('heuristic')
+  })
+
+  it('handles explanation payload with missing metadata from older records', () => {
+    const explain = normalizeExplanationPayload([{ feature: 'amount', value: 5 }])
+    expect(explain.explanation_method).toBe('unknown')
+    expect(Array.isArray(explain.feature_attribution)).toBe(true)
   })
 })

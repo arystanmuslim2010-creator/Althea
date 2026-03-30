@@ -71,7 +71,7 @@ class RiskExplanationService:
             feat = str(item.get("feature") or "").strip()
             if not feat:
                 continue
-            impact = float(item.get("contribution", item.get("shap_value", 0.0)) or 0.0)
+            impact = float(item.get("contribution", item.get("shap_value", item.get("value", 0.0))) or 0.0)
             description = self._FEATURE_DESCRIPTIONS.get(feat, feat.replace("_", " "))
             drivers.append(
                 {
@@ -158,6 +158,10 @@ class RiskExplanationService:
             "rule_hits": rule_drivers,
             "reason_codes": reason_code_drivers,
             "model_version": explanation.get("model_version", "unknown"),
+            "explanation_method": explanation.get("explanation_method", "unknown"),
+            "explanation_status": explanation.get("explanation_status", "unknown"),
+            "explanation_warning": explanation.get("explanation_warning"),
+            "explanation_warning_code": explanation.get("explanation_warning_code"),
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
 

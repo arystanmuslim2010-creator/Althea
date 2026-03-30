@@ -248,21 +248,37 @@ class GovernanceService:
         for base_row in governed.to_dict("records"):
             row = dict(base_row)
             existing_top = self._parse_json(row.get("top_feature_contributions_json"), [])
+            explanation: dict[str, Any] = {}
             if self._explainability_service is not None:
                 explanation = self._explainability_service.generate_explanation(
                     model=None,
                     feature_frame=pd.DataFrame([row]),
+                    model_version=model_version,
                     fallback_contributions=existing_top if isinstance(existing_top, list) else [],
+                    tenant_id=tenant_id,
+                    alert_id=str(row.get("alert_id") or ""),
                 )
                 row = self._explainability_service.merge_into_alert_metadata(row, explanation)
                 row["risk_reason_codes"] = explanation.get("risk_reason_codes", [])
                 row["feature_attribution"] = explanation.get("feature_attribution", [])
             if not row.get("ml_signals_json"):
                 signals = {
-                    "model_version": model_version,
-                    "risk_reason_codes": row.get("risk_reason_codes", []),
-                    "top_feature_contributions": row.get("feature_attribution") or existing_top,
-                }
+                        "model_version": model_version,
+                        "risk_reason_codes": row.get("risk_reason_codes", []),
+                        "top_feature_contributions": row.get("feature_attribution") or existing_top,
+                        "explanation_method": explanation.get("explanation_method", "unknown")
+                        if self._explainability_service is not None
+                        else "unknown",
+                        "explanation_status": explanation.get("explanation_status", "unknown")
+                        if self._explainability_service is not None
+                        else "unknown",
+                        "explanation_warning": explanation.get("explanation_warning")
+                        if self._explainability_service is not None
+                        else None,
+                        "explanation_warning_code": explanation.get("explanation_warning_code")
+                        if self._explainability_service is not None
+                        else None,
+                    }
                 row["ml_signals_json"] = json.dumps(signals, ensure_ascii=True)
             if not row.get("features_json"):
                 feature_snapshot: dict[str, Any] = {}
@@ -286,6 +302,18 @@ class GovernanceService:
                     "model_version": model_version,
                     "risk_reason_codes": row.get("risk_reason_codes", []),
                     "feature_attribution": row.get("feature_attribution", []),
+                    "explanation_method": explanation.get("explanation_method", "unknown")
+                    if self._explainability_service is not None
+                    else "unknown",
+                    "explanation_status": explanation.get("explanation_status", "unknown")
+                    if self._explainability_service is not None
+                    else "unknown",
+                    "explanation_warning": explanation.get("explanation_warning")
+                    if self._explainability_service is not None
+                    else None,
+                    "explanation_warning_code": explanation.get("explanation_warning_code")
+                    if self._explainability_service is not None
+                    else None,
                 },
                 ensure_ascii=True,
             )

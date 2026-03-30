@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 import { InvestigationGraph } from '../components/InvestigationGraph'
+import { normalizeExplanationPayload } from '../services/contracts'
 
 function tryParseJson(value, fallback) {
   if (value == null) return fallback
@@ -119,6 +120,10 @@ export function AlertDetails() {
   const riskExplain = useMemo(() => tryParseJson(alert?.risk_explain_json, {}), [alert])
   const featuresJson = useMemo(() => tryParseJson(alert?.top_feature_contributions_json, []), [alert])
   const rulesJson = useMemo(() => tryParseJson(alert?.rules_json, []), [alert])
+  const normalizedExplanation = useMemo(
+    () => normalizeExplanationPayload(explain?.risk_explanation || riskExplain || {}),
+    [explain, riskExplain],
+  )
 
   const addNote = async () => {
     const text = noteText.trim()
@@ -262,7 +267,19 @@ export function AlertDetails() {
 
       <div className="border rounded p-4 bg-white space-y-2">
         <h2 className="font-semibold">Risk Explanation</h2>
-        <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(explain || riskExplain || {}, null, 2)}</pre>
+        <p className="text-sm">
+          Method: <strong>{normalizedExplanation.explanation_method || 'unknown'}</strong> | Status: <strong>{normalizedExplanation.explanation_status || 'unknown'}</strong>
+        </p>
+        {(normalizedExplanation.explanation_method === 'shap' || normalizedExplanation.explanation_method === 'tree_shap') && (
+          <p className="text-xs text-blue-700">Model attribution available (SHAP-based).</p>
+        )}
+        {normalizedExplanation.is_fallback && (
+          <p className="text-xs text-amber-700">
+            Heuristic feature highlights; not model contribution attribution.
+            {normalizedExplanation.explanation_warning ? ` ${normalizedExplanation.explanation_warning}` : ''}
+          </p>
+        )}
+        <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(normalizedExplanation, null, 2)}</pre>
       </div>
 
       <div className="border rounded p-4 bg-white space-y-2">

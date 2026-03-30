@@ -216,26 +216,50 @@ class PipelineService:
         ml_signals_json: list[str] = []
         for idx in range(len(alerts_df)):
             row_explain = explanations[idx] if idx < len(explanations) else {}
-            top = row_explain.get("top_features", []) if isinstance(row_explain, dict) else []
-            top_contrib_json.append(json.dumps(top, ensure_ascii=True))
+
+            # New explanation format from unified explainability service
+            # Contains: feature_attribution, risk_reason_codes, explanation_method, explanation_status, explanation_warning
+            feature_attribution = row_explain.get("feature_attribution", []) if isinstance(row_explain, dict) else []
+
+            # top_feature_contributions: list of {feature, value, shap_value} dicts
+            top_contrib_json.append(json.dumps(feature_attribution, ensure_ascii=True))
+
+            # top_features: list of feature names only
             top_features_json.append(
-                json.dumps([item.get("feature") for item in top if isinstance(item, dict) and item.get("feature")], ensure_ascii=True)
+                json.dumps(
+                    [item.get("feature") for item in feature_attribution if isinstance(item, dict) and item.get("feature")],
+                    ensure_ascii=True,
+                )
             )
+
+            # risk_explain_json: detailed explanation with metadata
             explain_json.append(
                 json.dumps(
                     {
                         "base_prob": float(alerts_df["risk_prob"].iloc[idx]),
                         "model_version": model_version,
-                        "contributions": top,
+                        "contributions": feature_attribution,
+                        "feature_attribution": feature_attribution,
+                        "risk_reason_codes": row_explain.get("risk_reason_codes", []),
+                        "explanation_method": row_explain.get("explanation_method", "unknown"),
+                        "explanation_status": row_explain.get("explanation_status", "unknown"),
+                        "explanation_warning": row_explain.get("explanation_warning"),
+                        "explanation_warning_code": row_explain.get("explanation_warning_code"),
                     },
                     ensure_ascii=True,
                 )
             )
+
+            # ml_signals_json: behavioral signals for investigation
             ml_signals_json.append(
                 json.dumps(
                     {
                         "model_version": model_version,
-                        "top_feature_contributions": top,
+                        "top_feature_contributions": feature_attribution,
+                        "explanation_method": row_explain.get("explanation_method", "unknown"),
+                        "explanation_status": row_explain.get("explanation_status", "unknown"),
+                        "explanation_warning": row_explain.get("explanation_warning"),
+                        "explanation_warning_code": row_explain.get("explanation_warning_code"),
                     },
                     ensure_ascii=True,
                 )

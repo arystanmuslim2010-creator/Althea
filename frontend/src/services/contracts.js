@@ -19,6 +19,21 @@ function toSafeObject(value) {
   return value && typeof value === 'object' ? value : {}
 }
 
+function safeParseJson(value) {
+  if (value == null) return {}
+  if (typeof value === 'object') return toSafeObject(value)
+  if (typeof value === 'string') {
+    const text = value.trim()
+    if (!text) return {}
+    try {
+      return toSafeObject(JSON.parse(text))
+    } catch {
+      return {}
+    }
+  }
+  return {}
+}
+
 function toNumber(value, fallback = 0) {
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : fallback
@@ -42,6 +57,57 @@ export function normalizeHealthResponse(payload) {
     checks,
     queue_depth: Number(payload?.queue_depth ?? 0),
     details: toSafeObject(payload?.details),
+  }
+}
+
+export function normalizeExplanationPayload(payload) {
+  const explain = safeParseJson(payload)
+  const featureAttribution = toSafeArray(explain.feature_attribution || explain.contributions).map((item) => {
+    const normalized = toSafeObject(item)
+    return {
+      feature: String(normalized.feature ?? normalized.name ?? ''),
+      value: toNumber(normalized.value ?? normalized.contribution ?? normalized.shap_value, 0),
+      shap_value: normalized.shap_value == null ? null : toNumber(normalized.shap_value, 0),
+      magnitude: toNumber(normalized.magnitude ?? Math.abs(toNumber(normalized.value ?? normalized.contribution ?? normalized.shap_value, 0)), 0),
+    }
+  }).filter((item) => item.feature)
+
+  let method = String(explain.explanation_method || '').trim().toLowerCase()
+  if (!method) {
+    const hasShap = featureAttribution.some((item) => item.shap_value != null)
+    method = hasShap ? 'shap' : 'unknown'
+  }
+
+  let status = String(explain.explanation_status || '').trim().toLowerCase()
+  if (!status) {
+    if (method === 'numeric_fallback') {
+      status = 'fallback'
+    } else if (method === 'unavailable') {
+      status = 'unavailable'
+    } else if (method === 'shap' || method === 'tree_shap') {
+      status = 'ok'
+    } else {
+      status = 'unknown'
+    }
+  }
+
+  const warning = explain.explanation_warning || (
+    method === 'numeric_fallback'
+      ? 'Heuristic feature highlights; not model contribution attribution.'
+      : null
+  )
+
+  const reasonCodes = toSafeArray(explain.risk_reason_codes).map((item) => String(item)).filter(Boolean)
+  return {
+    ...explain,
+    feature_attribution: featureAttribution,
+    contributions: featureAttribution,
+    risk_reason_codes: reasonCodes,
+    explanation_method: method || 'unknown',
+    explanation_status: status || 'unknown',
+    explanation_warning: warning,
+    explanation_warning_code: explain.explanation_warning_code || null,
+    is_fallback: status === 'fallback' || method === 'numeric_fallback' || method === 'unavailable',
   }
 }
 

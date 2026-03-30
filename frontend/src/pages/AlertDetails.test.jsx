@@ -121,4 +121,72 @@ describe('AlertDetails', () => {
     expect(screen.getByText('narrative failed')).not.toBeNull()
     expect(screen.getByText('Outcome Feedback')).not.toBeNull()
   })
+
+  it('renders SHAP model attribution label when explanation method is shap', async () => {
+    const { api } = await import('../services/api')
+    api.getAlert.mockResolvedValueOnce({
+      alert_id: 'A1',
+      risk_score: 88,
+      risk_band: 'high',
+      risk_explain_json: JSON.stringify({
+        feature_attribution: [{ feature: 'amount', value: 0.7, shap_value: 0.7 }],
+        explanation_method: 'shap',
+        explanation_status: 'ok',
+      }),
+    })
+
+    render(
+      <MemoryRouter>
+        <AlertDetails />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('Risk Explanation')).not.toBeNull())
+    expect(screen.getByText('Model attribution available (SHAP-based).')).not.toBeNull()
+  })
+
+  it('renders fallback disclaimer when explanation method is numeric_fallback', async () => {
+    const { api } = await import('../services/api')
+    api.getAlert.mockResolvedValueOnce({
+      alert_id: 'A1',
+      risk_score: 88,
+      risk_band: 'high',
+      risk_explain_json: JSON.stringify({
+        feature_attribution: [{ feature: 'amount', value: 10000 }],
+        explanation_method: 'numeric_fallback',
+        explanation_status: 'fallback',
+      }),
+    })
+
+    render(
+      <MemoryRouter>
+        <AlertDetails />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('Risk Explanation')).not.toBeNull())
+    expect(screen.getAllByText(/Heuristic feature highlights; not model contribution attribution\./).length).toBeGreaterThan(0)
+  })
+
+  it('handles older explanation payloads without metadata', async () => {
+    const { api } = await import('../services/api')
+    api.getAlert.mockResolvedValueOnce({
+      alert_id: 'A1',
+      risk_score: 88,
+      risk_band: 'high',
+      risk_explain_json: JSON.stringify({
+        feature_attribution: [{ feature: 'amount', value: 2.4 }],
+      }),
+    })
+
+    render(
+      <MemoryRouter>
+        <AlertDetails />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('Risk Explanation')).not.toBeNull())
+    expect(screen.getByText(/Method:/)).not.toBeNull()
+    expect(screen.getByText(/\| Status:/)).not.toBeNull()
+  })
 })

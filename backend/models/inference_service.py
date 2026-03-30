@@ -16,6 +16,7 @@ from sklearn.ensemble import RandomForestClassifier
 
 from models.feature_schema import FeatureSchemaValidator
 from models.model_registry import ModelRegistry
+from models.explainability_service import ExplainabilityService, get_explainability_service
 
 try:  # pragma: no cover - optional import
     import lightgbm as lgb
@@ -39,6 +40,7 @@ class InferenceService:
         schema_validator: FeatureSchemaValidator,
         online_feature_store=None,
         feature_registry=None,
+        explainability_service: ExplainabilityService | None = None,
     ) -> None:
         self._registry = registry
         self._schema_validator = schema_validator
@@ -46,6 +48,7 @@ class InferenceService:
         self._feature_registry = feature_registry
         self._model_cache: dict[str, Any] = {}
         self._max_artifact_bytes = 100 * 1024 * 1024
+        self._explainability_service = explainability_service or get_explainability_service()
 
     def predict(
         self,
@@ -91,15 +94,27 @@ class InferenceService:
                 f"mismatched={validation['mismatched_types']}"
             )
 
-        model = self._load_model(model_record)
-        probabilities = self._predict_proba(model=model, feature_frame=feature_frame)
-        scores = np.clip(probabilities * 100.0, 0.0, 100.0)
-        explanations = self._build_explanations(feature_frame, scores.tolist())
-
         metadata = dict(model_record.get("training_metadata_json") or {})
         feature_schema_version = str(metadata.get("feature_schema_version") or schema.get("version") or "v1")
         model_id = str(model_record.get("id") or "")
         model_version = str(model_record.get("model_version") or "unknown")
+
+        model = self._load_model(model_record)
+        probabilities = self._predict_proba(model=model, feature_frame=feature_frame)
+        scores = np.clip(probabilities * 100.0, 0.0, 100.0)
+        resolved_alert_ids: list[str] | None = [str(item) for item in (alert_ids or []) if str(item)]
+        if not resolved_alert_ids and "alert_id" in feature_frame.columns:
+            resolved_alert_ids = [str(item) for item in feature_frame["alert_id"].tolist()]
+
+        explanations = self._build_explanations(
+            tenant_id=tenant_id,
+            model=model,
+            feature_frame=feature_frame,
+            model_version=model_version,
+            feature_schema_version=feature_schema_version,
+            alert_ids=resolved_alert_ids,
+        )
+
         timestamp = datetime.now(timezone.utc).isoformat()
 
         logger.info(
@@ -197,18 +212,54 @@ class InferenceService:
             pred = pred[:, 1]
         return np.clip(pred.astype(float), 0.0, 1.0)
 
-    def _build_explanations(self, feature_frame: pd.DataFrame, scores: list[float]) -> list[dict[str, Any]]:
-        numeric = feature_frame.select_dtypes(include=["number"]).fillna(0.0)
+    def _build_explanations(
+        self,
+        tenant_id: str,
+        model: Any,
+        feature_frame: pd.DataFrame,
+        model_version: str = "unknown",
+        feature_schema_version: str = "v1",
+        alert_ids: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Build model-based explanations using the unified explainability service.
+
+        This method uses SHAP (SHapley Additive exPlanations) when available
+        to compute faithful feature attribution. When SHAP is unavailable,
+        it falls back to heuristic methods with explicit labeling.
+
+        Args:
+            model: Trained model object used for prediction
+            feature_frame: Features used for scoring
+            model_version: Version of the model
+
+        Returns:
+            List of explanation dicts, one per row in feature_frame.
+            Each dict contains:
+            - feature_attribution: List of {feature, value, shap_value} dicts
+            - risk_reason_codes: Human-readable reason codes
+            - explanation_method: "shap", "tree_shap", "numeric_fallback", or "unavailable"
+            - explanation_status: "ok", "fallback", or "unavailable"
+            - explanation_warning: Warning if fallback was used
+            - explanation_warning_code: machine-readable warning code
+        """
         explanations: list[dict[str, Any]] = []
-        for idx, score in enumerate(scores):
-            row = numeric.iloc[idx] if idx < len(numeric) else pd.Series(dtype=float)
-            top = row.abs().sort_values(ascending=False).head(5)
-            explanations.append(
-                {
-                    "risk_score": float(score),
-                    "top_features": [{"feature": str(name), "value": float(value)} for name, value in top.items()],
-                }
+
+        for idx in range(len(feature_frame)):
+            row_frame = feature_frame.iloc[[idx]]  # Keep as DataFrame for SHAP
+            alert_id = None
+            if alert_ids and idx < len(alert_ids):
+                alert_id = str(alert_ids[idx])
+            explanation = self._explainability_service.generate_explanation(
+                model=model,
+                feature_frame=row_frame,
+                model_version=model_version,
+                tenant_id=tenant_id,
+                alert_id=alert_id,
+                feature_schema_version=feature_schema_version,
             )
+            explanations.append(explanation)
+
         return explanations
 
     @staticmethod

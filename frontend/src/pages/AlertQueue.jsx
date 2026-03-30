@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, isConnectionError } from '../services/api'
+import { normalizeExplanationPayload } from '../services/contracts'
 import { useLanguage } from '../contexts/LanguageContext'
 
 function _parseJson(val) {
@@ -14,7 +15,7 @@ function _parseJson(val) {
 }
 
 function _formatExplainSummary(rawExplain) {
-  const explain = _parseJson(rawExplain)
+  const explain = normalizeExplanationPayload(rawExplain)
   if (!explain || typeof explain !== 'object') return 'No explanation data.'
   const parts = []
   if (typeof explain.base_prob === 'number') {
@@ -40,6 +41,34 @@ function _formatExplainSummary(rawExplain) {
     parts.push(`top=${head.join(' | ')}`)
   }
   return parts.join('; ') || 'No explanation data.'
+}
+
+/**
+ * Get explanation method from raw explanation JSON.
+ * Returns: "shap", "numeric_fallback", "unknown", or null
+ */
+function _getExplanationMethod(rawExplain) {
+  const explain = normalizeExplanationPayload(rawExplain)
+  if (!explain || typeof explain !== 'object') return null
+  return explain.explanation_method || 'unknown'
+}
+
+/**
+ * Check if explanation is using fallback method.
+ * Returns true if explanation is heuristic/numeric fallback (not model-based).
+ */
+function _isExplanationFallback(rawExplain) {
+  const explain = normalizeExplanationPayload(rawExplain)
+  return Boolean(explain?.is_fallback)
+}
+
+/**
+ * Get explanation warning message if present.
+ */
+function _getExplanationWarning(rawExplain) {
+  const explain = normalizeExplanationPayload(rawExplain)
+  if (!explain || typeof explain !== 'object') return null
+  return explain.explanation_warning || null
 }
 
 function _deriveBehavioralSignals(alertDetail) {
@@ -616,8 +645,30 @@ export function AlertQueue() {
                       </div>
                     )}
                     {_parseJson(alertDetail.risk_explain_json) && (
-                      <div className="mt-3 p-4 rounded-md bg-blue-500/10 border-l-4 border-blue-500 text-[var(--text)] text-[0.8125rem]">
-                        Summary: {_formatExplainSummary(alertDetail.risk_explain_json)}
+                      <div className="mt-3 space-y-3">
+                        {/* Explanation warning banner for fallback methods */}
+                        {_isExplanationFallback(alertDetail.risk_explain_json) && (
+                          <div className="p-3 rounded-md bg-amber-500/10 border-l-4 border-amber-500 text-[var(--text)] text-[0.75rem]">
+                            <strong>Heuristic feature highlights:</strong> {_getExplanationWarning(alertDetail.risk_explain_json) || 'Not model contribution attribution.'}
+                          </div>
+                        )}
+                        {/* Explanation summary */}
+                        <div className={`p-4 rounded-md border-l-4 text-[var(--text)] text-[0.8125rem] ${
+                          _isExplanationFallback(alertDetail.risk_explain_json)
+                            ? 'bg-amber-500/5 border-amber-400'
+                            : 'bg-blue-500/10 border-blue-500'
+                          }`}>
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-semibold">Feature Signals</span>
+                            {_getExplanationMethod(alertDetail.risk_explain_json) === 'shap' && (
+                              <span className="text-[0.65rem] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-600 dark:text-blue-400 font-medium">MODEL ATTRIBUTION (SHAP)</span>
+                            )}
+                            {_getExplanationMethod(alertDetail.risk_explain_json) === 'numeric_fallback' && (
+                              <span className="text-[0.65rem] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-600 dark:text-amber-400 font-medium">HEURISTIC</span>
+                            )}
+                          </div>
+                          Summary: {_formatExplainSummary(alertDetail.risk_explain_json)}
+                        </div>
                       </div>
                     )}
                     <div className="mt-3 p-4 rounded-md bg-amber-500/10 border-l-4 border-amber-500 text-[var(--text)] text-[0.8125rem]">

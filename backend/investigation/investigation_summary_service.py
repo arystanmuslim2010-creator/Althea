@@ -86,7 +86,7 @@ class InvestigationSummaryService:
             for item in contrib[:3]:
                 if isinstance(item, dict) and item.get("feature"):
                     feat = str(item["feature"]).replace("_", " ")
-                    impact = float(item.get("contribution", item.get("shap_value", 0.0)) or 0.0)
+                    impact = float(item.get("contribution", item.get("shap_value", item.get("value", 0.0))) or 0.0)
                     direction = "elevated" if impact > 0 else "anomalous"
                     observations.append(f"{feat} is {direction} (contribution: {impact:+.3f})")
 

@@ -67,6 +67,28 @@ def _apply_scoring_api_fields(record: dict) -> dict:
         if isinstance(contrib, list):
             top_features = [str(item.get("feature")) for item in contrib if isinstance(item, dict) and item.get("feature")]
     out["top_features"] = top_features if isinstance(top_features, list) else []
+
+    explain = _parse_json_field(out.get("risk_explain_json"), {})
+    if isinstance(explain, dict):
+        method = str(explain.get("explanation_method") or "").strip().lower()
+        if not method:
+            contrib = explain.get("feature_attribution") or explain.get("contributions") or []
+            if isinstance(contrib, list) and any(isinstance(item, dict) and item.get("shap_value") is not None for item in contrib):
+                method = "shap"
+            else:
+                method = "unknown"
+        status = str(explain.get("explanation_status") or "").strip().lower()
+        if not status:
+            status = "fallback" if method in {"numeric_fallback", "unavailable"} else ("ok" if method in {"shap", "tree_shap"} else "unknown")
+        out["explanation_method"] = method
+        out["explanation_status"] = status
+        out["explanation_warning"] = explain.get("explanation_warning")
+        out["explanation_warning_code"] = explain.get("explanation_warning_code")
+    else:
+        out["explanation_method"] = "unknown"
+        out["explanation_status"] = "unknown"
+        out["explanation_warning"] = None
+        out["explanation_warning_code"] = None
     return out
 
 

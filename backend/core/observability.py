@@ -87,6 +87,26 @@ _NARRATIVE_GENERATION_FAILURES = Counter(
     "althea_narrative_generation_failures_total",
     "Total failures while generating investigation narrative drafts.",
 )
+_EXPLANATION_GENERATION_LATENCY = Histogram(
+    "althea_explanation_generation_latency_seconds",
+    "Latency for explanation generation.",
+    ["method", "status"],
+)
+_EXPLANATION_GENERATION_FAILURES = Counter(
+    "althea_explanation_generation_failures_total",
+    "Total failures while generating model explanations.",
+    ["reason"],
+)
+_EXPLANATION_METHOD_COUNT = Counter(
+    "althea_explanation_method_count_total",
+    "Count of generated explanations by method.",
+    ["method"],
+)
+_EXPLANATION_FALLBACK_COUNT = Counter(
+    "althea_explanation_fallback_count_total",
+    "Count of explanation fallbacks by method and reason.",
+    ["method", "reason"],
+)
 _DYNAMIC_GAUGES: dict[str, Gauge] = {}
 _ALERTS_PROCESSED_TOTAL = Counter("alerts_processed_total", "Total number of alerts processed by pipeline jobs.")
 _PIPELINE_RUNTIME_SECONDS = Histogram(
@@ -236,6 +256,26 @@ def record_narrative_generation(duration_seconds: float) -> None:
 
 def record_narrative_generation_failure() -> None:
     _NARRATIVE_GENERATION_FAILURES.inc()
+
+
+def record_explanation_generation(method: str, status: str, duration_seconds: float) -> None:
+    normalized_method = (method or "unknown").strip().lower() or "unknown"
+    normalized_status = (status or "unknown").strip().lower() or "unknown"
+    _EXPLANATION_METHOD_COUNT.labels(method=normalized_method).inc()
+    _EXPLANATION_GENERATION_LATENCY.labels(method=normalized_method, status=normalized_status).observe(
+        max(0.0, float(duration_seconds))
+    )
+
+
+def record_explanation_failure(reason: str) -> None:
+    normalized_reason = (reason or "unknown").strip().lower() or "unknown"
+    _EXPLANATION_GENERATION_FAILURES.labels(reason=normalized_reason).inc()
+
+
+def record_explanation_fallback(method: str, reason: str) -> None:
+    normalized_method = (method or "unknown").strip().lower() or "unknown"
+    normalized_reason = (reason or "unknown").strip().lower() or "unknown"
+    _EXPLANATION_FALLBACK_COUNT.labels(method=normalized_method, reason=normalized_reason).inc()
 
 
 def record_queue_depth(depth: int) -> None:

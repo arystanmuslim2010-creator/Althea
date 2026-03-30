@@ -1,52 +1,61 @@
-# Explainability and Decision Logging
+# Explainability Integrity
 
-## Overview
-The ALTHEA scoring pipeline now produces model explainability and audit logs for every alert scored.
+## Core Principle
+- Numeric input magnitude is **not** model attribution.
+- ALTHEA only labels an explanation as `shap` or `tree_shap` when attribution is generated from the actual scored model.
+- Any heuristic output is explicitly marked fallback.
 
-## SHAP explainability
-- The scorer uses `shap.TreeExplainer(model, feature_perturbation="tree_path_dependent")`.
-- SHAP values are computed during scoring and converted into top feature contributions per alert.
-- Output fields include:
-  - `top_feature_contributions_json`: ordered list of feature/impact pairs.
-  - `top_features_json`: ordered list of top feature names.
-- Example contribution item:
-  - `{"feature": "transaction_amount", "impact": 0.24}`
+## Unified Architecture
+- Runtime inference and governance enrichment use one shared engine:
+  - `backend/models/explainability_service.py`
+- Governance adapter:
+  - `backend/model_governance/explainability.py`
+  - delegates to the same shared engine for backward compatibility.
 
-## Decision logging
-- A governance logger writes one JSON object per alert to:
-  - `logs/decision_logs.jsonl`
-- Each log entry includes:
-  - `alert_id`
-  - `timestamp`
-  - `model_version`
-  - `features_used`
-  - `score`
-  - `priority`
-  - `top_features`
-  - `governance_rules_triggered`
-- If governance suppresses or deprioritizes an alert, the same record includes:
-  - `decision` (`suppressed` or `deprioritized`)
-  - `reason` (for example: `low_expected_investigative_yield`)
+## Explanation Contract
+Each explanation payload includes:
+- `feature_attribution`
+- `risk_reason_codes`
+- `explanation_method` (`shap`, `tree_shap`, `numeric_fallback`, `unavailable`)
+- `explanation_status` (`ok`, `fallback`, `unavailable`)
+- `explanation_warning`
+- `explanation_warning_code`
 
-## Governance explainability
-- Suppression and governance context is captured from:
-  - `governance_status`
-  - `suppression_code`
-  - `suppression_reason`
-  - hard-constraint metadata
-- This metadata is also included in the decision log under `governance_rules_triggered`.
+Backward-compatible fields remain:
+- `top_feature_contributions_json`
+- `top_features_json`
+- `risk_explain_json`
+- `ml_service_explain_json`
 
-## API interpretation for analysts
-- Alert responses now expose:
-  - `score`
-  - `priority`
-  - `top_features`
-  - `model_version`
-- Analysts should interpret `top_features` as the strongest local drivers of the model score for that specific alert.
-- Positive impact means the feature pushed risk up; negative impact means it pushed risk down.
+## Fallback Behavior
+Scoring continues where possible, and explanations are labeled honestly.
 
-## Performance controls
-- SHAP can be constrained with config:
-  - `SHAP_TOP_FEATURES` (default: 5)
-  - `SHAP_MAX_ALERTS` (default: 0 = all alerts; set > 0 to compute only top-N alerts by score)
-- For alerts outside SHAP scope (when capped), fallback contributions are provided from risk components.
+Common fallback warning codes:
+- `shap_not_installed`
+- `unsupported_model`
+- `feature_frame_incompatible`
+- `explainer_runtime_error`
+- `model_artifact_unavailable`
+- `no_feature_data`
+- `no_numeric_features`
+
+## UI Guidance
+- For `shap` / `tree_shap`: show as model attribution.
+- For `numeric_fallback` / `unavailable`: show disclaimer:
+  - “Heuristic feature highlights; not model contribution attribution.”
+- Frontend normalization handles older records missing metadata by defaulting method/status to `unknown`.
+
+## Observability
+Explainability emits metrics and structured logs:
+- `althea_explanation_generation_latency_seconds`
+- `althea_explanation_generation_failures_total`
+- `althea_explanation_method_count_total`
+- `althea_explanation_fallback_count_total`
+
+Structured logs include:
+- `tenant_id`
+- `alert_id` (when available)
+- `model_version`
+- `feature_schema_version`
+- `explanation_method`
+- `explanation_status`

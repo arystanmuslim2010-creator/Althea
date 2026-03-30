@@ -29,6 +29,7 @@ from features.offline_feature_store import OfflineFeatureStore
 from features.online_feature_store import OnlineFeatureStore
 from model_governance.explainability import GovernanceExplainabilityService
 from model_governance.lifecycle import ModelGovernanceLifecycle
+from models.explainability_service import get_explainability_service
 from models.feature_schema import FeatureSchemaValidator
 from models.inference_service import InferenceService
 from models.ml_model_service import MLModelService
@@ -141,6 +142,7 @@ def get_inference_service() -> InferenceService:
         schema_validator=get_feature_schema_validator(),
         online_feature_store=get_online_feature_store(),
         feature_registry=get_feature_registry(),
+        explainability_service=get_explainability_service(),
     )
 
 
@@ -190,7 +192,7 @@ def get_model_governance_lifecycle() -> ModelGovernanceLifecycle:
 
 @lru_cache(maxsize=1)
 def get_governance_explainability_service() -> GovernanceExplainabilityService:
-    return GovernanceExplainabilityService()
+    return GovernanceExplainabilityService(explainability_service=get_explainability_service())
 
 
 @lru_cache(maxsize=1)

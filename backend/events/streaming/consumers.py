@@ -1,5 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -132,7 +133,15 @@ class ModelScoringConsumer(_BaseConsumer):
             return None
 
         stored_rows = self._repository.list_feature_rows(context.tenant_id, run_id, limit=500000)
-        selected_rows = [row for row in stored_rows if str(row.get("alert_id")) in set(alert_ids)]
+        requested_ids = set(alert_ids)
+        selected_by_alert: dict[str, dict[str, Any]] = {}
+        for row in stored_rows:
+            current_alert_id = str(row.get("alert_id") or "")
+            if not current_alert_id or current_alert_id not in requested_ids:
+                continue
+            selected_by_alert.setdefault(current_alert_id, row)
+        ordered_alert_ids = [alert_id for alert_id in alert_ids if alert_id in selected_by_alert]
+        selected_rows = [selected_by_alert[alert_id] for alert_id in ordered_alert_ids]
         if not selected_rows:
             return None
 
@@ -146,17 +155,55 @@ class ModelScoringConsumer(_BaseConsumer):
             strategy="active_approved",
         )
         scores = list(inference.get("scores") or [])
+        explanations = list(inference.get("explanations") or [])
+        model_version = str(inference.get("model_version") or "unknown")
 
         payloads = self._repository.list_alert_payloads_by_run(context.tenant_id, run_id, limit=500000)
         by_id = {str(row.get("alert_id")): dict(row) for row in payloads}
         updates: list[dict[str, Any]] = []
-        for idx, alert_id in enumerate(alert_ids):
+        for idx, alert_id in enumerate(ordered_alert_ids):
             row = by_id.get(alert_id)
             if not row:
                 continue
             row["risk_score"] = float(scores[idx]) if idx < len(scores) else float(row.get("risk_score", 0.0) or 0.0)
             row["risk_prob"] = max(0.0, min(1.0, float(row["risk_score"]) / 100.0))
-            row["model_version"] = str(inference.get("model_version") or row.get("model_version") or "unknown")
+            row["model_version"] = model_version or str(row.get("model_version") or "unknown")
+
+            row_explain = explanations[idx] if idx < len(explanations) and isinstance(explanations[idx], dict) else {}
+            feature_attribution = row_explain.get("feature_attribution", [])
+            if not isinstance(feature_attribution, list):
+                feature_attribution = []
+            row["top_feature_contributions_json"] = json.dumps(feature_attribution, ensure_ascii=True)
+            row["top_features_json"] = json.dumps(
+                [item.get("feature") for item in feature_attribution if isinstance(item, dict) and item.get("feature")],
+                ensure_ascii=True,
+            )
+            row["risk_explain_json"] = json.dumps(
+                {
+                    "base_prob": float(row["risk_prob"]),
+                    "model_version": model_version,
+                    "contributions": feature_attribution,
+                    "feature_attribution": feature_attribution,
+                    "risk_reason_codes": row_explain.get("risk_reason_codes", []),
+                    "explanation_method": row_explain.get("explanation_method", "unknown"),
+                    "explanation_status": row_explain.get("explanation_status", "unknown"),
+                    "explanation_warning": row_explain.get("explanation_warning"),
+                    "explanation_warning_code": row_explain.get("explanation_warning_code"),
+                },
+                ensure_ascii=True,
+            )
+            row["ml_signals_json"] = json.dumps(
+                {
+                    "model_version": model_version,
+                    "top_feature_contributions": feature_attribution,
+                    "risk_reason_codes": row_explain.get("risk_reason_codes", []),
+                    "explanation_method": row_explain.get("explanation_method", "unknown"),
+                    "explanation_status": row_explain.get("explanation_status", "unknown"),
+                    "explanation_warning": row_explain.get("explanation_warning"),
+                    "explanation_warning_code": row_explain.get("explanation_warning_code"),
+                },
+                ensure_ascii=True,
+            )
             updates.append(row)
 
         if updates:
@@ -164,8 +211,8 @@ class ModelScoringConsumer(_BaseConsumer):
 
         return {
             "run_id": run_id,
-            "alert_ids": alert_ids,
-            "model_version": str(inference.get("model_version") or "unknown"),
+            "alert_ids": ordered_alert_ids,
+            "model_version": model_version,
             "rescored": bool(context.payload.get("rescore", False)),
         }
 
