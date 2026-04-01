@@ -156,6 +156,12 @@ class ExplainabilityService:
             raw_explain_payload=technical_payload,
             feature_dict=feature_dict,
         )
+        confidence_score = interpretation.get("confidence_score")
+        ui_view = {
+            "headline": str(interpretation.get("summary_text") or ""),
+            "reasons": list(interpretation.get("key_reasons") or [])[:3],
+            "patterns": list(interpretation.get("aml_patterns") or [])[:3],
+        }
 
         return {
             "alert_id": str(target.get("alert_id", "")),
@@ -174,12 +180,15 @@ class ExplainabilityService:
             "rule_hits": self._parse(target.get("rules_json"), []),
             "rule_evidence": self._parse(target.get("rule_evidence_json"), {}),
             "features": feature_dict,
-            # Additive analyst-facing interpretation layer.
+            # Additive analyst-facing interpretation layer (non-breaking).
+            "human_interpretation": interpretation,
+            "human_interpretation_view": ui_view,
+            # Compatibility aliases for consumers expecting flattened fields.
             "summary_text": interpretation.get("summary_text", ""),
             "key_reasons": interpretation.get("key_reasons", []),
             "aml_patterns": interpretation.get("aml_patterns", []),
             "analyst_focus_points": interpretation.get("analyst_focus_points", []),
-            "confidence_score": float(interpretation.get("confidence_score", 0.0) or 0.0),
+            "confidence_score": confidence_score,
             "technical_details": interpretation.get("technical_details", {}),
             "human_explanation": interpretation,
         }
