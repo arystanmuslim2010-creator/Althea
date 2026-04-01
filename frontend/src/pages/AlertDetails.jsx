@@ -84,26 +84,42 @@ export function AlertDetails() {
   const load = async () => {
     setLoading(true)
     try {
-      const [a, e, n, q, ctx, o] = await Promise.all([
+      const [alertResult, explainResult, notesResult, queueResult, contextResult, outcomeResult] = await Promise.allSettled([
         api.getAlert(id),
         api.getAlertExplain(id),
         api.getAlertNotes(id),
-        api.getWorkQueue(),
-        api.getInvestigationContext(id).catch(() => null),
-        api.getAlertOutcome(id).catch(() => null),
+        api.getWorkQueue({ limit: 200 }),
+        api.getInvestigationContext(id),
+        api.getAlertOutcome(id),
       ])
-      setAlert(a)
-      setExplain(e)
-      setNotes(n.notes || [])
-      setContext(ctx)
-      setNetworkGraph(ctx?.network_graph || null)
-      setNarrativeDraft(ctx?.narrative_draft || null)
-      setOutcome(o)
-      const matched = (q.queue || []).find((item) => String(item.alert_id) === String(id)) || null
+
+      if (alertResult.status !== 'fulfilled') {
+        throw alertResult.reason
+      }
+
+      const alertPayload = alertResult.value
+      const explainPayload = explainResult.status === 'fulfilled' ? explainResult.value : null
+      const notesPayload = notesResult.status === 'fulfilled' ? notesResult.value : { notes: [] }
+      const queuePayload = queueResult.status === 'fulfilled' ? queueResult.value : { queue: [] }
+      const contextPayload = contextResult.status === 'fulfilled' ? contextResult.value : null
+      const outcomePayload = outcomeResult.status === 'fulfilled' ? outcomeResult.value : null
+
+      setAlert(alertPayload)
+      setExplain(explainPayload)
+      setNotes(notesPayload.notes || [])
+      setContext(contextPayload)
+      setNetworkGraph(contextPayload?.network_graph || null)
+      setNarrativeDraft(contextPayload?.narrative_draft || null)
+      setOutcome(outcomePayload)
+      const matched = (queuePayload.queue || []).find((item) => String(item.alert_id) === String(id)) || null
       setQueueItem(matched)
-      const resolvedCase = ctx?.case_status || (matched?.case_id ? { case_id: matched.case_id, status: matched.case_status || matched.status } : null)
+      const resolvedCase = contextPayload?.case_status || (matched?.case_id ? { case_id: matched.case_id, status: matched.case_status || matched.status } : null)
       setCaseInfo(resolvedCase)
-      setError('')
+
+      const hasSidecarFailure = [explainResult, notesResult, queueResult, contextResult, outcomeResult].some(
+        (result) => result.status === 'rejected',
+      )
+      setError(hasSidecarFailure ? 'Some investigation context is temporarily unavailable.' : '')
     } catch (err) {
       setError(err.message || 'Failed to load alert')
     } finally {

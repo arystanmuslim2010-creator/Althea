@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import pickle
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any
 
@@ -41,14 +42,18 @@ class InferenceService:
         online_feature_store=None,
         feature_registry=None,
         explainability_service: ExplainabilityService | None = None,
+        allow_dev_models: bool = False,
+        max_cached_models: int = 5,
     ) -> None:
         self._registry = registry
         self._schema_validator = schema_validator
         self._online_feature_store = online_feature_store
         self._feature_registry = feature_registry
-        self._model_cache: dict[str, Any] = {}
+        self._model_cache: OrderedDict[str, Any] = OrderedDict()
         self._max_artifact_bytes = 100 * 1024 * 1024
         self._explainability_service = explainability_service or get_explainability_service()
+        self._allow_dev_models = bool(allow_dev_models)
+        self._max_cached_models = max(1, int(max_cached_models or 5))
 
     def predict(
         self,
@@ -80,6 +85,8 @@ class InferenceService:
 
         model_record = self._registry.resolve_model(tenant_id=tenant_id, strategy=strategy)
         if not model_record:
+            if not self._allow_dev_models:
+                raise RuntimeError("Auto-bootstrap disabled in production")
             self._auto_bootstrap_model(tenant_id=tenant_id, feature_frame=feature_frame)
             model_record = self._registry.resolve_model(tenant_id=tenant_id, strategy=strategy)
         if not model_record:
@@ -145,7 +152,9 @@ class InferenceService:
     def _load_model(self, model_record: dict[str, Any]) -> Any:
         cache_key = f"{model_record.get('tenant_id')}:{model_record.get('model_version')}"
         if cache_key in self._model_cache:
-            return self._model_cache[cache_key]
+            model = self._model_cache.pop(cache_key)
+            self._model_cache[cache_key] = model
+            return model
 
         artifact_uri = str(model_record.get("artifact_uri") or "")
         if not artifact_uri.startswith("models/"):
@@ -158,6 +167,8 @@ class InferenceService:
         artifact_format = str(metadata.get("artifact_format") or "").lower().strip()
         model = self._deserialize_model(artifact=artifact, artifact_format=artifact_format)
         self._assert_safe_model(model)
+        if len(self._model_cache) >= self._max_cached_models:
+            self._model_cache.popitem(last=False)
         self._model_cache[cache_key] = model
         return model
 

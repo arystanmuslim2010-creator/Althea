@@ -46,6 +46,26 @@ def _resolve_secret_value(secret_ref: str | None) -> str | None:
     return None
 
 
+def _load_env_file(path: Path) -> None:
+    if not path.exists() or not path.is_file():
+        return
+    try:
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            env_key = key.strip()
+            if not env_key:
+                continue
+            if env_key in os.environ:
+                continue
+            normalized = value.strip().strip("'").strip('"')
+            os.environ[env_key] = normalized
+    except Exception:
+        logger.warning("Failed to load env file", extra={"path": str(path)})
+
+
 @dataclass(slots=True)
 class Settings:
     app_name: str = "ALTHEA Enterprise AML API"
@@ -60,10 +80,11 @@ class Settings:
     streaming_prefix: str = os.getenv("ALTHEA_STREAMING_PREFIX", "althea.streaming")
     streaming_inline_processing: bool = os.getenv("ALTHEA_STREAMING_INLINE_PROCESSING", "false").lower() in {"1", "true", "yes"}
     feature_online_ttl_seconds: int = int(os.getenv("ALTHEA_FEATURE_ONLINE_TTL_SECONDS", str(60 * 60 * 24)))
-    jwt_secret: str = os.getenv("ALTHEA_JWT_SECRET", "change-me-in-production")
+    jwt_secret: str = os.getenv("ALTHEA_JWT_SECRET", "")
     jwt_algorithm: str = os.getenv("ALTHEA_JWT_ALGORITHM", "HS256")
     access_token_minutes: int = int(os.getenv("ALTHEA_ACCESS_TOKEN_MINUTES", "60"))
     refresh_token_minutes: int = int(os.getenv("ALTHEA_REFRESH_TOKEN_MINUTES", str(60 * 24 * 14)))
+    allow_dev_models: bool = os.getenv("ALTHEA_ALLOW_DEV_MODELS", "").lower() in {"1", "true", "yes"}
     model_selection_strategy: str = os.getenv("ALTHEA_MODEL_SELECTION", "active_approved")
     rq_queue_name: str = os.getenv("ALTHEA_RQ_QUEUE", "althea-pipeline")
     rq_job_timeout_seconds: int = int(os.getenv("ALTHEA_RQ_JOB_TIMEOUT_SECONDS", "900"))
@@ -141,6 +162,10 @@ class Settings:
         return not self.is_dev
 
     def validate(self) -> None:
+        if os.getenv("ALTHEA_ALLOW_DEV_MODELS") is None:
+            # Safe default: allow local bootstrap only in development.
+            self.allow_dev_models = bool(self.is_dev)
+
         queue_mode = (self.queue_mode or "").lower().strip()
         if queue_mode == "inline":
             raise RuntimeError("ALTHEA_QUEUE_MODE=inline is no longer supported. Use 'rq'.")
@@ -160,8 +185,8 @@ class Settings:
                 raise RuntimeError("ALTHEA_DATABASE_URL must point to PostgreSQL in non-development environments.")
 
         default_secret = "change-me-in-production"
-        if self.is_non_dev and self.jwt_secret.strip() == default_secret:
-            raise RuntimeError("ALTHEA_JWT_SECRET must be rotated for non-development environments.")
+        if not self.jwt_secret or self.jwt_secret.strip() == default_secret:
+            raise RuntimeError("ALTHEA_JWT_SECRET must be securely set")
         if self.is_non_dev and len(self.jwt_secret.strip()) < 32:
             raise RuntimeError("ALTHEA_JWT_SECRET must be at least 32 characters in non-development environments.")
 
@@ -184,6 +209,11 @@ class Settings:
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    backend_root = Path(__file__).resolve().parent.parent
+    project_root = backend_root.parent
+    _load_env_file(project_root / ".env")
+    _load_env_file(backend_root / ".env")
+
     settings = Settings()
     secret_value = _resolve_secret_value(settings.secret_key_ref)
     if secret_value:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Optional
 
@@ -12,13 +13,14 @@ from core.observability import record_copilot_generation, record_integration_err
 from core.security import get_authenticated_tenant_id
 
 router = APIRouter(tags=["alerts"])
+logger = logging.getLogger("althea.alerts")
 
 
 def _user_scope(request: Request) -> str:
     return request.headers.get("X-User-Scope") or "public"
 
 
-def _parse_json_field(raw, default):
+def _parse_json_field(raw, default, field_name: str = "json_field"):
     if raw is None:
         return default
     if isinstance(raw, str):
@@ -26,8 +28,12 @@ def _parse_json_field(raw, default):
             return default
         try:
             return json.loads(raw)
-        except Exception:
-            return default
+        except Exception as exc:
+            logger.warning(
+                "Invalid JSON field",
+                extra={"field_name": field_name, "error": str(exc)},
+            )
+            raise HTTPException(status_code=400, detail="Invalid JSON input")
     return raw
 
 
@@ -61,14 +67,14 @@ def _apply_scoring_api_fields(record: dict) -> dict:
     risk_band = str(out.get("risk_band", "") or "").lower()
     out["score"] = score
     out["priority"] = str(out.get("priority") or risk_band or "low")
-    top_features = _parse_json_field(out.get("top_features_json"), [])
+    top_features = _parse_json_field(out.get("top_features_json"), [], field_name="top_features_json")
     if not isinstance(top_features, list) or not top_features:
-        contrib = _parse_json_field(out.get("top_feature_contributions_json"), [])
+        contrib = _parse_json_field(out.get("top_feature_contributions_json"), [], field_name="top_feature_contributions_json")
         if isinstance(contrib, list):
             top_features = [str(item.get("feature")) for item in contrib if isinstance(item, dict) and item.get("feature")]
     out["top_features"] = top_features if isinstance(top_features, list) else []
 
-    explain = _parse_json_field(out.get("risk_explain_json"), {})
+    explain = _parse_json_field(out.get("risk_explain_json"), {}, field_name="risk_explain_json")
     if isinstance(explain, dict):
         method = str(explain.get("explanation_method") or "").strip().lower()
         if not method:
@@ -137,6 +143,8 @@ def get_alerts(
     typology: str = "All",
     segment: str = "All",
     search: str = "",
+    limit: int = 50,
+    offset: int = 0,
     run_id: Optional[str] = None,
     tenant_id: str = Depends(get_authenticated_tenant_id),
 ):
@@ -170,8 +178,19 @@ def get_alerts(
         queue = queue[mask]
     if "risk_score" in queue.columns:
         queue = queue.sort_values("risk_score", ascending=False)
-    records = [_sanitize_record(_apply_scoring_api_fields(record)) for record in queue.head(200).to_dict("records")]
-    return {"alerts": records, "run_id": run_id, "total": len(records)}
+    safe_limit = max(1, min(int(limit), 200))
+    safe_offset = max(0, int(offset))
+    total_available = int(len(queue))
+    page_df = queue.iloc[safe_offset : safe_offset + safe_limit]
+    records = [_sanitize_record(_apply_scoring_api_fields(record)) for record in page_df.to_dict("records")]
+    return {
+        "alerts": records,
+        "run_id": run_id,
+        "total": len(records),
+        "total_available": total_available,
+        "limit": safe_limit,
+        "offset": safe_offset,
+    }
 
 
 @router.get("/api/runs")

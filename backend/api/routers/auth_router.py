@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import uuid
+import logging
+import threading
+import time
+from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -21,6 +25,50 @@ from core.security import (
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+logger = logging.getLogger("althea.auth")
+
+
+class _InMemoryRateLimiter:
+    def __init__(self, max_attempts: int = 5, window_seconds: int = 60) -> None:
+        self._max_attempts = int(max_attempts)
+        self._window_seconds = int(window_seconds)
+        self._lock = threading.Lock()
+        self._events: dict[str, deque[float]] = defaultdict(deque)
+
+    def _prune(self, key: str, now_monotonic: float) -> deque[float]:
+        q = self._events[key]
+        boundary = now_monotonic - float(self._window_seconds)
+        while q and q[0] < boundary:
+            q.popleft()
+        return q
+
+    def register(self, key: str) -> None:
+        now_monotonic = time.monotonic()
+        with self._lock:
+            q = self._prune(key, now_monotonic)
+            q.append(now_monotonic)
+
+    def is_limited(self, key: str) -> bool:
+        now_monotonic = time.monotonic()
+        with self._lock:
+            q = self._prune(key, now_monotonic)
+            return len(q) >= self._max_attempts
+
+    def clear(self, key: str) -> None:
+        with self._lock:
+            self._events.pop(key, None)
+
+
+_LOGIN_RATE_LIMITER = _InMemoryRateLimiter(max_attempts=5, window_seconds=60)
+
+
+def _client_ip(request: Request) -> str:
+    forwarded_for = (request.headers.get("X-Forwarded-For") or "").strip()
+    if forwarded_for:
+        first = forwarded_for.split(",")[0].strip()
+        if first:
+            return first
+    return str((request.client.host if request.client else "") or "unknown")
 
 
 class RegisterRequest(BaseModel):
@@ -82,6 +130,9 @@ def register_user(
 ):
     repository = request.app.state.repository
     settings = request.app.state.settings
+    email_normalized = str(payload.email or "").strip().lower()
+    if not email_normalized:
+        raise HTTPException(status_code=400, detail="Email is required")
     provision_mode = str(payload.provision_mode or "").upper().strip()
     provision_mode = PROVISION_MODE_ALIASES.get(provision_mode, provision_mode)
     if provision_mode not in ALLOWED_PROVISION_MODES:
@@ -112,14 +163,14 @@ def register_user(
     if provision_mode != "ADMIN_INVITE_USER" and role != "analyst" and provision_mode != "TENANT_BOOTSTRAP_USER":
         raise HTTPException(status_code=403, detail="Only admins can assign elevated roles")
 
-    existing = repository.get_user_by_email(tenant_id, payload.email.lower())
+    existing = repository.get_user_by_email(tenant_id, email_normalized)
     if existing:
         raise HTTPException(status_code=409, detail="User already exists")
     user = repository.create_user(
         {
             "id": uuid.uuid4().hex,
             "tenant_id": tenant_id,
-            "email": payload.email.lower(),
+            "email": email_normalized,
             "password_hash": hash_password(payload.password),
             "role": role,
             "team": payload.team,
@@ -165,10 +216,22 @@ def register_user(
 
 @router.post("/login")
 def login_user(payload: LoginRequest, request: Request, tenant_id: str = Depends(get_tenant_id)):
+    email_normalized = str(payload.email or "").strip().lower()
+    if not email_normalized:
+        raise HTTPException(status_code=400, detail="Email is required")
+
+    limiter_key = f"{tenant_id}:{_client_ip(request)}"
+    if _LOGIN_RATE_LIMITER.is_limited(limiter_key):
+        logger.warning("Login rate limit exceeded", extra={"tenant_id": tenant_id, "client_ip": _client_ip(request)})
+        raise HTTPException(status_code=429, detail="Too many login attempts. Please retry later.")
+    _LOGIN_RATE_LIMITER.register(limiter_key)
+
     repository = request.app.state.repository
-    user = repository.get_user_by_email(tenant_id, payload.email.lower())
+    user = repository.get_user_by_email(tenant_id, email_normalized)
     if not user or not verify_password(payload.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    _LOGIN_RATE_LIMITER.clear(limiter_key)
+
     session_id = uuid.uuid4().hex
     settings = request.app.state.settings
     refresh_token = build_refresh_token(settings, tenant_id, user, session_id)

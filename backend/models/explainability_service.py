@@ -63,10 +63,16 @@ class ExplanationResult:
     shap_values: Optional[np.ndarray] = None
 
     def to_dict(self) -> dict[str, Any]:
+        attribution_kind = (
+            "model_shap"
+            if self.explanation_method in {ExplanationMethod.SHAP, ExplanationMethod.TREE_SHAP}
+            else "heuristic_feature_importance"
+        )
         return {
             "feature_attribution": self.feature_attribution,
             "risk_reason_codes": self.risk_reason_codes,
             "explanation_method": self.explanation_method.value,
+            "attribution_kind": attribution_kind,
             "explanation_status": self.explanation_status.value,
             "explanation_warning": self.explanation_warning,
             "explanation_warning_code": self.explanation_warning_code,
@@ -81,6 +87,11 @@ class ExplanationResult:
             "feature_attribution": self.feature_attribution,
             "risk_reason_codes": self.risk_reason_codes,
             "explanation_method": self.explanation_method.value,
+            "attribution_kind": (
+                "model_shap"
+                if self.explanation_method in {ExplanationMethod.SHAP, ExplanationMethod.TREE_SHAP}
+                else "heuristic_feature_importance"
+            ),
             "explanation_status": self.explanation_status.value,
             "explanation_warning": self.explanation_warning,
             "explanation_warning_code": self.explanation_warning_code,

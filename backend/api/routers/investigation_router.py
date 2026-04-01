@@ -146,6 +146,8 @@ class WorkflowStateTransitionRequest(BaseModel):
 def get_work_queue(
     request: Request,
     queue_view: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
     user: dict = Depends(require_any_permission("view_assigned_alerts", "view_all_alerts")),
 ):
     # Resolve active run with compatibility fallbacks because different screens may persist
@@ -224,7 +226,21 @@ def get_work_queue(
                 "overdue_review": overdue_review,
             }
         )
-    return {"queue": records, "count": len(records)}
+    safe_offset = max(0, int(offset or 0))
+    if limit is None:
+        page_records = records[safe_offset:]
+        page_limit = None
+    else:
+        page_limit = max(1, min(int(limit), 500))
+        page_records = records[safe_offset : safe_offset + page_limit]
+
+    return {
+        "queue": page_records,
+        "count": len(page_records),
+        "total_available": len(records),
+        "limit": page_limit,
+        "offset": safe_offset,
+    }
 
 
 @router.post("/alerts/{alert_id}/assign")

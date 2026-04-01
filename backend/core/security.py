@@ -68,23 +68,90 @@ def _encode_token(payload: dict[str, Any], secret: str, algorithm: str) -> str:
 def _decode_token(token: str, secret: str, algorithm: str) -> dict[str, Any]:
     try:
         return jwt.decode(token, secret, algorithms=[algorithm])
-    except JWTError as exc:
-        raise HTTPException(status_code=401, detail=f"Unauthorized: {exc}")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+def _hash_password_pbkdf2(password: str, iterations: int = 120000) -> str:
+    salt = os.urandom(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, int(iterations))
+    return f"pbkdf2$sha256${int(iterations)}${salt.hex()}${digest.hex()}"
+
+
+def _hash_password_bcrypt(password: str) -> str:
+    import bcrypt  # type: ignore[import-not-found]
+
+    hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    return f"bcrypt${hashed}"
+
+
+def _hash_password_argon2(password: str) -> str:
+    from argon2 import PasswordHasher  # type: ignore[import-not-found]
+
+    hashed = PasswordHasher().hash(password)
+    return f"argon2${hashed}"
 
 
 def hash_password(password: str) -> str:
-    salt = os.urandom(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 120000)
-    return f"pbkdf2_sha256${salt.hex()}${digest.hex()}"
+    preferred = (os.getenv("ALTHEA_PASSWORD_HASH_SCHEME", "pbkdf2") or "pbkdf2").strip().lower()
+    if preferred == "argon2":
+        try:
+            return _hash_password_argon2(password)
+        except Exception:
+            return _hash_password_pbkdf2(password)
+    if preferred == "bcrypt":
+        try:
+            return _hash_password_bcrypt(password)
+        except Exception:
+            return _hash_password_pbkdf2(password)
+    return _hash_password_pbkdf2(password)
 
 
 def verify_password(password: str, password_hash: str) -> bool:
     try:
-        _, salt_hex, digest_hex = password_hash.split("$")
-        salt = bytes.fromhex(salt_hex)
-        expected = bytes.fromhex(digest_hex)
-        check = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 120000)
-        return hmac.compare_digest(expected, check)
+        if password_hash.startswith("pbkdf2_sha256$"):
+            # Legacy format compatibility.
+            _, salt_hex, digest_hex = password_hash.split("$")
+            salt = bytes.fromhex(salt_hex)
+            expected = bytes.fromhex(digest_hex)
+            check = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 120000)
+            return hmac.compare_digest(expected, check)
+
+        if password_hash.startswith("pbkdf2$"):
+            _, algorithm, iter_text, salt_hex, digest_hex = password_hash.split("$", 4)
+            if algorithm != "sha256":
+                return False
+            salt = bytes.fromhex(salt_hex)
+            expected = bytes.fromhex(digest_hex)
+            check = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, int(iter_text))
+            return hmac.compare_digest(expected, check)
+
+        if password_hash.startswith("bcrypt$"):
+            try:
+                import bcrypt  # type: ignore[import-not-found]
+            except Exception:
+                return False
+            encoded = password_hash.split("$", 1)[1].encode("utf-8")
+            return bool(bcrypt.checkpw(password.encode("utf-8"), encoded))
+
+        if password_hash.startswith("argon2$"):
+            try:
+                from argon2 import PasswordHasher  # type: ignore[import-not-found]
+            except Exception:
+                return False
+            encoded = password_hash.split("$", 1)[1]
+            try:
+                return bool(PasswordHasher().verify(encoded, password))
+            except Exception:
+                return False
+
+        # Final backward-compatible fallback for unknown stored format.
+        if "$" in password_hash:
+            _, salt_hex, digest_hex = password_hash.split("$")
+            salt = bytes.fromhex(salt_hex)
+            expected = bytes.fromhex(digest_hex)
+            check = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 120000)
+            return hmac.compare_digest(expected, check)
+        return False
     except Exception:
         return False
 

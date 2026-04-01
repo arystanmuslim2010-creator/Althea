@@ -43,18 +43,23 @@ def create_app() -> FastAPI:
         repository = request.app.state.repository
         tenant_id = request.headers.get(settings.tenant_header) or settings.default_tenant_id
 
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.lower().startswith("bearer "):
-            token = auth_header.split(" ", 1)[1].strip()
-            if token:
-                try:
-                    claims = decode_token(settings, token)
-                    token_tenant = str(claims.get("tenant_id") or "").strip()
-                    if token_tenant:
-                        tenant_id = token_tenant
-                except Exception:
-                    # Authentication dependencies handle token validity; middleware only sets context when available.
-                    pass
+        # Do not let stale access tokens override tenant routing on auth bootstrap endpoints.
+        # Frontend login/register flows may still carry old Authorization headers.
+        request_path = str(request.url.path or "").lower().rstrip("/")
+        auth_bootstrap_paths = {"/api/auth/login", "/api/auth/register", "/api/auth/refresh"}
+        if request_path not in auth_bootstrap_paths:
+            auth_header = request.headers.get("Authorization", "")
+            if auth_header.lower().startswith("bearer "):
+                token = auth_header.split(" ", 1)[1].strip()
+                if token:
+                    try:
+                        claims = decode_token(settings, token)
+                        token_tenant = str(claims.get("tenant_id") or "").strip()
+                        if token_tenant:
+                            tenant_id = token_tenant
+                    except Exception:
+                        # Authentication dependencies handle token validity; middleware only sets context when available.
+                        pass
 
         request.state.tenant_id = tenant_id
         try:
@@ -74,7 +79,14 @@ def create_app() -> FastAPI:
         if isinstance(exc, HTTPException):
             return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
         logger.exception("Unhandled exception", exc_info=exc)
-        return JSONResponse(status_code=500, content={"detail": str(exc) or "Internal server error"})
+        safe_detail = "Internal server error"
+        try:
+            settings = request.app.state.settings
+            if getattr(settings, "is_dev", False):
+                safe_detail = str(exc) or safe_detail
+        except Exception:
+            pass
+        return JSONResponse(status_code=500, content={"detail": safe_detail})
 
     app.include_router(pipeline_router)
     app.include_router(alerts_router)

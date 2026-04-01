@@ -3,12 +3,22 @@ from __future__ import annotations
 import json
 import math
 import uuid
+import logging
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
 from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text, UniqueConstraint, create_engine, desc, event, func, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+try:  # pragma: no cover - optional for non-postgres tests
+    from sqlalchemy.dialects.postgresql import insert as postgres_insert
+except Exception:  # pragma: no cover
+    postgres_insert = None
+
+logger = logging.getLogger("althea.repository")
+SCHEMA_VERSION = "20260401_0001_security_integrity"
 
 
 class Base(DeclarativeBase):
@@ -95,6 +105,7 @@ class PipelineRunRecord(Base):
 
 class AlertRecord(Base):
     __tablename__ = "alerts"
+    __table_args__ = (UniqueConstraint("tenant_id", "alert_id", name="uq_alerts_tenant_alert_id"),)
 
     id: Mapped[str] = mapped_column(String(128), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(String(128), index=True)
@@ -371,10 +382,15 @@ class EnterpriseRepository:
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
         connect_args = {}
+        engine_kwargs: dict[str, Any] = {"future": True, "connect_args": connect_args, "pool_pre_ping": True}
         if database_url.startswith("sqlite"):
             # SQLite allows one writer at a time; timeout + WAL reduce transient "database is locked" errors in local dev.
             connect_args = {"check_same_thread": False, "timeout": 30}
-        self.engine = create_engine(database_url, future=True, connect_args=connect_args)
+        else:
+            # Production-oriented defaults for PostgreSQL connection pooling.
+            engine_kwargs.update({"pool_size": 10, "max_overflow": 20})
+        engine_kwargs["connect_args"] = connect_args
+        self.engine = create_engine(database_url, **engine_kwargs)
         if database_url.startswith("sqlite"):
             self._configure_sqlite_for_concurrency()
         self._session_factory = sessionmaker(bind=self.engine, autoflush=False, expire_on_commit=False, future=True)
@@ -391,6 +407,7 @@ class EnterpriseRepository:
             cursor.close()
 
     def _ensure_schema_compatibility(self) -> None:
+        self._ensure_schema_version_tracking()
         self._ensure_model_versions_columns()
         self._ensure_alerts_columns()
         self._ensure_user_email_uniqueness()
@@ -398,6 +415,54 @@ class EnterpriseRepository:
         self._ensure_role_permissions_seed()
         self._ensure_tier1_enterprise_tables()
         self._ensure_investigation_intelligence_tables()
+
+    def _ensure_schema_version_tracking(self) -> None:
+        with self.session() as session:
+            if self._database_url.startswith("sqlite"):
+                session.execute(
+                    text(
+                        """
+                        CREATE TABLE IF NOT EXISTS schema_versions (
+                            version VARCHAR(128) PRIMARY KEY,
+                            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                        """
+                    )
+                )
+                session.execute(
+                    text("INSERT OR IGNORE INTO schema_versions(version) VALUES (:version)"),
+                    {"version": SCHEMA_VERSION},
+                )
+                latest = session.execute(
+                    text("SELECT version FROM schema_versions ORDER BY applied_at DESC LIMIT 1")
+                ).scalar_one_or_none()
+                logger.info("Active schema version", extra={"schema_version": str(latest or SCHEMA_VERSION)})
+                return
+
+            session.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS schema_versions (
+                        version VARCHAR(128) PRIMARY KEY,
+                        applied_at TIMESTAMPTZ DEFAULT NOW()
+                    )
+                    """
+                )
+            )
+            session.execute(
+                text(
+                    """
+                    INSERT INTO schema_versions(version)
+                    VALUES (:version)
+                    ON CONFLICT (version) DO NOTHING
+                    """
+                ),
+                {"version": SCHEMA_VERSION},
+            )
+            latest = session.execute(
+                text("SELECT version FROM schema_versions ORDER BY applied_at DESC LIMIT 1")
+            ).scalar_one_or_none()
+            logger.info("Active schema version", extra={"schema_version": str(latest or SCHEMA_VERSION)})
 
     @property
     def _is_postgres(self) -> bool:
@@ -474,6 +539,15 @@ class EnterpriseRepository:
                 session.execute(text("CREATE INDEX IF NOT EXISTS ix_alerts_status ON alerts (status)"))
                 session.execute(text("CREATE INDEX IF NOT EXISTS ix_alerts_created_at ON alerts (created_at)"))
                 session.execute(text("CREATE INDEX IF NOT EXISTS ix_alerts_alert_id ON alerts (alert_id)"))
+                try:
+                    session.execute(
+                        text(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS uq_alerts_tenant_alert_id "
+                            "ON alerts (tenant_id, alert_id)"
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning("Unable to enforce tenant alert uniqueness", extra={"error": str(exc)})
                 return
 
             rows = session.execute(
@@ -501,6 +575,15 @@ class EnterpriseRepository:
             session.execute(text("CREATE INDEX IF NOT EXISTS ix_alerts_status ON alerts (status)"))
             session.execute(text("CREATE INDEX IF NOT EXISTS ix_alerts_created_at ON alerts (created_at)"))
             session.execute(text("CREATE INDEX IF NOT EXISTS ix_alerts_alert_id ON alerts (alert_id)"))
+            try:
+                session.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS uq_alerts_tenant_alert_id "
+                        "ON alerts (tenant_id, alert_id)"
+                    )
+                )
+            except Exception as exc:
+                logger.warning("Unable to enforce tenant alert uniqueness", extra={"error": str(exc)})
 
     def _ensure_user_email_uniqueness(self) -> None:
         with self.session() as session:
@@ -869,29 +952,35 @@ class EnterpriseRepository:
         if not records:
             return 0
         with self.session(tenant_id=tenant_id) as session:
-            # Deduplicate by internal alert key within the same batch.
-            # Bank CSV uploads can contain repeated alert_id values and must not trigger PK collisions.
+            # Deduplicate by internal alert key within the same batch and enforce minimal payload requirements.
+            # Bank CSV uploads can contain repeated alert_id values and must not trigger collisions.
             deduped_by_id: dict[str, dict[str, Any]] = {}
-            for payload in records:
+            for incoming in records:
+                payload = dict(incoming or {})
                 alert_id = str(payload.get("alert_id") or payload.get("id") or "").strip()
                 if not alert_id:
+                    logger.warning("Skipping alert payload without alert_id")
                     continue
+                payload["alert_id"] = alert_id
+                payload.setdefault("id", alert_id)
+                timestamp = payload.get("timestamp") or payload.get("created_at")
+                if not timestamp:
+                    # Explicit safe fallback for ingestion integrity.
+                    timestamp = _utcnow().isoformat()
+                    payload["ingestion_timestamp_fallback"] = True
+                payload["timestamp"] = timestamp
+                payload.setdefault("created_at", timestamp)
                 internal_id = f"{tenant_id}:{alert_id}"
                 deduped_by_id[internal_id] = payload
+
             valid_records = list(deduped_by_id.values())
-            alert_ids = list(deduped_by_id.keys())
             if not valid_records:
                 return 0
 
-            existing_rows = session.execute(
-                select(AlertRecord).where(AlertRecord.id.in_(alert_ids))
-            ).scalars()
-            existing_by_id = {row.id: row for row in existing_rows}
-
+            rows_to_upsert: list[dict[str, Any]] = []
             for payload in valid_records:
                 alert_id = str(payload.get("alert_id") or payload.get("id"))
                 internal_id = f"{tenant_id}:{alert_id}"
-                row = existing_by_id.get(internal_id) or existing_by_id.get(alert_id)
                 explainability_data = {
                     "risk_explain_json": payload.get("risk_explain_json"),
                     "top_feature_contributions_json": payload.get("top_feature_contributions_json"),
@@ -906,39 +995,88 @@ class EnterpriseRepository:
                 status = str(payload.get("status") or payload.get("governance_status") or "new")
                 risk_band = str(payload.get("risk_band") or "") or None
                 priority = str(payload.get("priority") or risk_band or "low")
-                if row is None:
-                    row = AlertRecord(
-                        id=internal_id,
-                        tenant_id=tenant_id,
-                        run_id=run_id,
-                        alert_id=alert_id,
-                        risk_score=risk_score,
-                        risk_band=risk_band,
-                        priority=priority,
-                        status=status,
-                        payload_json=raw_payload,
-                        raw_payload=raw_payload,
-                        raw_payload_json=structured_payload,
-                        explainability_data=explainability_data,
-                        created_at=_utcnow(),
-                    )
-                    session.add(row)
-                    existing_by_id[internal_id] = row
-                    existing_by_id[alert_id] = row
+                rows_to_upsert.append(
+                    {
+                        "id": internal_id,
+                        "tenant_id": tenant_id,
+                        "run_id": run_id,
+                        "alert_id": alert_id,
+                        "risk_score": risk_score,
+                        "risk_band": risk_band,
+                        "priority": priority,
+                        "status": status,
+                        "payload_json": raw_payload,
+                        "raw_payload": raw_payload,
+                        "raw_payload_json": structured_payload,
+                        "explainability_data": explainability_data,
+                        "created_at": _utcnow(),
+                    }
+                )
+
+            if self._is_postgres and postgres_insert is not None:
+                stmt = postgres_insert(AlertRecord).values(rows_to_upsert)
+                update_cols = {
+                    "tenant_id": stmt.excluded.tenant_id,
+                    "run_id": stmt.excluded.run_id,
+                    "alert_id": stmt.excluded.alert_id,
+                    "risk_score": stmt.excluded.risk_score,
+                    "risk_band": stmt.excluded.risk_band,
+                    "priority": stmt.excluded.priority,
+                    "status": stmt.excluded.status,
+                    "payload_json": stmt.excluded.payload_json,
+                    "raw_payload": stmt.excluded.raw_payload,
+                    "raw_payload_json": stmt.excluded.raw_payload_json,
+                    "explainability_data": stmt.excluded.explainability_data,
+                }
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[AlertRecord.id],
+                    set_=update_cols,
+                )
+                session.execute(stmt)
+                session.flush()
+                return len(rows_to_upsert)
+
+            if self._database_url.startswith("sqlite"):
+                stmt = sqlite_insert(AlertRecord).values(rows_to_upsert)
+                update_cols = {
+                    "tenant_id": stmt.excluded.tenant_id,
+                    "run_id": stmt.excluded.run_id,
+                    "alert_id": stmt.excluded.alert_id,
+                    "risk_score": stmt.excluded.risk_score,
+                    "risk_band": stmt.excluded.risk_band,
+                    "priority": stmt.excluded.priority,
+                    "status": stmt.excluded.status,
+                    "payload_json": stmt.excluded.payload_json,
+                    "raw_payload": stmt.excluded.raw_payload,
+                    "raw_payload_json": stmt.excluded.raw_payload_json,
+                    "explainability_data": stmt.excluded.explainability_data,
+                }
+                stmt = stmt.on_conflict_do_update(index_elements=["id"], set_=update_cols)
+                session.execute(stmt)
+                session.flush()
+                return len(rows_to_upsert)
+
+            # Defensive fallback for non-postgres/non-sqlite engines.
+            for payload in rows_to_upsert:
+                existing = session.execute(
+                    select(AlertRecord).where(AlertRecord.id == payload["id"])
+                ).scalar_one_or_none()
+                if existing is None:
+                    session.add(AlertRecord(**payload))
                     continue
-                row.tenant_id = tenant_id
-                row.run_id = run_id
-                row.alert_id = alert_id
-                row.risk_score = risk_score
-                row.risk_band = risk_band
-                row.priority = priority
-                row.status = status
-                row.payload_json = raw_payload
-                row.raw_payload = raw_payload
-                row.raw_payload_json = structured_payload
-                row.explainability_data = explainability_data
+                existing.tenant_id = payload["tenant_id"]
+                existing.run_id = payload["run_id"]
+                existing.alert_id = payload["alert_id"]
+                existing.risk_score = payload["risk_score"]
+                existing.risk_band = payload["risk_band"]
+                existing.priority = payload["priority"]
+                existing.status = payload["status"]
+                existing.payload_json = payload["payload_json"]
+                existing.raw_payload = payload["raw_payload"]
+                existing.raw_payload_json = payload["raw_payload_json"]
+                existing.explainability_data = payload["explainability_data"]
             session.flush()
-            return len(valid_records)
+            return len(rows_to_upsert)
 
     def save_alert_payload(self, tenant_id: str, run_id: str, alert_dict: dict[str, Any]) -> dict[str, Any]:
         tenant_id = self._require_tenant(tenant_id)

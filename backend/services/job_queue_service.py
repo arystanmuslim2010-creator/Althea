@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import logging
 from typing import Any
 
 from storage.postgres_repository import EnterpriseRepository
 from storage.redis_cache import RedisCache
+
+logger = logging.getLogger("althea.job_queue")
 
 
 class JobQueueService:
@@ -30,10 +33,25 @@ class JobQueueService:
         redis_url: str,
         queue_name: str,
         job_timeout_seconds: int = 900,
+        queue_depth_warning_threshold: int = 5000,
     ) -> None:
         normalized = (queue_mode or "").lower().strip()
         if normalized != "rq":
             raise RuntimeError("Only RQ queue mode is supported.")
+
+        try:
+            depth = int(self.queue_depth(queue_name))
+            if depth >= int(queue_depth_warning_threshold):
+                logger.warning(
+                    "Queue depth above warning threshold before enqueue",
+                    extra={
+                        "queue_name": queue_name,
+                        "queue_depth": depth,
+                        "threshold": int(queue_depth_warning_threshold),
+                    },
+                )
+        except Exception as exc:
+            logger.warning("Unable to read queue depth before enqueue", extra={"queue_name": queue_name, "error": str(exc)})
 
         module_name, func_name = import_path.rsplit(".", 1)
         target_module = importlib.import_module(module_name)

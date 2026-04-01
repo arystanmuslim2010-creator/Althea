@@ -139,12 +139,15 @@ def get_model_registry() -> ModelRegistry:
 
 @lru_cache(maxsize=1)
 def get_inference_service() -> InferenceService:
+    settings = get_settings()
     return InferenceService(
         registry=get_model_registry(),
         schema_validator=get_feature_schema_validator(),
         online_feature_store=get_online_feature_store(),
         feature_registry=get_feature_registry(),
         explainability_service=get_explainability_service(),
+        allow_dev_models=settings.allow_dev_models,
+        max_cached_models=5,
     )
 
 

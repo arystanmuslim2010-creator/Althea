@@ -131,10 +131,10 @@ async function runFetchWithLifecycle(apiBase, path, options, allowRefresh = true
   return res
 }
 
-async function req(method, path, body = null, allowRefresh = true) {
-  const token = getAccessToken()
+async function req(method, path, body = null, allowRefresh = true, includeAuth = true) {
+  const token = includeAuth ? getAccessToken() : null
   const headers = token ? { Authorization: `Bearer ${token}` } : {}
-  const tenantId = decodeJwtPayload(token)?.tenant_id
+  const tenantId = token ? decodeJwtPayload(token)?.tenant_id : null
   if (tenantId) headers['X-Tenant-ID'] = tenantId
   if (body !== null && body !== undefined) {
     headers['Content-Type'] = 'application/json'
@@ -211,11 +211,15 @@ export const api = {
   getAccessToken: () => getAccessToken(),
   getRefreshToken: () => getRefreshToken(),
   clearTokens: () => clearTokens(),
-  refresh: () => req('POST', '/auth/refresh', { refresh_token: getRefreshToken() }, false),
-  register: (payload) => req('POST', '/auth/register', payload, false),
-  login: (payload) => req('POST', '/auth/login', payload, false),
+  refresh: () => req('POST', '/auth/refresh', { refresh_token: getRefreshToken() }, false, false),
+  register: (payload) => req('POST', '/auth/register', payload, false, false),
+  login: (payload) => req('POST', '/auth/login', payload, false, false),
   me: () => req('GET', '/auth/me'),
-  getWorkQueue: () => req('GET', '/work/queue'),
+  getWorkQueue: (params) => {
+    const clean = Object.fromEntries(Object.entries(params || {}).filter(([, v]) => v !== undefined && v !== null))
+    const q = new URLSearchParams(clean).toString()
+    return req('GET', q ? `/work/queue?${q}` : '/work/queue')
+  },
   assignAlert: (alertId, assignedTo) => req('POST', `/alerts/${alertId}/assign`, { assigned_to: assignedTo }),
   updateAlertStatus: (alertId, status) => req('POST', `/alerts/${alertId}/status`, { status }),
   addAlertNote: (alertId, noteText) => req('POST', `/alerts/${alertId}/note`, { note_text: noteText }),
