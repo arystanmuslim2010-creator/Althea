@@ -6,7 +6,7 @@
 - Makefile
 - backend/.env.example
 - backend/examples/sample_login_info.json
-- backend/scripts/archive/README.txt
+- docs/legacy/backend_scripts_archive_README.txt
 - backend/scripts/upload_debug.py
 - backend/tests/test_frontend_backend_contracts.py
 - docs/operations/runtime_commands.md
@@ -17,7 +17,7 @@
 - frontend/src/services/contracts.test.js
 - frontend/src/test/setup.js
 - frontend/vitest.config.js
-- scripts/archive/startup/README.txt
+- docs/legacy/scripts_archive_startup_README.txt
 - scripts/dev-stack.ps1
 
 ### Updated

@@ -146,6 +146,18 @@ vite.config.ts.timestamp-*
 # Python caches
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.pyo
+*.pyd
+*$py.class
+.venv/
+venv/
+ENV/
+env/
 
 # Legacy nested copy left by local migration attempts
 Althea-main/
@@ -157,12 +169,15 @@ data/reports/
 data/model_cache/
 data/object_storage/
 data/dead_letter/
+data/data/models/_health/
+data/data/models/datasets/default-bank/public/
 backend/data/*.db
 backend/data/*.db-*
 backend/data/reports/
 backend/data/model_cache/
 backend/data/object_storage/
 backend/data/dead_letter/
+dead_letter/
 
 # Sensitive local auth/session artifacts
 backend/TOKEN.txt
@@ -172,15 +187,32 @@ backend/LOGIN_INFO.json
 **/*login*info*.json
 **/auth_dump*.json
 !backend/examples/sample_login_info.json
+*.pem
+*.key
+secrets/
 
 # Local runtime and exports
 *.sqlite
 *.sqlite3
 *.parquet
 *.csv.tmp
+*.raw.csv
+*.tmp
+*.bak
+*.swp
 tmp/
 tmp/**
 tmp_env*.txt
 exports/
 exports/**
 **/.ipynb_checkpoints/
+
+# IDE/editor
+.idea/
+.vscode/*
+!.vscode/settings.json
+.cursor/
+
+# Frontend build outputs
+dist/
+build/

@@ -22,8 +22,8 @@
   - `backend/diagnose.py`
   - `backend/diagnose_queue.py`
 - Archived obsolete startup scripts:
-  - `backend/scripts/archive/README.txt`
-  - `scripts/archive/startup/README.txt`
+  - `docs/legacy/backend_scripts_archive_README.txt`
+  - `docs/legacy/scripts_archive_startup_README.txt`
 
 ## Notes
 
