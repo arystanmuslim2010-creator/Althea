@@ -36,6 +36,8 @@ from models.ml_model_service import MLModelService
 from models.model_registry import ModelRegistry
 from services.case_service import CaseWorkflowService
 from services.explain_service import ExplainabilityService
+from services.alert_ingestion_service import AlertIngestionService
+from services.feature_adapter import AlertFeatureAdapter
 from services.feature_service import EnterpriseFeatureService
 from services.governance_service import GovernanceService
 from services.ingestion_service import EnterpriseIngestionService
@@ -172,6 +174,16 @@ def get_ingestion_service() -> EnterpriseIngestionService:
 
 
 @lru_cache(maxsize=1)
+def get_alert_ingestion_service() -> AlertIngestionService:
+    return AlertIngestionService()
+
+
+@lru_cache(maxsize=1)
+def get_alert_feature_adapter() -> AlertFeatureAdapter:
+    return AlertFeatureAdapter()
+
+
+@lru_cache(maxsize=1)
 def get_job_queue_service() -> JobQueueService:
     return JobQueueService(get_repository(), get_cache())
 
@@ -214,6 +226,8 @@ def get_pipeline_service() -> PipelineService:
         governance_service=get_governance_service(),
         model_monitoring_service=get_model_monitoring_service(),
         streaming_orchestrator=get_streaming_orchestrator(),
+        alert_ingestion_service=get_alert_ingestion_service(),
+        feature_adapter=get_alert_feature_adapter(),
     )
 
 
@@ -331,6 +345,8 @@ def build_app_state() -> dict:
         "governance_explainability_service": get_governance_explainability_service(),
         "model_governance_lifecycle": get_model_governance_lifecycle(),
         "ingestion_service": get_ingestion_service(),
+        "alert_ingestion_service": get_alert_ingestion_service(),
+        "feature_adapter": get_alert_feature_adapter(),
         "pipeline_service": get_pipeline_service(),
         "job_queue_service": get_job_queue_service(),
         "governance_service": get_governance_service(),

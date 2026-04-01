@@ -107,6 +107,7 @@ class AlertRecord(Base):
     # Backward-compatibility bridge for legacy databases that still enforce NOT NULL payload_json.
     payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     raw_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    raw_payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     explainability_data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
 
@@ -446,6 +447,7 @@ class EnterpriseRepository:
             "priority": "VARCHAR(32)",
             "status": "VARCHAR(64)",
             "raw_payload": "JSONB",
+            "raw_payload_json": "JSONB",
             "explainability_data": "JSONB",
         }
         with self.session() as session:
@@ -463,7 +465,7 @@ class EnterpriseRepository:
                     elif column in {"status"}:
                         sqlite_type = "TEXT"
                         default_sql = " DEFAULT 'new'"
-                    elif column in {"raw_payload", "explainability_data"}:
+                    elif column in {"raw_payload", "raw_payload_json", "explainability_data"}:
                         sqlite_type = "TEXT"
                         default_sql = " DEFAULT '{}'"
                     session.execute(text(f"ALTER TABLE alerts ADD COLUMN {column} {sqlite_type}{default_sql}"))
@@ -487,7 +489,7 @@ class EnterpriseRepository:
             for column, col_type in required_columns.items():
                 if column in existing:
                     continue
-                if column in {"raw_payload", "explainability_data"}:
+                if column in {"raw_payload", "raw_payload_json", "explainability_data"}:
                     session.execute(text(f"ALTER TABLE alerts ADD COLUMN {column} {col_type} DEFAULT '{{}}'::jsonb"))
                 elif column == "risk_score":
                     session.execute(text(f"ALTER TABLE alerts ADD COLUMN {column} {col_type} DEFAULT 0.0"))
@@ -897,6 +899,9 @@ class EnterpriseRepository:
                     "ml_service_explain_json": payload.get("ml_service_explain_json"),
                 }
                 raw_payload = dict(payload)
+                structured_payload = self._coerce_json_object(payload.get("raw_payload_json"))
+                if not structured_payload:
+                    structured_payload = dict(raw_payload)
                 risk_score = float(payload.get("risk_score", 0.0) or 0.0)
                 status = str(payload.get("status") or payload.get("governance_status") or "new")
                 risk_band = str(payload.get("risk_band") or "") or None
@@ -913,6 +918,7 @@ class EnterpriseRepository:
                         status=status,
                         payload_json=raw_payload,
                         raw_payload=raw_payload,
+                        raw_payload_json=structured_payload,
                         explainability_data=explainability_data,
                         created_at=_utcnow(),
                     )
@@ -929,9 +935,35 @@ class EnterpriseRepository:
                 row.status = status
                 row.payload_json = raw_payload
                 row.raw_payload = raw_payload
+                row.raw_payload_json = structured_payload
                 row.explainability_data = explainability_data
             session.flush()
             return len(valid_records)
+
+    def save_alert_payload(self, tenant_id: str, run_id: str, alert_dict: dict[str, Any]) -> dict[str, Any]:
+        tenant_id = self._require_tenant(tenant_id)
+        payload = dict(alert_dict or {})
+        alert_id = str(payload.get("alert_id") or payload.get("id") or "").strip()
+        if not alert_id:
+            raise ValueError("alert_id is required")
+        self.save_alert_payloads(tenant_id=tenant_id, run_id=run_id, records=[payload])
+        stored = self.get_alert_payload(tenant_id=tenant_id, alert_id=alert_id, run_id=run_id)
+        return stored or {}
+
+    def get_alert_payload(self, tenant_id: str, alert_id: str, run_id: str | None = None) -> dict[str, Any] | None:
+        tenant_id = self._require_tenant(tenant_id)
+        clean_alert_id = str(alert_id or "").strip()
+        if not clean_alert_id:
+            return None
+        with self.session(tenant_id=tenant_id) as session:
+            query = select(AlertRecord).where(
+                AlertRecord.tenant_id == tenant_id,
+                AlertRecord.alert_id == clean_alert_id,
+            )
+            if run_id:
+                query = query.where(AlertRecord.run_id == run_id)
+            row = session.execute(query.order_by(AlertRecord.created_at.desc())).scalars().first()
+            return self._alert_to_payload(row) if row else None
 
     def list_alert_payloads_by_run(self, tenant_id: str, run_id: str, limit: int = 200000) -> list[dict[str, Any]]:
         tenant_id = self._require_tenant(tenant_id)
@@ -1828,7 +1860,18 @@ class EnterpriseRepository:
 
     @staticmethod
     def _alert_to_payload(row: AlertRecord) -> dict[str, Any]:
-        payload = dict(EnterpriseRepository._coerce_json_object(row.raw_payload))
+        structured_payload = dict(EnterpriseRepository._coerce_json_object(getattr(row, "raw_payload_json", {})))
+        legacy_payload = dict(EnterpriseRepository._coerce_json_object(row.raw_payload))
+        if not legacy_payload:
+            legacy_payload = dict(EnterpriseRepository._coerce_json_object(row.payload_json))
+
+        # Compatibility layer:
+        # - Prefer new alert-centric raw_payload_json when present.
+        # - Fall back to legacy raw_payload/payload_json for older runs.
+        payload = dict(legacy_payload)
+        if structured_payload:
+            payload.update(structured_payload)
+        payload.setdefault("raw_payload_json", structured_payload or legacy_payload)
         payload.setdefault("id", row.alert_id)
         payload["alert_id"] = row.alert_id
         payload["risk_score"] = float(row.risk_score or 0.0)

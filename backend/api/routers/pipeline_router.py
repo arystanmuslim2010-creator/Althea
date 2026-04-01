@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import time
+import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
@@ -163,6 +165,40 @@ async def upload_bank_csv(request: Request, file: UploadFile = File(...), tenant
             raw_bytes=contents,
         )
     except IngestionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/api/data/upload-alert-jsonl")
+async def upload_alert_jsonl(request: Request, file: UploadFile = File(...), tenant_id: str = Depends(get_authenticated_tenant_id)):
+    run_id = f"run_{uuid.uuid4().hex[:16]}"
+    try:
+        contents = await file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail="Uploaded JSONL file is empty.")
+
+        upload_dir = request.app.state.settings.data_dir / "uploads" / "alert_jsonl"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = Path(file.filename or "alerts.jsonl").name
+        file_path = upload_dir / f"{run_id}_{safe_name}"
+        file_path.write_bytes(contents)
+
+        result = request.app.state.pipeline_service.run_alert_ingestion_pipeline(
+            file_path=str(file_path),
+            run_id=run_id,
+            tenant_id=tenant_id,
+            user_scope=_user_scope(request),
+        )
+        return {
+            "run_id": run_id,
+            "total_alerts": int(result.get("total_rows", 0) or 0),
+            "success_count": int(result.get("success_count", 0) or 0),
+            "failed_count": int(result.get("failed_count", 0) or 0),
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))

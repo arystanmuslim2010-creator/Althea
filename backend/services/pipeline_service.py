@@ -12,6 +12,8 @@ from core.config import Settings
 from core.observability import record_queue_depth
 from events.event_bus import EventBus
 from models.inference_service import InferenceService
+from services.alert_ingestion_service import AlertIngestionService
+from services.feature_adapter import AlertFeatureAdapter
 from services.feature_service import EnterpriseFeatureService
 from services.governance_service import GovernanceService
 from services.ingestion_service import EnterpriseIngestionService
@@ -35,6 +37,8 @@ class PipelineService:
         governance_service: GovernanceService,
         model_monitoring_service: ModelMonitoringService,
         streaming_orchestrator=None,
+        alert_ingestion_service: AlertIngestionService | None = None,
+        feature_adapter: AlertFeatureAdapter | None = None,
     ) -> None:
         self._settings = settings
         self._repository = repository
@@ -46,6 +50,8 @@ class PipelineService:
         self._governance_service = governance_service
         self._model_monitoring_service = model_monitoring_service
         self._streaming_orchestrator = streaming_orchestrator
+        self._alert_ingestion_service = alert_ingestion_service or AlertIngestionService()
+        self._feature_adapter = feature_adapter or AlertFeatureAdapter()
 
     def get_runtime_context(self, tenant_id: str, user_scope: str) -> dict[str, Any]:
         return self._repository.get_runtime_context(tenant_id, user_scope)
@@ -175,6 +181,114 @@ class PipelineService:
         if total_persisted <= 0:
             raise ValueError("Pipeline produced no alerts from streamed dataset.")
         return run_id, total_persisted, model_version, score_sample
+
+    def run_alert_ingestion_pipeline(
+        self,
+        file_path: str,
+        run_id: str,
+        tenant_id: str | None = None,
+        user_scope: str = "public",
+    ) -> dict[str, Any]:
+        resolved_tenant_id = str(tenant_id or self._settings.default_tenant_id)
+        resolved_user_scope = str(user_scope or "public")
+        self._repository.set_tenant_context(resolved_tenant_id)
+
+        logger.info(
+            json.dumps(
+                {
+                    "event": "alert_jsonl_pipeline_started",
+                    "tenant_id": resolved_tenant_id,
+                    "run_id": run_id,
+                },
+                ensure_ascii=True,
+            )
+        )
+
+        summary = self._alert_ingestion_service.ingest_jsonl(file_path=file_path, run_id=run_id)
+        alerts = list(summary.get("alerts") or [])
+        success_count = int(summary.get("success_count") or 0)
+        failed_count = int(summary.get("failed_count") or 0)
+        total_rows = int(summary.get("total_rows") or 0)
+
+        persisted_raw = 0
+        persisted_scored = 0
+        model_version = "unknown"
+        monitoring_metrics = {"psi": 0.0, "drift_score": 0.0, "degradation_flag": False}
+
+        if alerts:
+            persisted_raw = self._repository.save_alert_payloads(
+                tenant_id=resolved_tenant_id,
+                run_id=run_id,
+                records=alerts,
+            )
+            feature_input = self._feature_adapter.alerts_to_dataframe(alerts)
+            if not feature_input.empty:
+                try:
+                    _, persisted_scored, model_version, score_values = self._run_pipeline(
+                        source_df=feature_input,
+                        tenant_id=resolved_tenant_id,
+                        run_id=run_id,
+                        run_source="AlertJSONL",
+                    )
+                    monitoring = self._model_monitoring_service.record_run_monitoring(
+                        tenant_id=resolved_tenant_id,
+                        run_id=run_id,
+                        model_version=model_version,
+                        scores=score_values,
+                    )
+                    monitoring_metrics = dict(monitoring.get("metrics", {}))
+                    self._publish_pipeline_events(
+                        tenant_id=resolved_tenant_id,
+                        job_id=f"alert_jsonl_{run_id}",
+                        run_id=run_id,
+                        alert_count=persisted_scored,
+                        model_version=model_version,
+                        monitoring_metrics=monitoring_metrics,
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        "Alert JSONL scoring pipeline failed after successful ingestion",
+                        extra={
+                            "tenant_id": resolved_tenant_id,
+                            "run_id": run_id,
+                            "error": str(exc),
+                        },
+                    )
+
+        self._repository.upsert_runtime_context(
+            tenant_id=resolved_tenant_id,
+            user_scope=resolved_user_scope,
+            active_run_id=run_id,
+            run_source="AlertJSONL",
+            row_count=max(persisted_scored, persisted_raw, success_count),
+            active_job_id=None,
+        )
+
+        logger.info(
+            json.dumps(
+                {
+                    "event": "alert_jsonl_pipeline_completed",
+                    "tenant_id": resolved_tenant_id,
+                    "run_id": run_id,
+                    "total_rows": total_rows,
+                    "success_count": success_count,
+                    "failed_count": failed_count,
+                    "persisted_raw": persisted_raw,
+                    "persisted_scored": persisted_scored,
+                    "model_version": model_version,
+                },
+                ensure_ascii=True,
+            )
+        )
+
+        return {
+            "run_id": run_id,
+            "total_rows": total_rows,
+            "success_count": success_count,
+            "failed_count": failed_count,
+            "persisted_raw": int(persisted_raw),
+            "persisted_scored": int(persisted_scored),
+        }
 
     @staticmethod
     def _is_demo_source(source: str | None) -> bool:

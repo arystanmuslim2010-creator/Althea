@@ -3,12 +3,18 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from services.interpretation_service import InterpretationService
 from storage.postgres_repository import EnterpriseRepository
 
 
 class ExplainabilityService:
-    def __init__(self, repository: EnterpriseRepository) -> None:
+    def __init__(
+        self,
+        repository: EnterpriseRepository,
+        interpretation_service: InterpretationService | None = None,
+    ) -> None:
         self._repository = repository
+        self._interpretation = interpretation_service or InterpretationService()
 
     @staticmethod
     def _parse(value: Any, default: Any):
@@ -46,15 +52,24 @@ class ExplainabilityService:
                     shap_value = float(shap_raw) if shap_raw is not None else None
                 except Exception:
                     shap_value = None
+                mag_raw = item.get("magnitude")
+                try:
+                    magnitude = float(mag_raw) if mag_raw is not None else None
+                except Exception:
+                    magnitude = None
+                if magnitude is None:
+                    base = shap_value if shap_value is not None else cast_value
+                    magnitude = abs(float(base))
                 normalized.append(
                     {
                         "feature": feature,
                         "value": cast_value,
                         "shap_value": shap_value,
+                        "magnitude": magnitude,
                     }
                 )
             elif isinstance(item, str) and item.strip():
-                normalized.append({"feature": item.strip(), "value": 0.0, "shap_value": None})
+                normalized.append({"feature": item.strip(), "value": 0.0, "shap_value": None, "magnitude": 0.0})
         return normalized
 
     def _normalize_risk_explanation(self, payload: dict[str, Any], contributions: list[dict[str, Any]]) -> dict[str, Any]:
@@ -117,6 +132,31 @@ class ExplainabilityService:
         if not isinstance(top_features, list) or not top_features:
             top_features = [item.get("feature") for item in contributions if isinstance(item, dict) and item.get("feature")]
 
+        feature_dict = self._parse(target.get("features_json"), {})
+        if not isinstance(feature_dict, dict):
+            feature_dict = {}
+        parsed_risk_explain = self._parse(target.get("risk_explain_json"), {})
+        if not isinstance(parsed_risk_explain, dict):
+            parsed_risk_explain = {}
+
+        technical_payload = {
+            "base_prob": parsed_risk_explain.get("base_prob"),
+            "risk_score": float(target.get("risk_score", 0.0) or 0.0),
+            "risk_prob": float(target.get("risk_prob", 0.0) or 0.0),
+            "model_version": str(target.get("model_version", "unknown")),
+            "contributions": contributions,
+            "feature_attribution": risk_explanation.get("feature_attribution", contributions),
+            "explanation_method": risk_explanation.get("explanation_method", "unknown"),
+            "explanation_status": risk_explanation.get("explanation_status", "unknown"),
+            "explanation_warning": risk_explanation.get("explanation_warning"),
+            "explanation_warning_code": risk_explanation.get("explanation_warning_code"),
+            "raw_explain_payload": parsed_risk_explain,
+        }
+        interpretation = self._interpretation.build_human_explanation(
+            raw_explain_payload=technical_payload,
+            feature_dict=feature_dict,
+        )
+
         return {
             "alert_id": str(target.get("alert_id", "")),
             "run_id": run_id,
@@ -133,5 +173,13 @@ class ExplainabilityService:
             "explanation_warning_code": risk_explanation.get("explanation_warning_code"),
             "rule_hits": self._parse(target.get("rules_json"), []),
             "rule_evidence": self._parse(target.get("rule_evidence_json"), {}),
-            "features": self._parse(target.get("features_json"), {}),
+            "features": feature_dict,
+            # Additive analyst-facing interpretation layer.
+            "summary_text": interpretation.get("summary_text", ""),
+            "key_reasons": interpretation.get("key_reasons", []),
+            "aml_patterns": interpretation.get("aml_patterns", []),
+            "analyst_focus_points": interpretation.get("analyst_focus_points", []),
+            "confidence_score": float(interpretation.get("confidence_score", 0.0) or 0.0),
+            "technical_details": interpretation.get("technical_details", {}),
+            "human_explanation": interpretation,
         }
