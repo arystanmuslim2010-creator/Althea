@@ -15,7 +15,8 @@ const API_CANDIDATES = API_BASE
   : ['/api', 'http://127.0.0.1:8000/api', 'http://localhost:8000/api']
 const ACCESS_TOKEN_KEY = 'althea_auth_token'
 const REFRESH_TOKEN_KEY = 'althea_refresh_token'
-const REQUEST_TIMEOUT_MS = 10000
+const REQUEST_TIMEOUT_MS = Number(import.meta.env.VITE_REQUEST_TIMEOUT_MS ?? 30000)
+const UPLOAD_TIMEOUT_MS = Number(import.meta.env.VITE_UPLOAD_TIMEOUT_MS ?? 180000)
 
 let refreshInFlight = null
 
@@ -28,9 +29,9 @@ export function isConnectionError(message) {
   )
 }
 
-function withTimeout() {
+function withTimeout(timeoutMs = REQUEST_TIMEOUT_MS) {
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  const timeoutId = setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || REQUEST_TIMEOUT_MS))
   return {
     signal: controller.signal,
     done: () => clearTimeout(timeoutId),
@@ -131,7 +132,7 @@ async function runFetchWithLifecycle(apiBase, path, options, allowRefresh = true
   return res
 }
 
-async function req(method, path, body = null, allowRefresh = true, includeAuth = true) {
+async function req(method, path, body = null, allowRefresh = true, includeAuth = true, timeoutMs = REQUEST_TIMEOUT_MS) {
   const token = includeAuth ? getAccessToken() : null
   const headers = token ? { Authorization: `Bearer ${token}` } : {}
   const tenantId = token ? decodeJwtPayload(token)?.tenant_id : null
@@ -148,7 +149,7 @@ async function req(method, path, body = null, allowRefresh = true, includeAuth =
 
   let lastNetworkError = null
   for (const apiBase of API_CANDIDATES) {
-    const timeout = withTimeout()
+    const timeout = withTimeout(timeoutMs)
     try {
       const res = await runFetchWithLifecycle(apiBase, path, { ...options, signal: timeout.signal }, allowRefresh)
       return await parseResponse(res)
@@ -168,7 +169,7 @@ async function req(method, path, body = null, allowRefresh = true, includeAuth =
   throw new Error(CONNECTION_ERROR_MESSAGE)
 }
 
-async function reqForm(path, formData) {
+async function reqForm(path, formData, timeoutMs = UPLOAD_TIMEOUT_MS) {
   const token = getAccessToken()
   const headers = token ? { Authorization: `Bearer ${token}` } : undefined
   if (headers) {
@@ -178,7 +179,7 @@ async function reqForm(path, formData) {
   let lastNetworkError = null
 
   for (const apiBase of API_CANDIDATES) {
-    const timeout = withTimeout()
+    const timeout = withTimeout(timeoutMs)
     try {
       const res = await runFetchWithLifecycle(
         apiBase,
@@ -261,17 +262,17 @@ export const api = {
   uploadCsv: async (file) => {
     const fd = new FormData()
     fd.append('file', file)
-    return reqForm('/data/upload-csv', fd)
+    return reqForm('/data/upload-csv', fd, UPLOAD_TIMEOUT_MS)
   },
   uploadBankCsv: async (file) => {
     const fd = new FormData()
     fd.append('file', file)
-    return reqForm('/data/upload-bank-csv', fd)
+    return reqForm('/data/upload-bank-csv', fd, UPLOAD_TIMEOUT_MS)
   },
   uploadAlertJsonl: async (file) => {
     const fd = new FormData()
     fd.append('file', file)
-    return reqForm('/data/upload-alert-jsonl', fd)
+    return reqForm('/data/upload-alert-jsonl', fd, UPLOAD_TIMEOUT_MS)
   },
   runPipeline: () => req('POST', '/pipeline/run'),
   getPipelineJob: (jobId) => req('GET', `/pipeline/jobs/${jobId}`),
