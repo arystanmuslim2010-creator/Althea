@@ -72,6 +72,14 @@ export function DataConfig() {
     setLoading(true)
     setMsg(null)
     try {
+      if (source === 'alert_jsonl') {
+        const res = await api.uploadAlertJsonl(file)
+        setMsg(
+          `Loaded ${file.name}. Run ${res.run_id}: ${res.success_count}/${res.total_alerts} alerts ingested (${res.failed_count} failed).`
+        )
+        return
+      }
+
       if (source === 'bank') {
         await api.uploadBankCsv(file)
       } else {
@@ -105,16 +113,56 @@ export function DataConfig() {
         <h3 className="mt-0 text-[0.9375rem] font-semibold mb-4">Data Source</h3>
         <div className="flex flex-col gap-2 my-3 mb-4">
           <label className="flex items-center gap-2 cursor-pointer text-sm text-[var(--text)]">
-            <input type="radio" name="source" checked={source === 'synthetic'} onChange={() => setSource('synthetic')} className="accent-blue-500" />
+            <input
+              type="radio"
+              name="source"
+              checked={source === 'synthetic'}
+              onChange={() => {
+                setSource('synthetic')
+                setFile(null)
+              }}
+              className="accent-blue-500"
+            />
             Synthetic
           </label>
           <label className="flex items-center gap-2 cursor-pointer text-sm text-[var(--text)]">
-            <input type="radio" name="source" checked={source === 'csv'} onChange={() => setSource('csv')} className="accent-blue-500" />
+            <input
+              type="radio"
+              name="source"
+              checked={source === 'csv'}
+              onChange={() => {
+                setSource('csv')
+                setFile(null)
+              }}
+              className="accent-blue-500"
+            />
             CSV Upload
           </label>
           <label className="flex items-center gap-2 cursor-pointer text-sm text-[var(--text)]">
-            <input type="radio" name="source" checked={source === 'bank'} onChange={() => setSource('bank')} className="accent-blue-500" />
+            <input
+              type="radio"
+              name="source"
+              checked={source === 'bank'}
+              onChange={() => {
+                setSource('bank')
+                setFile(null)
+              }}
+              className="accent-blue-500"
+            />
             Bank Alerts CSV
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer text-sm text-[var(--text)]">
+            <input
+              type="radio"
+              name="source"
+              checked={source === 'alert_jsonl'}
+              onChange={() => {
+                setSource('alert_jsonl')
+                setFile(null)
+              }}
+              className="accent-blue-500"
+            />
+            Alert JSONL
           </label>
         </div>
         <div className="mb-4 rounded-md border border-[var(--border)] bg-[var(--surface2)] px-4 py-3 text-sm text-[var(--muted)]">
@@ -138,9 +186,14 @@ export function DataConfig() {
             </button>
           </>
         )}
-        {(source === 'csv' || source === 'bank') && (
+        {(source === 'csv' || source === 'bank' || source === 'alert_jsonl') && (
           <>
-            <input type="file" accept=".csv" onChange={(e) => setFile(e.target.files?.[0])} className="my-3 text-sm text-[var(--muted)] block" />
+            <input
+              type="file"
+              accept={source === 'alert_jsonl' ? '.jsonl,.json' : '.csv'}
+              onChange={(e) => setFile(e.target.files?.[0])}
+              className="my-3 text-sm text-[var(--muted)] block"
+            />
             <button className="px-4 py-2 text-sm font-medium rounded-md bg-[var(--accent2)] text-white dark:bg-white dark:text-[#0c0c0c] mr-2 mb-2 disabled:opacity-60" onClick={uploadCsv} disabled={loading || !file}>
               {loading ? 'Running...' : 'Upload & Run Pipeline'}
             </button>

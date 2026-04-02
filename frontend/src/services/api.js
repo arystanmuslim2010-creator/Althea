@@ -268,6 +268,11 @@ export const api = {
     fd.append('file', file)
     return reqForm('/data/upload-bank-csv', fd)
   },
+  uploadAlertJsonl: async (file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return reqForm('/data/upload-alert-jsonl', fd)
+  },
   runPipeline: () => req('POST', '/pipeline/run'),
   getPipelineJob: (jobId) => req('GET', `/pipeline/jobs/${jobId}`),
   clearRun: () => req('POST', '/pipeline/clear'),
