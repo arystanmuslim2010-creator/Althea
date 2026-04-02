@@ -297,6 +297,7 @@ export function AlertQueue() {
   const [runInfo, setRunInfo] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [warning, setWarning] = useState(null)
   const [selected, setSelected] = useState(null)
   const [alertDetail, setAlertDetail] = useState(null)
   const [caseCreated, setCaseCreated] = useState(null)
@@ -319,6 +320,7 @@ export function AlertQueue() {
   const load = async () => {
     setLoading(true)
     setError(null)
+    setWarning(null)
     try {
       const params = {
         status_filter: filters.status,
@@ -326,20 +328,36 @@ export function AlertQueue() {
         typology: filters.typology || 'All',
         segment: filters.segment || 'All',
         search: filters.search,
+        response_mode: 'queue',
       }
-      const [alertsRes, metricsRes, runRes] = await Promise.all([
+      const [alertsRes, metricsRes, runRes] = await Promise.allSettled([
         api.getAlerts(params),
         api.getQueueMetrics(),
         api.getRunInfo(),
       ])
-      setAlerts(alertsRes.alerts || [])
-      setTotalAlerts(metricsRes?.total_alerts ?? alertsRes.total ?? alertsRes.alerts?.length ?? 0)
-      setMetrics(metricsRes)
-      setRunInfo(runRes)
+
+      if (alertsRes.status !== 'fulfilled') {
+        throw alertsRes.reason
+      }
+
+      const alertsPayload = alertsRes.value || {}
+      const metricsPayload = metricsRes.status === 'fulfilled' ? (metricsRes.value || null) : null
+      const runPayload = runRes.status === 'fulfilled' ? (runRes.value || null) : null
+
+      setAlerts(alertsPayload.alerts || [])
+      setTotalAlerts(metricsPayload?.total_alerts ?? alertsPayload.total_available ?? alertsPayload.total ?? alertsPayload.alerts?.length ?? 0)
+      setMetrics(metricsPayload)
+      setRunInfo(runPayload)
+
+      if (metricsRes.status === 'rejected' || runRes.status === 'rejected') {
+        setWarning('Some dashboard metrics are temporarily unavailable.')
+      }
     } catch (e) {
       setError(e.message)
       setAlerts([])
       setMetrics(null)
+      setRunInfo(null)
+      setWarning(null)
     } finally {
       setLoading(false)
     }
@@ -353,17 +371,37 @@ export function AlertQueue() {
     setSelected(id)
     setAiSummary(null)
     setOutcome(null)
+    setWarning(null)
+    const fallbackAlert = (alerts || []).find((item) => String(item?.alert_id) === String(id)) || null
     try {
-      const [d, summaryRes] = await Promise.all([
+      const [detailRes, summaryRes, outcomeRes] = await Promise.allSettled([
         api.getAlert(id),
-        api.getAiSummary(id).catch(() => ({ summary: null })),
+        api.getAiSummary(id),
+        api.getAlertOutcome(id),
       ])
-      setAlertDetail(d)
-      setAiSummary(summaryRes?.summary || null)
-      const existingOutcome = await api.getAlertOutcome(id).catch(() => null)
-      setOutcome(existingOutcome)
+
+      if (detailRes.status === 'fulfilled') {
+        setAlertDetail(detailRes.value)
+      } else if (fallbackAlert) {
+        setAlertDetail(fallbackAlert)
+        setWarning('Full alert details are temporarily unavailable; showing summary fields from queue.')
+      } else {
+        setAlertDetail(null)
+      }
+
+      setAiSummary(summaryRes.status === 'fulfilled' ? (summaryRes.value?.summary || null) : null)
+      setOutcome(outcomeRes.status === 'fulfilled' ? outcomeRes.value : null)
+
+      if (summaryRes.status === 'rejected' || outcomeRes.status === 'rejected') {
+        setWarning('Some side panels are temporarily unavailable.')
+      }
     } catch {
-      setAlertDetail(null)
+      if (fallbackAlert) {
+        setAlertDetail(fallbackAlert)
+        setWarning('Full alert details are temporarily unavailable; showing summary fields from queue.')
+      } else {
+        setAlertDetail(null)
+      }
       setAiSummary(null)
       setOutcome(null)
     }
@@ -472,6 +510,11 @@ export function AlertQueue() {
   return (
     <div className="max-w-[1200px] mx-auto">
       <h1 className="text-[1.375rem] font-medium mb-5 text-[var(--text)]">{t.layout.pageTitles['/alert-queue']}</h1>
+      {warning && (
+        <div className="mb-4 p-3 rounded-md border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400 text-sm">
+          {warning}
+        </div>
+      )}
       <div className="grid grid-cols-1 lg:grid-cols-[1.8fr_2.2fr] gap-6">
         <div className="flex flex-col gap-3">
           <div className="flex flex-wrap gap-2 items-center">

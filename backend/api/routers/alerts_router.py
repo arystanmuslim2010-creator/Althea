@@ -98,6 +98,36 @@ def _apply_scoring_api_fields(record: dict) -> dict:
     return out
 
 
+def _project_queue_record(record: dict) -> dict:
+    # Lightweight list projection for queue views to avoid sending large nested payloads.
+    allowed_keys = {
+        "alert_id",
+        "run_id",
+        "risk_score",
+        "risk_prob",
+        "risk_band",
+        "priority",
+        "status",
+        "governance_status",
+        "suppression_reason",
+        "suppression_code",
+        "in_queue",
+        "user_id",
+        "segment",
+        "typology",
+        "country",
+        "created_at",
+        "timestamp",
+        "model_version",
+        "explanation_method",
+        "explanation_status",
+        "explanation_warning",
+        "explanation_warning_code",
+        "top_features",
+    }
+    return {key: record.get(key) for key in allowed_keys if key in record}
+
+
 def _generate_alert_summary(row_dict: dict) -> str:
     segment = row_dict.get("segment") or "unknown"
     risk_score = float(row_dict.get("risk_score") or 0)
@@ -145,6 +175,7 @@ def get_alerts(
     search: str = "",
     limit: int = 50,
     offset: int = 0,
+    response_mode: str = "default",
     run_id: Optional[str] = None,
     tenant_id: str = Depends(get_authenticated_tenant_id),
 ):
@@ -182,7 +213,13 @@ def get_alerts(
     safe_offset = max(0, int(offset))
     total_available = int(len(queue))
     page_df = queue.iloc[safe_offset : safe_offset + safe_limit]
-    records = [_sanitize_record(_apply_scoring_api_fields(record)) for record in page_df.to_dict("records")]
+    use_queue_projection = str(response_mode or "").strip().lower() == "queue"
+    records = []
+    for raw in page_df.to_dict("records"):
+        enriched = _apply_scoring_api_fields(raw)
+        if use_queue_projection:
+            enriched = _project_queue_record(enriched)
+        records.append(_sanitize_record(enriched))
     return {
         "alerts": records,
         "run_id": run_id,
@@ -203,13 +240,14 @@ def get_alert(alert_id: str, request: Request, tenant_id: str = Depends(get_auth
     run_id = _active_run_id(request, tenant_id)
     if not run_id:
         raise HTTPException(status_code=404, detail="No active run")
-    alerts_df = _load_alerts_df(request, tenant_id, run_id)
-    if "alert_id" not in alerts_df.columns:
+    payload = request.app.state.repository.get_alert_payload(
+        tenant_id=tenant_id,
+        alert_id=str(alert_id),
+        run_id=run_id,
+    )
+    if not payload:
         raise HTTPException(status_code=404, detail="Alert not found")
-    row = alerts_df[alerts_df["alert_id"].astype(str) == str(alert_id)]
-    if row.empty:
-        raise HTTPException(status_code=404, detail="Alert not found")
-    return _sanitize_record(_apply_scoring_api_fields(row.iloc[0].to_dict()))
+    return _sanitize_record(_apply_scoring_api_fields(payload))
 
 
 @router.get("/api/alerts/{alert_id}/explain")
