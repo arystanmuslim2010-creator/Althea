@@ -19,14 +19,16 @@ New endpoints:
 from __future__ import annotations
 
 import logging
+import re
 import time
+from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from core.observability import record_narrative_generation, record_narrative_generation_failure
-from core.security import get_authenticated_tenant_id
+from core.security import get_authenticated_tenant_id, require_permissions
 from workflows.alert_workflow_service import apply_alert_assignment_transition
 
 router = APIRouter(prefix="/api", tags=["intelligence"])
@@ -39,12 +41,20 @@ logger = logging.getLogger("althea.api.intelligence")
 class OutcomeRequest(BaseModel):
     analyst_decision: str = Field(
         ...,
-        description="One of: true_positive, false_positive, escalated, sar_filed, benign_activity",
+        description="One of: true_positive, false_positive, escalated, sar_filed, benign_activity, confirmed_suspicious",
     )
     decision_reason: Optional[str] = Field(None, description="Free-text reason for the decision")
     analyst_id: Optional[str] = Field(None, description="Analyst user ID")
     model_version: Optional[str] = Field(None, description="Model version active at decision time")
     risk_score_at_decision: Optional[float] = Field(None, description="Risk score at time of decision")
+    # Extended investigation tracking fields
+    sar_filed_flag: bool = Field(False, description="Whether a SAR/STR was filed")
+    qa_override: bool = Field(False, description="QA reviewed and overrode decision")
+    investigation_start_time: Optional[str] = Field(None, description="ISO-8601 timestamp when analyst started the alert")
+    investigation_end_time: Optional[str] = Field(None, description="ISO-8601 timestamp when analyst completed the decision")
+    touch_count: Optional[int] = Field(None, description="Number of times analyst opened/edited the alert")
+    notes_count: Optional[int] = Field(None, description="Number of investigation notes added")
+    final_label_status: str = Field("final", description="One of: final, provisional, pending")
 
 
 class AssignRequest(BaseModel):
@@ -66,9 +76,11 @@ class CloseRequest(BaseModel):
 
 
 def _active_run_id(request: Request, tenant_id: str) -> Optional[str]:
+    raw_scope = (request.headers.get("X-User-Scope") or "public").strip()
+    user_scope = re.sub(r"[^A-Za-z0-9._-]+", "_", raw_scope).strip("._-") or "public"
     info = request.app.state.pipeline_service.get_run_info(
         tenant_id=tenant_id,
-        user_scope=request.headers.get("X-User-Scope") or "public",
+        user_scope=user_scope,
     )
     return info.get("run_id")
 
@@ -242,12 +254,25 @@ def get_narrative_draft(
 # ── Analyst Feedback / Outcome ────────────────────────────────────────────────
 
 
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except Exception:
+        return None
+
+
 @router.post("/alerts/{alert_id}/outcome")
 def record_alert_outcome(
     alert_id: str,
     body: OutcomeRequest,
     request: Request,
     tenant_id: str = Depends(get_authenticated_tenant_id),
+    _: dict = Depends(require_permissions("change_alert_status")),
 ) -> dict[str, Any]:
     try:
         return request.app.state.feedback_service.record_outcome(
@@ -258,6 +283,13 @@ def record_alert_outcome(
             analyst_id=body.analyst_id,
             model_version=body.model_version,
             risk_score_at_decision=body.risk_score_at_decision,
+            sar_filed_flag=body.sar_filed_flag,
+            qa_override=body.qa_override,
+            investigation_start_time=_parse_iso(body.investigation_start_time),
+            investigation_end_time=_parse_iso(body.investigation_end_time),
+            touch_count=body.touch_count,
+            notes_count=body.notes_count,
+            final_label_status=body.final_label_status,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -319,13 +351,13 @@ def get_global_signals(
 # ── Investigation Workflow (assign / escalate / close) ────────────────────────
 
 
-@router.post("/alerts/{alert_id}/assign")
 @router.post("/workflows/alerts/{alert_id}/assign")
 def assign_alert(
     alert_id: str,
     body: AssignRequest,
     request: Request,
     tenant_id: str = Depends(get_authenticated_tenant_id),
+    _: dict = Depends(require_permissions("reassign_alerts")),
 ) -> dict[str, Any]:
     actor = body.actor or body.assigned_to or "system"
     try:
@@ -353,13 +385,13 @@ def assign_alert(
     }
 
 
-@router.post("/alerts/{alert_id}/escalate")
 @router.post("/workflows/alerts/{alert_id}/escalate")
 def escalate_alert(
     alert_id: str,
     body: EscalateRequest,
     request: Request,
     tenant_id: str = Depends(get_authenticated_tenant_id),
+    _: dict = Depends(require_permissions("change_alert_status")),
 ) -> dict[str, Any]:
     actor = body.actor or "system"
     try:
@@ -387,13 +419,13 @@ def escalate_alert(
     }
 
 
-@router.post("/alerts/{alert_id}/close")
 @router.post("/workflows/alerts/{alert_id}/close")
 def close_alert(
     alert_id: str,
     body: CloseRequest,
     request: Request,
     tenant_id: str = Depends(get_authenticated_tenant_id),
+    _: dict = Depends(require_permissions("change_alert_status")),
 ) -> dict[str, Any]:
     actor = body.actor or "system"
     reason = body.reason or "analyst_closed"
@@ -420,6 +452,164 @@ def close_alert(
         "status": "closed",
         "case_status": result.get("case_status"),
     }
+
+
+# ── Similar Cases (nearest-neighbor retrieval) ───────────────────────────────
+
+
+@router.get("/alerts/{alert_id}/similar-cases")
+def get_similar_cases(
+    alert_id: str,
+    request: Request,
+    top_k: int = Query(default=5, ge=1, le=20),
+    run_id: Optional[str] = None,
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+) -> dict[str, Any]:
+    """Return the most similar historical cases using feature-based cosine retrieval."""
+    rid = run_id or _active_run_id(request, tenant_id)
+    retrieval_service = getattr(request.app.state, "retrieval_service", None)
+    if retrieval_service is None:
+        return {"alert_id": alert_id, "similar_cases": [], "retrieval_available": False}
+
+    # Fetch the alert payload to build the query vector
+    payload: dict[str, Any] = {}
+    if rid:
+        try:
+            payload = request.app.state.repository.get_alert_payload(
+                tenant_id=tenant_id, alert_id=str(alert_id), run_id=rid
+            ) or {}
+        except Exception:
+            pass
+
+    try:
+        result = retrieval_service.retrieve_similar_cases(
+            tenant_id=tenant_id,
+            alert_payload={"alert_id": alert_id, **payload},
+            top_k=top_k,
+        )
+    except Exception as exc:
+        logger.warning("Similar-case retrieval failed for alert %s: %s", alert_id, exc)
+        return {"alert_id": alert_id, "similar_cases": [], "error": str(exc)}
+
+    return {
+        "alert_id": alert_id,
+        "similar_cases": result,
+        "retrieval_available": True,
+    }
+
+
+# ── Decision Audit ────────────────────────────────────────────────────────────
+
+
+@router.get("/alerts/{alert_id}/decision-audit")
+def get_alert_decision_audit(
+    alert_id: str,
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+) -> dict[str, Any]:
+    """Return the immutable decision audit trail for a single alert."""
+    from sqlalchemy import text
+
+    try:
+        with request.app.state.repository.session(tenant_id=tenant_id) as session:
+            rows = session.execute(
+                text(
+                    """
+                    SELECT id, alert_id, run_id, model_version,
+                           priority_score, escalation_prob, graph_risk_score,
+                           similar_suspicious_strength, p50_hours, p90_hours,
+                           governance_status, queue_action, priority_bucket,
+                           compliance_flags_json, signals_json, decided_at
+                    FROM decision_audit
+                    WHERE tenant_id = :tenant_id AND alert_id = :alert_id
+                    ORDER BY decided_at DESC
+                    LIMIT :limit
+                    """
+                ),
+                {"tenant_id": tenant_id, "alert_id": str(alert_id), "limit": limit},
+            ).fetchall()
+    except Exception as exc:
+        logger.warning("decision_audit query failed: %s", exc)
+        return {"alert_id": alert_id, "audit_records": [], "error": "decision_audit table unavailable"}
+
+    records = [
+        {
+            "id": str(r[0]),
+            "alert_id": str(r[1]),
+            "run_id": r[2],
+            "model_version": r[3],
+            "priority_score": r[4],
+            "escalation_prob": r[5],
+            "graph_risk_score": r[6],
+            "similar_suspicious_strength": r[7],
+            "p50_hours": r[8],
+            "p90_hours": r[9],
+            "governance_status": r[10],
+            "queue_action": r[11],
+            "priority_bucket": r[12],
+            "compliance_flags": r[13],
+            "signals": r[14],
+            "decided_at": str(r[15]) if r[15] else None,
+        }
+        for r in rows
+    ]
+    return {"alert_id": alert_id, "audit_records": records, "total": len(records)}
+
+
+@router.get("/ml/decision-audit")
+def list_decision_audit(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    queue_action: Optional[str] = None,
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+) -> dict[str, Any]:
+    """Paginated decision audit log for compliance and model review."""
+    from sqlalchemy import text
+
+    filters = "WHERE tenant_id = :tenant_id"
+    params: dict[str, Any] = {"tenant_id": tenant_id, "limit": limit, "offset": offset}
+    if queue_action:
+        filters += " AND queue_action = :queue_action"
+        params["queue_action"] = queue_action
+
+    try:
+        with request.app.state.repository.session(tenant_id=tenant_id) as session:
+            rows = session.execute(
+                text(
+                    f"""
+                    SELECT id, alert_id, run_id, model_version,
+                           priority_score, escalation_prob, governance_status,
+                           queue_action, priority_bucket, decided_at
+                    FROM decision_audit
+                    {filters}
+                    ORDER BY decided_at DESC
+                    LIMIT :limit OFFSET :offset
+                    """
+                ),
+                params,
+            ).fetchall()
+    except Exception as exc:
+        logger.warning("decision_audit list query failed: %s", exc)
+        return {"audit_records": [], "error": "decision_audit table unavailable"}
+
+    records = [
+        {
+            "id": str(r[0]),
+            "alert_id": str(r[1]),
+            "run_id": r[2],
+            "model_version": r[3],
+            "priority_score": r[4],
+            "escalation_prob": r[5],
+            "governance_status": r[6],
+            "queue_action": r[7],
+            "priority_bucket": r[8],
+            "decided_at": str(r[9]) if r[9] else None,
+        }
+        for r in rows
+    ]
+    return {"audit_records": records, "total": len(records), "limit": limit, "offset": offset}
 
 
 # ── Unified Investigation Context ─────────────────────────────────────────────

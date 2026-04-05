@@ -118,9 +118,15 @@ export function AuthProvider({ children }) {
     return resolvedUser
   }
 
-  const logout = () => {
-    api.clearTokens()
-    setUser(null)
+  const logout = async () => {
+    try {
+      await api.logout()
+    } catch {
+      // Ignore logout transport errors and clear local auth state anyway.
+    } finally {
+      api.clearTokens()
+      setUser(null)
+    }
   }
 
   const value = useMemo(

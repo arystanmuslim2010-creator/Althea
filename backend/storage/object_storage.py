@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
 
 
@@ -9,11 +9,22 @@ class ObjectStorage:
     """Local filesystem object storage abstraction compatible with S3-style keys."""
 
     def __init__(self, root: Path) -> None:
-        self.root = root
+        self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
 
     def _path(self, key: str) -> Path:
-        path = self.root / key
+        clean_key = str(key or "").strip().replace("\\", "/")
+        if not clean_key:
+            raise ValueError("Storage key must be non-empty.")
+
+        pure = PurePosixPath(clean_key)
+        if pure.is_absolute() or ".." in pure.parts:
+            raise ValueError("Invalid storage key path.")
+
+        path = (self.root / Path(*pure.parts)).resolve()
+        if path != self.root and self.root not in path.parents:
+            raise ValueError("Storage key resolves outside storage root.")
+
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 

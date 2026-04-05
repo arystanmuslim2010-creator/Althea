@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import List
 
 logger = logging.getLogger("althea.config")
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+_FALSE_VALUES = {"0", "false", "no", "off"}
+_PRIMARY_INGESTION_MODES = {"legacy", "alert_jsonl"}
 
 
 def _existing_insecure_artifacts(project_root: Path, backend_root: Path) -> list[str]:
@@ -26,6 +29,49 @@ def _split_csv(raw: str | None, fallback: List[str]) -> List[str]:
         return fallback
     values = [item.strip() for item in raw.split(",")]
     return [item for item in values if item]
+
+
+def _parse_bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    normalized = raw.strip().lower()
+    if not normalized:
+        return bool(default)
+    if normalized in _TRUE_VALUES:
+        return True
+    if normalized in _FALSE_VALUES:
+        return False
+    raise RuntimeError(
+        f"{name} must be a boolean value (accepted: 1/0, true/false, yes/no, on/off)."
+    )
+
+
+def _parse_int_env(name: str, default: int, min_value: int = 1) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return int(default)
+    normalized = raw.strip()
+    if not normalized:
+        return int(default)
+    try:
+        value = int(normalized)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer value.") from exc
+    if value < int(min_value):
+        raise RuntimeError(f"{name} must be >= {int(min_value)}.")
+    return value
+
+
+def _parse_primary_ingestion_mode_env(name: str, default: str) -> str:
+    raw = os.getenv(name)
+    value = str(raw if raw is not None else default).strip().lower()
+    if not value:
+        value = str(default).strip().lower() or "alert_jsonl"
+    if value not in _PRIMARY_INGESTION_MODES:
+        allowed = ", ".join(sorted(_PRIMARY_INGESTION_MODES))
+        raise RuntimeError(f"{name} must be one of: {allowed}.")
+    return value
 
 
 def _resolve_secret_value(secret_ref: str | None) -> str | None:
@@ -118,6 +164,16 @@ class Settings:
     sso_provisioning_secret: str | None = os.getenv("ALTHEA_SSO_PROVISIONING_SECRET")
     secret_key_ref: str | None = os.getenv("ALTHEA_SECRET_KEY_REF")
     otel_exporter_otlp_endpoint: str | None = os.getenv("ALTHEA_OTEL_EXPORTER_OTLP_ENDPOINT")
+    enable_alert_jsonl_ingestion: bool = True
+    # Finalization stage: legacy ingestion is hard-disabled by default.
+    # This flag remains as an emergency-only override during stabilization.
+    enable_legacy_ingestion: bool = False
+    enable_ibm_amlsim_import: bool = False
+    enable_human_interpretation: bool = True
+    strict_ingestion_validation: bool = False
+    alert_jsonl_max_upload_rows: int = 1000
+    ingestion_max_upload_bytes: int = 10 * 1024 * 1024
+    primary_ingestion_mode: str = "alert_jsonl"
 
     @property
     def project_root(self) -> Path:
@@ -162,6 +218,36 @@ class Settings:
         return not self.is_dev
 
     def validate(self) -> None:
+        self.enable_alert_jsonl_ingestion = _parse_bool_env(
+            "ALTHEA_ENABLE_ALERT_JSONL_INGESTION", self.enable_alert_jsonl_ingestion
+        )
+        self.enable_legacy_ingestion = _parse_bool_env(
+            "ALTHEA_ENABLE_LEGACY_INGESTION", self.enable_legacy_ingestion
+        )
+        self.enable_ibm_amlsim_import = _parse_bool_env(
+            "ALTHEA_ENABLE_IBM_AMLSIM_IMPORT", self.enable_ibm_amlsim_import
+        )
+        self.enable_human_interpretation = _parse_bool_env(
+            "ALTHEA_ENABLE_HUMAN_INTERPRETATION", self.enable_human_interpretation
+        )
+        self.strict_ingestion_validation = _parse_bool_env(
+            "ALTHEA_STRICT_INGESTION_VALIDATION", self.strict_ingestion_validation
+        )
+        self.alert_jsonl_max_upload_rows = _parse_int_env(
+            "ALTHEA_ALERT_JSONL_MAX_UPLOAD_ROWS",
+            self.alert_jsonl_max_upload_rows,
+            min_value=1,
+        )
+        self.ingestion_max_upload_bytes = _parse_int_env(
+            "ALTHEA_INGESTION_MAX_UPLOAD_BYTES",
+            self.ingestion_max_upload_bytes,
+            min_value=1024,
+        )
+        self.primary_ingestion_mode = _parse_primary_ingestion_mode_env(
+            "ALTHEA_PRIMARY_INGESTION_MODE",
+            self.primary_ingestion_mode,
+        )
+
         if os.getenv("ALTHEA_ALLOW_DEV_MODELS") is None:
             # Safe default: allow local bootstrap only in development.
             self.allow_dev_models = bool(self.is_dev)
@@ -219,6 +305,21 @@ def get_settings() -> Settings:
     if secret_value:
         settings.jwt_secret = secret_value
     settings.validate()
+    logger.info(
+        "Phase 5 ingestion flags",
+        extra={
+            "enable_alert_jsonl_ingestion": settings.enable_alert_jsonl_ingestion,
+            "enable_legacy_ingestion": settings.enable_legacy_ingestion,
+            "enable_ibm_amlsim_import": settings.enable_ibm_amlsim_import,
+            "enable_human_interpretation": settings.enable_human_interpretation,
+            "strict_ingestion_validation": settings.strict_ingestion_validation,
+            "alert_jsonl_max_upload_rows": settings.alert_jsonl_max_upload_rows,
+            "ingestion_max_upload_bytes": settings.ingestion_max_upload_bytes,
+            "primary_ingestion_mode": settings.primary_ingestion_mode,
+            "alert_jsonl_path": "enabled" if settings.enable_alert_jsonl_ingestion else "disabled",
+            "legacy_ingestion_mode": "emergency_override_only",
+        },
+    )
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.object_storage_root.mkdir(parents=True, exist_ok=True)
     settings.reports_dir.mkdir(parents=True, exist_ok=True)

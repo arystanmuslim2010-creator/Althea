@@ -4,7 +4,8 @@ import json
 import re
 import time
 import uuid
-from collections import defaultdict
+from collections import defaultdict, deque
+from threading import Lock
 from typing import Any
 
 from fastapi import Request
@@ -120,6 +121,86 @@ _ML_INFERENCE_LATENCY_SECONDS = Histogram(
     ["model_version"],
 )
 _QUEUE_DEPTH = Gauge("queue_depth", "Current depth of background queue.")
+_INGESTION_ATTEMPT_TOTAL = Counter(
+    "ingestion_attempt_total",
+    "Total alert-centric ingestion attempts.",
+    ["source_system", "strict_mode"],
+)
+_INGESTION_SUCCESS_TOTAL = Counter(
+    "ingestion_success_total",
+    "Total successful alert-centric ingestions.",
+    ["source_system", "status"],
+)
+_INGESTION_FAILURE_TOTAL = Counter(
+    "ingestion_failure_total",
+    "Total failed alert-centric ingestions.",
+    ["source_system", "status", "reason_category"],
+)
+_INGESTION_VALIDATION_FAILURE_TOTAL = Counter(
+    "ingestion_validation_failure_total",
+    "Total validation-failed ingestion rows.",
+    ["source_system", "reason_category"],
+)
+_INGESTION_WARNING_TOTAL = Counter(
+    "ingestion_warning_total",
+    "Total ingestion warnings emitted by rollout-time checks.",
+    ["source_system", "warning_type"],
+)
+_INGESTION_DURATION_MS = Histogram(
+    "ingestion_duration_ms",
+    "Alert-centric ingestion duration in milliseconds.",
+    ["source_system", "status"],
+    buckets=(1, 5, 10, 25, 50, 100, 250, 500, 1000, 3000, 10000, 30000, 60000),
+)
+_INGESTED_ALERT_COUNT = Counter(
+    "ingested_alert_count",
+    "Count of successfully ingested alerts.",
+    ["source_system"],
+)
+_INGESTED_TRANSACTION_COUNT = Counter(
+    "ingested_transaction_count",
+    "Count of successfully ingested transactions.",
+    ["source_system"],
+)
+_INGESTION_DATA_QUALITY_INCONSISTENCY_TOTAL = Counter(
+    "ingestion_data_quality_inconsistency_total",
+    "Count of data quality inconsistencies detected during ingestion.",
+    ["source_system", "issue_type"],
+)
+_PRIMARY_INGESTION_MODE = Gauge(
+    "primary_ingestion_mode",
+    "Primary ingestion mode indicator (1 for active mode).",
+    ["mode"],
+)
+_INGESTION_PATH_USED_TOTAL = Counter(
+    "ingestion_path_used_total",
+    "Count of ingestion path executions by mode and outcome.",
+    ["ingestion_path", "primary_mode", "status"],
+)
+_ALERTS_INGESTED_PER_MODE = Counter(
+    "alerts_ingested_per_mode",
+    "Count of ingested alerts attributed to ingestion mode.",
+    ["ingestion_mode"],
+)
+_LEGACY_INGESTION_USAGE_TOTAL = Counter(
+    "legacy_ingestion_usage_total",
+    "Legacy ingestion endpoint usage for deprecation tracking.",
+    ["endpoint", "status"],
+)
+_LEGACY_PATH_ACCESS_ATTEMPT_TOTAL = Counter(
+    "legacy_path_access_attempt_total",
+    "Total attempts to access legacy ingestion paths after finalization.",
+    ["endpoint", "caller"],
+)
+_LEGACY_PATH_ACCESS_BLOCKED_TOTAL = Counter(
+    "legacy_path_access_blocked_total",
+    "Total blocked attempts to access disabled legacy ingestion paths.",
+    ["endpoint", "caller"],
+)
+_INGESTION_RUN_HISTORY: deque[dict[str, Any]] = deque(maxlen=500)
+_INGESTION_RUN_HISTORY_LOCK = Lock()
+_LEGACY_ACCESS_HISTORY: deque[dict[str, Any]] = deque(maxlen=500)
+_LEGACY_ACCESS_HISTORY_LOCK = Lock()
 
 
 def _safe_metric_name(name: str) -> str:
@@ -280,6 +361,235 @@ def record_explanation_fallback(method: str, reason: str) -> None:
 
 def record_queue_depth(depth: int) -> None:
     _QUEUE_DEPTH.set(max(0, int(depth)))
+
+
+def record_ingestion_attempt(source_system: str, strict_mode: bool) -> None:
+    _INGESTION_ATTEMPT_TOTAL.labels(
+        source_system=(source_system or "unknown"),
+        strict_mode=("true" if strict_mode else "false"),
+    ).inc()
+
+
+def record_ingestion_summary(summary: dict[str, Any]) -> None:
+    source_system = str(summary.get("source_system") or "unknown")
+    status = str(summary.get("status") or "unknown")
+    reason_category = str(summary.get("failure_reason_category") or "none")
+    failed_count = max(0, int(summary.get("failed_count") or 0))
+    warning_count = max(0, int(summary.get("warning_count") or 0))
+    duration_ms = max(0.0, float(summary.get("elapsed_ms") or 0.0))
+    success_count = max(0, int(summary.get("success_count") or 0))
+    tx_count = max(0, int(summary.get("ingested_transaction_count") or 0))
+
+    if status in {"accepted", "partially_ingested"}:
+        _INGESTION_SUCCESS_TOTAL.labels(source_system=source_system, status=status).inc()
+    else:
+        _INGESTION_FAILURE_TOTAL.labels(
+            source_system=source_system,
+            status=status,
+            reason_category=reason_category,
+        ).inc()
+
+    if failed_count > 0:
+        _INGESTION_VALIDATION_FAILURE_TOTAL.labels(
+            source_system=source_system,
+            reason_category=reason_category,
+        ).inc(failed_count)
+    if warning_count > 0:
+        _INGESTION_WARNING_TOTAL.labels(source_system=source_system, warning_type="generic").inc(warning_count)
+
+    _INGESTION_DURATION_MS.labels(source_system=source_system, status=status).observe(duration_ms)
+    if success_count > 0:
+        _INGESTED_ALERT_COUNT.labels(source_system=source_system).inc(success_count)
+    if tx_count > 0:
+        _INGESTED_TRANSACTION_COUNT.labels(source_system=source_system).inc(tx_count)
+
+    data_quality = summary.get("data_quality_counts")
+    if isinstance(data_quality, dict):
+        for issue_type, count in data_quality.items():
+            issue_count = max(0, int(count or 0))
+            if issue_count <= 0:
+                continue
+            _INGESTION_DATA_QUALITY_INCONSISTENCY_TOTAL.labels(
+                source_system=source_system,
+                issue_type=str(issue_type or "unknown"),
+            ).inc(issue_count)
+
+    run_snapshot = {
+        "run_id": str(summary.get("run_id") or ""),
+        "source_system": source_system,
+        "status": status,
+        "reason_category": reason_category,
+        "total_rows": max(0, int(summary.get("total_rows") or 0)),
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "warning_count": warning_count,
+        "elapsed_ms": duration_ms,
+        "ingested_alert_count": max(0, int(summary.get("ingested_alert_count") or success_count)),
+        "ingested_transaction_count": tx_count,
+        "data_quality_inconsistency_count": max(0, int(summary.get("data_quality_inconsistency_count") or 0)),
+        "critical_data_quality_issues": list(summary.get("critical_data_quality_issues") or []),
+        "critical_issue_count": max(0, int(summary.get("critical_issue_count") or 0)),
+        "recorded_at_epoch_ms": int(time.time() * 1000),
+    }
+    with _INGESTION_RUN_HISTORY_LOCK:
+        _INGESTION_RUN_HISTORY.append(run_snapshot)
+
+
+def record_primary_ingestion_mode(mode: str) -> None:
+    normalized = str(mode or "legacy").strip().lower()
+    if normalized not in {"legacy", "alert_jsonl"}:
+        normalized = "legacy"
+    for item in ("legacy", "alert_jsonl"):
+        _PRIMARY_INGESTION_MODE.labels(mode=item).set(1.0 if item == normalized else 0.0)
+
+
+def record_ingestion_path_used(
+    ingestion_path: str,
+    primary_mode: str,
+    status: str,
+    alerts_ingested: int = 0,
+) -> None:
+    normalized_path = str(ingestion_path or "unknown").strip().lower() or "unknown"
+    normalized_primary = str(primary_mode or "legacy").strip().lower() or "legacy"
+    normalized_status = str(status or "unknown").strip().lower() or "unknown"
+    _INGESTION_PATH_USED_TOTAL.labels(
+        ingestion_path=normalized_path,
+        primary_mode=normalized_primary,
+        status=normalized_status,
+    ).inc()
+    if int(alerts_ingested or 0) > 0:
+        _ALERTS_INGESTED_PER_MODE.labels(ingestion_mode=normalized_path).inc(int(alerts_ingested))
+
+
+def record_legacy_ingestion_usage(endpoint: str, status: str) -> None:
+    normalized_endpoint = str(endpoint or "unknown").strip().lower() or "unknown"
+    normalized_status = str(status or "unknown").strip().lower() or "unknown"
+    _LEGACY_INGESTION_USAGE_TOTAL.labels(endpoint=normalized_endpoint, status=normalized_status).inc()
+
+
+def record_legacy_path_access(endpoint: str, caller: str = "unknown", blocked: bool = True) -> None:
+    normalized_endpoint = str(endpoint or "unknown").strip().lower() or "unknown"
+    normalized_caller = str(caller or "unknown").strip().lower() or "unknown"
+    _LEGACY_PATH_ACCESS_ATTEMPT_TOTAL.labels(
+        endpoint=normalized_endpoint,
+        caller=normalized_caller,
+    ).inc()
+    if bool(blocked):
+        _LEGACY_PATH_ACCESS_BLOCKED_TOTAL.labels(
+            endpoint=normalized_endpoint,
+            caller=normalized_caller,
+        ).inc()
+    with _LEGACY_ACCESS_HISTORY_LOCK:
+        _LEGACY_ACCESS_HISTORY.append(
+            {
+                "endpoint": normalized_endpoint,
+                "caller": normalized_caller,
+                "blocked": bool(blocked),
+                "recorded_at_epoch_ms": int(time.time() * 1000),
+            }
+        )
+
+
+def get_recent_legacy_path_accesses(limit: int = 50) -> list[dict[str, Any]]:
+    bounded = max(1, min(int(limit or 50), 500))
+    with _LEGACY_ACCESS_HISTORY_LOCK:
+        items = list(_LEGACY_ACCESS_HISTORY)
+    if not items:
+        return []
+    return items[-bounded:]
+
+
+def get_legacy_path_access_snapshot(limit: int = 100) -> dict[str, Any]:
+    rows = get_recent_legacy_path_accesses(limit=limit)
+    attempts = len(rows)
+    blocked = sum(1 for row in rows if bool(row.get("blocked")))
+    by_endpoint: dict[str, int] = defaultdict(int)
+    for row in rows:
+        endpoint = str(row.get("endpoint") or "unknown")
+        by_endpoint[endpoint] += 1
+    return {
+        "window_events": max(1, min(int(limit or 100), 500)),
+        "attempt_count": attempts,
+        "blocked_count": blocked,
+        "by_endpoint": dict(by_endpoint),
+        "last_event": dict(rows[-1]) if rows else {},
+    }
+
+
+def get_recent_ingestion_summaries(limit: int = 20, source_system: str | None = "alert_jsonl") -> list[dict[str, Any]]:
+    bounded = max(1, min(int(limit or 20), 500))
+    with _INGESTION_RUN_HISTORY_LOCK:
+        items = list(_INGESTION_RUN_HISTORY)
+    if source_system:
+        target = str(source_system).strip().lower()
+        items = [item for item in items if str(item.get("source_system") or "").strip().lower() == target]
+    if not items:
+        return []
+    return items[-bounded:]
+
+
+def _percentile(values: list[float], percentile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(float(v) for v in values)
+    if len(ordered) == 1:
+        return ordered[0]
+    p = max(0.0, min(100.0, float(percentile)))
+    rank = int(round(((len(ordered) - 1) * p) / 100.0))
+    rank = max(0, min(rank, len(ordered) - 1))
+    return float(ordered[rank])
+
+
+def get_rollout_metrics_snapshot(window_runs: int = 20, source_system: str | None = "alert_jsonl") -> dict[str, Any]:
+    rows = get_recent_ingestion_summaries(limit=window_runs, source_system=source_system)
+    if not rows:
+        return {
+            "window_runs": max(1, min(int(window_runs or 20), 500)),
+            "run_count": 0,
+            "success_rate": 0.0,
+            "failure_rate": 0.0,
+            "validation_error_rate": 0.0,
+            "avg_latency_ms": 0.0,
+            "p95_latency_ms": 0.0,
+            "total_alerts_ingested": 0,
+            "total_rows_seen": 0,
+            "data_quality_issue_rate": 0.0,
+            "critical_issue_runs": 0,
+            "repeated_failure_runs": 0,
+            "last_status": "none",
+            "last_run_id": "",
+        }
+
+    run_count = len(rows)
+    success_runs = sum(1 for row in rows if str(row.get("status") or "") in {"accepted", "partially_ingested"})
+    failed_runs = run_count - success_runs
+    total_rows = sum(max(0, int(row.get("total_rows") or 0)) for row in rows)
+    failed_rows = sum(max(0, int(row.get("failed_count") or 0)) for row in rows)
+    quality_issues = sum(max(0, int(row.get("data_quality_inconsistency_count") or 0)) for row in rows)
+    total_alerts = sum(max(0, int(row.get("ingested_alert_count") or 0)) for row in rows)
+    latencies = [max(0.0, float(row.get("elapsed_ms") or 0.0)) for row in rows]
+    critical_issue_runs = sum(1 for row in rows if int(row.get("critical_issue_count") or 0) > 0)
+    repeated_failure_runs = sum(
+        1 for row in rows if str(row.get("status") or "") in {"rejected", "failed_validation"}
+    )
+    last_row = rows[-1]
+
+    return {
+        "window_runs": max(1, min(int(window_runs or 20), 500)),
+        "run_count": run_count,
+        "success_rate": float(success_runs / run_count) if run_count else 0.0,
+        "failure_rate": float(failed_runs / run_count) if run_count else 0.0,
+        "validation_error_rate": float(failed_rows / total_rows) if total_rows else 0.0,
+        "avg_latency_ms": float(sum(latencies) / len(latencies)) if latencies else 0.0,
+        "p95_latency_ms": _percentile(latencies, 95.0),
+        "total_alerts_ingested": total_alerts,
+        "total_rows_seen": total_rows,
+        "data_quality_issue_rate": float(quality_issues / total_rows) if total_rows else 0.0,
+        "critical_issue_runs": critical_issue_runs,
+        "repeated_failure_runs": repeated_failure_runs,
+        "last_status": str(last_row.get("status") or "unknown"),
+        "last_run_id": str(last_row.get("run_id") or ""),
+    }
 
 
 def metrics_response(metrics: MetricsRegistry) -> PlainTextResponse:

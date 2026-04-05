@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+import os
+import re
 from io import BytesIO
 from typing import Any, Iterator
 
@@ -8,9 +11,12 @@ import numpy as np
 import pandas as pd
 
 from core.config import get_settings
+from core.observability import record_legacy_path_access
 from services.dataset_streamer import stream_csv_dataset
 from storage.object_storage import ObjectStorage
 from storage.postgres_repository import EnterpriseRepository
+
+logger = logging.getLogger("althea.ingestion_service")
 
 
 class IngestionError(ValueError):
@@ -21,6 +27,35 @@ class EnterpriseIngestionService:
     def __init__(self, repository: EnterpriseRepository, object_storage: ObjectStorage) -> None:
         self._repository = repository
         self._object_storage = object_storage
+
+    @staticmethod
+    def _read_legacy_ingestion_flag(default: bool = False) -> bool:
+        raw = os.getenv("ALTHEA_ENABLE_LEGACY_INGESTION")
+        if raw is None:
+            return bool(default)
+        normalized = str(raw).strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+        return bool(default)
+
+    @staticmethod
+    def _ensure_legacy_ingestion_enabled(entrypoint: str) -> None:
+        if EnterpriseIngestionService._read_legacy_ingestion_flag(default=False):
+            record_legacy_path_access(endpoint=entrypoint, caller="service", blocked=False)
+            return
+        record_legacy_path_access(endpoint=entrypoint, caller="service", blocked=True)
+        logger.warning(
+            "deprecated_path_access",
+            extra={
+                "category": "deprecated_path_access",
+                "entrypoint": entrypoint,
+                "caller": "service",
+                "status": "blocked",
+            },
+        )
+        raise IngestionError("legacy_ingestion_disabled")
 
     def _hash_df(self, df: pd.DataFrame) -> str:
         raw = df.head(5000).to_csv(index=False).encode("utf-8")
@@ -101,12 +136,14 @@ class EnterpriseIngestionService:
     ) -> dict[str, Any]:
         df = self._validate_frame(df, source)
         dataset_hash = hashlib.sha256(raw_bytes).hexdigest()[:16] if raw_bytes else self._hash_df(df)
-        dataset_uri = f"datasets/{tenant_id}/{user_scope}/{dataset_hash}.csv"
+        safe_tenant = self._sanitize_storage_component(tenant_id, fallback="tenant")
+        safe_scope = self._sanitize_storage_component(user_scope, fallback="public")
+        dataset_uri = f"datasets/{safe_tenant}/{safe_scope}/{dataset_hash}.csv"
         csv_bytes = raw_bytes or df.to_csv(index=False).encode("utf-8")
         self._object_storage.put_bytes(dataset_uri, csv_bytes)
         raw_uri = None
         if raw_bytes:
-            raw_uri = f"datasets/{tenant_id}/{user_scope}/{dataset_hash}.raw.csv"
+            raw_uri = f"datasets/{safe_tenant}/{safe_scope}/{dataset_hash}.raw.csv"
             self._object_storage.put_bytes(raw_uri, raw_bytes)
         context = self._repository.upsert_runtime_context(
             tenant_id,
@@ -125,11 +162,22 @@ class EnterpriseIngestionService:
             "runtime_context": context,
         }
 
+    @staticmethod
+    def _sanitize_storage_component(value: str, fallback: str) -> str:
+        clean = str(value or "").strip()
+        clean = re.sub(r"[^A-Za-z0-9._-]+", "_", clean)
+        clean = clean.strip("._-")
+        if not clean:
+            return fallback
+        return clean[:128]
+
     def generate_synthetic(self, tenant_id: str, user_scope: str, n_rows: int) -> dict[str, Any]:
         df = self._generate_synthetic_frame(n_rows=n_rows)
         return self._persist_dataset(tenant_id, user_scope, "Synthetic", df)
 
     def upload_transactions_csv(self, tenant_id: str, user_scope: str, raw_bytes: bytes) -> dict[str, Any]:
+        # Deprecated legacy ingestion path (Phase 5): retained for compatibility and controlled fallback.
+        self._ensure_legacy_ingestion_enabled("upload_transactions_csv")
         if not raw_bytes:
             raise IngestionError("Uploaded file is empty.")
         try:
@@ -139,6 +187,8 @@ class EnterpriseIngestionService:
         return self._persist_dataset(tenant_id, user_scope, "CSV", df, raw_bytes=raw_bytes)
 
     def upload_bank_csv(self, tenant_id: str, user_scope: str, raw_bytes: bytes) -> dict[str, Any]:
+        # Deprecated legacy ingestion path (Phase 5): retained for compatibility and controlled fallback.
+        self._ensure_legacy_ingestion_enabled("upload_bank_csv")
         if not raw_bytes:
             raise IngestionError("Uploaded bank CSV is empty.")
         try:

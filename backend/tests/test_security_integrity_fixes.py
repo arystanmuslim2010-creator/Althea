@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from api.routers.alerts_router import router as alerts_router
 from api.routers.auth_router import _LOGIN_RATE_LIMITER
@@ -75,6 +75,155 @@ def test_duplicate_alert_insert_keeps_single_record(tmp_path) -> None:
             )
         ).scalar_one()
     assert int(count or 0) == 1
+
+
+def test_phase4_flag_defaults_reflect_primary_alert_jsonl_cutover(monkeypatch: pytest.MonkeyPatch) -> None:
+    for env_name in [
+        "ALTHEA_ENABLE_ALERT_JSONL_INGESTION",
+        "ALTHEA_ENABLE_LEGACY_INGESTION",
+        "ALTHEA_ENABLE_IBM_AMLSIM_IMPORT",
+        "ALTHEA_ENABLE_HUMAN_INTERPRETATION",
+        "ALTHEA_STRICT_INGESTION_VALIDATION",
+        "ALTHEA_ALERT_JSONL_MAX_UPLOAD_ROWS",
+        "ALTHEA_INGESTION_MAX_UPLOAD_BYTES",
+        "ALTHEA_PRIMARY_INGESTION_MODE",
+    ]:
+        monkeypatch.delenv(env_name, raising=False)
+    settings = Settings(jwt_secret="x" * 48, app_env="development")
+    settings.validate()
+    assert settings.enable_alert_jsonl_ingestion is True
+    assert settings.enable_legacy_ingestion is False
+    assert settings.enable_ibm_amlsim_import is False
+    assert settings.enable_human_interpretation is True
+    assert settings.strict_ingestion_validation is False
+    assert settings.alert_jsonl_max_upload_rows == 1000
+    assert settings.ingestion_max_upload_bytes == 10 * 1024 * 1024
+    assert settings.primary_ingestion_mode == "alert_jsonl"
+
+
+def test_phase1_flag_invalid_value_fails_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALTHEA_ENABLE_ALERT_JSONL_INGESTION", "maybe")
+    with pytest.raises(RuntimeError, match="ALTHEA_ENABLE_ALERT_JSONL_INGESTION must be a boolean value"):
+        Settings(jwt_secret="x" * 48, app_env="development").validate()
+
+
+def test_phase2_row_limit_invalid_value_fails_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALTHEA_ALERT_JSONL_MAX_UPLOAD_ROWS", "zero")
+    with pytest.raises(RuntimeError, match="ALTHEA_ALERT_JSONL_MAX_UPLOAD_ROWS must be an integer value"):
+        Settings(jwt_secret="x" * 48, app_env="development").validate()
+
+
+def test_removed_rollout_mode_flag_is_ignored_during_finalization(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALTHEA_ALERT_JSONL_ROLLOUT_MODE", "all")
+    settings = Settings(jwt_secret="x" * 48, app_env="development")
+    settings.validate()
+    assert settings.enable_alert_jsonl_ingestion is True
+
+
+def test_phase4_primary_mode_invalid_value_fails_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALTHEA_PRIMARY_INGESTION_MODE", "hybrid")
+    with pytest.raises(RuntimeError, match="ALTHEA_PRIMARY_INGESTION_MODE must be one of"):
+        Settings(jwt_secret="x" * 48, app_env="development").validate()
+
+
+def test_phase5_legacy_ingestion_flag_invalid_value_fails_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALTHEA_ENABLE_LEGACY_INGESTION", "sometimes")
+    with pytest.raises(RuntimeError, match="ALTHEA_ENABLE_LEGACY_INGESTION must be a boolean value"):
+        Settings(jwt_secret="x" * 48, app_env="development").validate()
+
+
+def test_phase5_upload_size_limit_invalid_value_fails_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALTHEA_INGESTION_MAX_UPLOAD_BYTES", "tiny")
+    with pytest.raises(RuntimeError, match="ALTHEA_INGESTION_MAX_UPLOAD_BYTES must be an integer value"):
+        Settings(jwt_secret="x" * 48, app_env="development").validate()
+
+
+def test_phase1_alert_columns_exist_for_legacy_sqlite_repo(tmp_path) -> None:
+    db_path = tmp_path / f"althea_phase1_{uuid.uuid4().hex}.db"
+    repo = EnterpriseRepository(f"sqlite:///{db_path.as_posix()}")
+    with repo.session(tenant_id="tenant-a") as session:
+        rows = session.execute(text("PRAGMA table_info(alerts)")).all()
+    columns = {str(row[1]) for row in rows}
+    assert {
+        "raw_payload_json",
+        "source_system",
+        "ingestion_run_id",
+        "schema_version",
+        "evaluation_label_is_sar",
+        "ingestion_metadata_json",
+    }.issubset(columns)
+
+
+def test_phase5_alert_indexes_exist_for_ingestion_fields(tmp_path) -> None:
+    db_path = tmp_path / f"althea_phase5_idx_{uuid.uuid4().hex}.db"
+    repo = EnterpriseRepository(f"sqlite:///{db_path.as_posix()}")
+    with repo.session(tenant_id="tenant-a") as session:
+        rows = session.execute(text("PRAGMA index_list('alerts')")).all()
+    index_names = {str(row[1]) for row in rows}
+    assert {
+        "ix_alerts_ingestion_run_id",
+        "ix_alerts_source_system",
+    }.issubset(index_names)
+
+
+def test_phase1_alert_metadata_persists_but_internal_label_is_not_exposed(tmp_path) -> None:
+    db_path = tmp_path / f"althea_phase1_payload_{uuid.uuid4().hex}.db"
+    repo = EnterpriseRepository(f"sqlite:///{db_path.as_posix()}")
+    tenant_id = "tenant-a"
+    run_id = "run-phase1"
+    repo.save_alert_payloads(
+        tenant_id=tenant_id,
+        run_id=run_id,
+        records=[
+            {
+                "alert_id": "ALERT-PHASE1",
+                "timestamp": "2026-04-05T00:00:00Z",
+                "risk_score": 70.0,
+                "source_system": "ibm_amlsim",
+                "schema_version": "alert_jsonl.v1",
+                "evaluation_label_is_sar": 1,
+                "raw_payload_json": {"alert_id": "ALERT-PHASE1", "metadata": {"source_system": "ibm_amlsim"}},
+                "ingestion_metadata_json": {"source_system": "ibm_amlsim", "warnings": []},
+            }
+        ],
+    )
+
+    payload = repo.get_alert_payload(tenant_id=tenant_id, alert_id="ALERT-PHASE1", run_id=run_id)
+    assert payload is not None
+    assert payload.get("source_system") == "ibm_amlsim"
+    assert "evaluation_label_is_sar" not in payload
+
+    with repo.session(tenant_id=tenant_id) as session:
+        row = session.execute(
+            select(AlertRecord).where(
+                AlertRecord.tenant_id == tenant_id,
+                AlertRecord.alert_id == "ALERT-PHASE1",
+            )
+        ).scalar_one()
+    assert bool(row.evaluation_label_is_sar) is True
+    assert isinstance(row.ingestion_metadata_json, dict)
+
+
+def test_phase1_alert_payloads_remain_compatible_when_new_fields_missing(tmp_path) -> None:
+    db_path = tmp_path / f"althea_phase1_missing_{uuid.uuid4().hex}.db"
+    repo = EnterpriseRepository(f"sqlite:///{db_path.as_posix()}")
+    tenant_id = "tenant-a"
+    run_id = "run-legacy"
+    repo.save_alert_payloads(
+        tenant_id=tenant_id,
+        run_id=run_id,
+        records=[
+            {
+                "alert_id": "ALERT-LEGACY",
+                "timestamp": "2026-04-05T00:00:00Z",
+                "risk_score": 44.0,
+            }
+        ],
+    )
+    payload = repo.get_alert_payload(tenant_id=tenant_id, alert_id="ALERT-LEGACY", run_id=run_id)
+    assert payload is not None
+    assert payload["alert_id"] == "ALERT-LEGACY"
+    assert float(payload["risk_score"]) == 44.0
 
 
 def test_login_rate_limiting_enforces_5_attempts_per_minute() -> None:

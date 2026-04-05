@@ -216,6 +216,8 @@ export const api = {
   register: (payload) => req('POST', '/auth/register', payload, false, false),
   login: (payload) => req('POST', '/auth/login', payload, false, false),
   me: () => req('GET', '/auth/me'),
+  logout: () => req('POST', '/auth/logout'),
+  logoutAll: () => req('POST', '/auth/logout-all'),
   getWorkQueue: (params) => {
     const clean = Object.fromEntries(Object.entries(params || {}).filter(([, v]) => v !== undefined && v !== null))
     const q = new URLSearchParams(clean).toString()

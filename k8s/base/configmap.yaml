@@ -10,4 +10,14 @@ data:
   ALTHEA_PIPELINE_BATCH_SIZE: "20000"
   ALTHEA_REQUIRE_POSTGRES: "true"
   ALTHEA_ALLOW_SQLITE_IN_DEV: "true"
+  ALTHEA_ENABLE_ALERT_JSONL_INGESTION: "true"
+  ALTHEA_ENABLE_LEGACY_INGESTION: "false"
+  ALTHEA_ENABLE_IBM_AMLSIM_IMPORT: "false"
+  ALTHEA_ENABLE_HUMAN_INTERPRETATION: "true"
+  ALTHEA_STRICT_INGESTION_VALIDATION: "false"
+  # Alert JSONL safety cap for large uploads. Increase deliberately after validation.
+  # When increasing, review ingress/proxy body-size and timeout settings before rollout expansion.
+  ALTHEA_ALERT_JSONL_MAX_UPLOAD_ROWS: "1000"
+  ALTHEA_INGESTION_MAX_UPLOAD_BYTES: "10485760"
+  ALTHEA_PRIMARY_INGESTION_MODE: "alert_jsonl"
   ALTHEA_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces

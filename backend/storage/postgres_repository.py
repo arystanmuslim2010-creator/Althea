@@ -18,7 +18,7 @@ except Exception:  # pragma: no cover
     postgres_insert = None
 
 logger = logging.getLogger("althea.repository")
-SCHEMA_VERSION = "20260401_0001_security_integrity"
+SCHEMA_VERSION = "20260405_0010_phase5_post_cutover_hardening"
 
 
 class Base(DeclarativeBase):
@@ -119,6 +119,11 @@ class AlertRecord(Base):
     payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     raw_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     raw_payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    source_system: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    ingestion_run_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    schema_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    evaluation_label_is_sar: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    ingestion_metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     explainability_data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
 
@@ -408,6 +413,7 @@ class EnterpriseRepository:
 
     def _ensure_schema_compatibility(self) -> None:
         self._ensure_schema_version_tracking()
+        self._log_active_alembic_revision()
         self._ensure_model_versions_columns()
         self._ensure_alerts_columns()
         self._ensure_user_email_uniqueness()
@@ -464,6 +470,27 @@ class EnterpriseRepository:
             ).scalar_one_or_none()
             logger.info("Active schema version", extra={"schema_version": str(latest or SCHEMA_VERSION)})
 
+    def _log_active_alembic_revision(self) -> None:
+        try:
+            with self.session() as session:
+                if self._database_url.startswith("sqlite"):
+                    has_table = session.execute(
+                        text("SELECT name FROM sqlite_master WHERE type='table' AND name='alembic_version'")
+                    ).scalar_one_or_none()
+                    if not has_table:
+                        return
+                    revision = session.execute(text("SELECT version_num FROM alembic_version LIMIT 1")).scalar_one_or_none()
+                    if revision:
+                        logger.info("Active Alembic revision", extra={"alembic_revision": str(revision)})
+                    return
+
+                revision = session.execute(text("SELECT version_num FROM alembic_version LIMIT 1")).scalar_one_or_none()
+                if revision:
+                    logger.info("Active Alembic revision", extra={"alembic_revision": str(revision)})
+        except Exception:
+            # Optional visibility only: don't block repository startup if Alembic table is absent.
+            return
+
     @property
     def _is_postgres(self) -> bool:
         return self.engine.dialect.name.startswith("postgres")
@@ -505,6 +532,8 @@ class EnterpriseRepository:
                     session.execute(text(f"ALTER TABLE model_versions ADD COLUMN {column} {col_type}"))
 
     def _ensure_alerts_columns(self) -> None:
+        # Compatibility fallback only.
+        # Canonical schema path is Alembic migrations; this keeps legacy/local DBs online-safe.
         required_columns = {
             "alert_id": "VARCHAR(128)",
             "risk_score": "DOUBLE PRECISION",
@@ -513,6 +542,11 @@ class EnterpriseRepository:
             "status": "VARCHAR(64)",
             "raw_payload": "JSONB",
             "raw_payload_json": "JSONB",
+            "source_system": "VARCHAR(128)",
+            "ingestion_run_id": "VARCHAR(128)",
+            "schema_version": "VARCHAR(64)",
+            "evaluation_label_is_sar": "BOOLEAN",
+            "ingestion_metadata_json": "JSONB",
             "explainability_data": "JSONB",
         }
         with self.session() as session:
@@ -530,15 +564,20 @@ class EnterpriseRepository:
                     elif column in {"status"}:
                         sqlite_type = "TEXT"
                         default_sql = " DEFAULT 'new'"
-                    elif column in {"raw_payload", "raw_payload_json", "explainability_data"}:
+                    elif column in {"raw_payload", "raw_payload_json", "ingestion_metadata_json", "explainability_data"}:
                         sqlite_type = "TEXT"
                         default_sql = " DEFAULT '{}'"
+                    elif column == "evaluation_label_is_sar":
+                        sqlite_type = "INTEGER"
+                        default_sql = ""
                     session.execute(text(f"ALTER TABLE alerts ADD COLUMN {column} {sqlite_type}{default_sql}"))
 
                 session.execute(text("CREATE INDEX IF NOT EXISTS ix_alerts_risk_score ON alerts (risk_score)"))
                 session.execute(text("CREATE INDEX IF NOT EXISTS ix_alerts_status ON alerts (status)"))
                 session.execute(text("CREATE INDEX IF NOT EXISTS ix_alerts_created_at ON alerts (created_at)"))
                 session.execute(text("CREATE INDEX IF NOT EXISTS ix_alerts_alert_id ON alerts (alert_id)"))
+                session.execute(text("CREATE INDEX IF NOT EXISTS ix_alerts_ingestion_run_id ON alerts (ingestion_run_id)"))
+                session.execute(text("CREATE INDEX IF NOT EXISTS ix_alerts_source_system ON alerts (source_system)"))
                 try:
                     session.execute(
                         text(
@@ -563,7 +602,7 @@ class EnterpriseRepository:
             for column, col_type in required_columns.items():
                 if column in existing:
                     continue
-                if column in {"raw_payload", "raw_payload_json", "explainability_data"}:
+                if column in {"raw_payload", "raw_payload_json", "ingestion_metadata_json", "explainability_data"}:
                     session.execute(text(f"ALTER TABLE alerts ADD COLUMN {column} {col_type} DEFAULT '{{}}'::jsonb"))
                 elif column == "risk_score":
                     session.execute(text(f"ALTER TABLE alerts ADD COLUMN {column} {col_type} DEFAULT 0.0"))
@@ -575,6 +614,8 @@ class EnterpriseRepository:
             session.execute(text("CREATE INDEX IF NOT EXISTS ix_alerts_status ON alerts (status)"))
             session.execute(text("CREATE INDEX IF NOT EXISTS ix_alerts_created_at ON alerts (created_at)"))
             session.execute(text("CREATE INDEX IF NOT EXISTS ix_alerts_alert_id ON alerts (alert_id)"))
+            session.execute(text("CREATE INDEX IF NOT EXISTS ix_alerts_ingestion_run_id ON alerts (ingestion_run_id)"))
+            session.execute(text("CREATE INDEX IF NOT EXISTS ix_alerts_source_system ON alerts (source_system)"))
             try:
                 session.execute(
                     text(
@@ -991,6 +1032,19 @@ class EnterpriseRepository:
                 structured_payload = self._coerce_json_object(payload.get("raw_payload_json"))
                 if not structured_payload:
                     structured_payload = dict(raw_payload)
+                structured_payload = self._sanitize_contract_object(structured_payload)
+                source_system = str(payload.get("source_system") or "").strip() or None
+                ingestion_run_id = str(payload.get("ingestion_run_id") or run_id or "").strip() or None
+                schema_version = str(payload.get("schema_version") or "").strip() or None
+                evaluation_label_is_sar = self._coerce_optional_bool(
+                    payload.get("evaluation_label_is_sar", payload.get("is_sar"))
+                )
+                ingestion_metadata_json = self._build_ingestion_metadata(
+                    payload=payload,
+                    run_id=run_id,
+                    source_system=source_system,
+                    schema_version=schema_version,
+                )
                 risk_score = float(payload.get("risk_score", 0.0) or 0.0)
                 status = str(payload.get("status") or payload.get("governance_status") or "new")
                 risk_band = str(payload.get("risk_band") or "") or None
@@ -1008,6 +1062,11 @@ class EnterpriseRepository:
                         "payload_json": raw_payload,
                         "raw_payload": raw_payload,
                         "raw_payload_json": structured_payload,
+                        "source_system": source_system,
+                        "ingestion_run_id": ingestion_run_id,
+                        "schema_version": schema_version,
+                        "evaluation_label_is_sar": evaluation_label_is_sar,
+                        "ingestion_metadata_json": ingestion_metadata_json,
                         "explainability_data": explainability_data,
                         "created_at": _utcnow(),
                     }
@@ -1026,6 +1085,11 @@ class EnterpriseRepository:
                     "payload_json": stmt.excluded.payload_json,
                     "raw_payload": stmt.excluded.raw_payload,
                     "raw_payload_json": stmt.excluded.raw_payload_json,
+                    "source_system": stmt.excluded.source_system,
+                    "ingestion_run_id": stmt.excluded.ingestion_run_id,
+                    "schema_version": stmt.excluded.schema_version,
+                    "evaluation_label_is_sar": stmt.excluded.evaluation_label_is_sar,
+                    "ingestion_metadata_json": stmt.excluded.ingestion_metadata_json,
                     "explainability_data": stmt.excluded.explainability_data,
                 }
                 stmt = stmt.on_conflict_do_update(
@@ -1049,6 +1113,11 @@ class EnterpriseRepository:
                     "payload_json": stmt.excluded.payload_json,
                     "raw_payload": stmt.excluded.raw_payload,
                     "raw_payload_json": stmt.excluded.raw_payload_json,
+                    "source_system": stmt.excluded.source_system,
+                    "ingestion_run_id": stmt.excluded.ingestion_run_id,
+                    "schema_version": stmt.excluded.schema_version,
+                    "evaluation_label_is_sar": stmt.excluded.evaluation_label_is_sar,
+                    "ingestion_metadata_json": stmt.excluded.ingestion_metadata_json,
                     "explainability_data": stmt.excluded.explainability_data,
                 }
                 stmt = stmt.on_conflict_do_update(index_elements=["id"], set_=update_cols)
@@ -1074,6 +1143,11 @@ class EnterpriseRepository:
                 existing.payload_json = payload["payload_json"]
                 existing.raw_payload = payload["raw_payload"]
                 existing.raw_payload_json = payload["raw_payload_json"]
+                existing.source_system = payload["source_system"]
+                existing.ingestion_run_id = payload["ingestion_run_id"]
+                existing.schema_version = payload["schema_version"]
+                existing.evaluation_label_is_sar = payload["evaluation_label_is_sar"]
+                existing.ingestion_metadata_json = payload["ingestion_metadata_json"]
                 existing.explainability_data = payload["explainability_data"]
             session.flush()
             return len(rows_to_upsert)
@@ -1113,6 +1187,23 @@ class EnterpriseRepository:
                 .limit(limit)
             ).scalars()
             return [self._alert_to_payload(row) for row in rows]
+
+    def list_recent_alert_ids(self, tenant_id: str, limit: int = 5000) -> list[str]:
+        tenant_id = self._require_tenant(tenant_id)
+        bounded_limit = max(1, min(int(limit or 5000), 50000))
+        with self.session(tenant_id=tenant_id) as session:
+            rows = session.execute(
+                select(AlertRecord.alert_id)
+                .where(AlertRecord.tenant_id == tenant_id)
+                .order_by(AlertRecord.created_at.desc())
+                .limit(bounded_limit)
+            ).all()
+            out: list[str] = []
+            for row in rows:
+                value = str(row[0] or "").strip()
+                if value:
+                    out.append(value)
+            return out
 
     def list_alert_payloads_paginated(
         self,
@@ -2010,12 +2101,22 @@ class EnterpriseRepository:
         if structured_payload:
             payload.update(structured_payload)
         payload.setdefault("raw_payload_json", structured_payload or legacy_payload)
+        payload.pop("evaluation_label_is_sar", None)
         payload.setdefault("id", row.alert_id)
         payload["alert_id"] = row.alert_id
         payload["risk_score"] = float(row.risk_score or 0.0)
         payload["risk_band"] = row.risk_band
         payload["priority"] = row.priority or row.risk_band or "low"
         payload["status"] = row.status
+        row_source_system = str(getattr(row, "source_system", "") or "").strip()
+        if row_source_system:
+            payload["source_system"] = row_source_system
+        row_ingestion_run_id = str(getattr(row, "ingestion_run_id", "") or "").strip()
+        if row_ingestion_run_id:
+            payload.setdefault("ingestion_run_id", row_ingestion_run_id)
+        row_schema_version = str(getattr(row, "schema_version", "") or "").strip()
+        if row_schema_version:
+            payload.setdefault("schema_version", row_schema_version)
 
         explain = dict(EnterpriseRepository._coerce_json_object(row.explainability_data))
         for key in ("risk_explain_json", "top_feature_contributions_json", "top_features_json", "ml_service_explain_json"):
@@ -2036,6 +2137,104 @@ class EnterpriseRepository:
             except Exception:
                 return {}
         return {}
+
+    @staticmethod
+    def _coerce_optional_bool(value: Any) -> bool | None:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            if value in {0, 0.0}:
+                return False
+            if value in {1, 1.0}:
+                return True
+        raw = str(value).strip().lower()
+        if not raw:
+            return None
+        if raw in {"1", "true", "yes", "y"}:
+            return True
+        if raw in {"0", "false", "no", "n"}:
+            return False
+        return None
+
+    @staticmethod
+    def _sanitize_contract_object(
+        value: dict[str, Any],
+        *,
+        max_items: int = 200,
+        max_string_length: int = 2048,
+    ) -> dict[str, Any]:
+        blocked_tokens = {"password", "secret", "token", "apikey", "api_key", "authorization"}
+        out: dict[str, Any] = {}
+        for idx, (raw_key, raw_val) in enumerate(value.items()):
+            if idx >= max_items:
+                break
+            key = str(raw_key)
+            lowered = key.lower()
+            if any(token in lowered for token in blocked_tokens):
+                continue
+            if isinstance(raw_val, dict):
+                out[key] = EnterpriseRepository._sanitize_contract_object(
+                    dict(raw_val),
+                    max_items=max_items,
+                    max_string_length=max_string_length,
+                )
+                continue
+            if isinstance(raw_val, list):
+                bounded_list = list(raw_val)[:max_items]
+                normalized_items: list[Any] = []
+                for item in bounded_list:
+                    if isinstance(item, dict):
+                        normalized_items.append(
+                            EnterpriseRepository._sanitize_contract_object(
+                                dict(item),
+                                max_items=max_items,
+                                max_string_length=max_string_length,
+                            )
+                        )
+                    elif isinstance(item, str):
+                        normalized_items.append(item[:max_string_length])
+                    else:
+                        normalized_items.append(EnterpriseRepository._json_safe(item))
+                out[key] = normalized_items
+                continue
+            if isinstance(raw_val, str):
+                out[key] = raw_val[:max_string_length]
+                continue
+            out[key] = EnterpriseRepository._json_safe(raw_val)
+        return out
+
+    @staticmethod
+    def _build_ingestion_metadata(
+        payload: dict[str, Any],
+        run_id: str,
+        source_system: str | None,
+        schema_version: str | None,
+    ) -> dict[str, Any]:
+        metadata_payload = EnterpriseRepository._coerce_json_object(payload.get("ingestion_metadata_json"))
+        warnings: list[str] = []
+        raw_warnings = payload.get("ingestion_warnings")
+        if isinstance(raw_warnings, list):
+            warnings.extend(str(item) for item in raw_warnings if str(item).strip())
+        if payload.get("ingestion_timestamp_fallback"):
+            warnings.append("timestamp_fallback_applied")
+        base = {
+            "source_system": source_system or str(metadata_payload.get("source_system") or "unknown"),
+            "schema_version": schema_version or str(metadata_payload.get("schema_version") or "unknown"),
+            "ingestion_run_id": str(payload.get("ingestion_run_id") or run_id or ""),
+            "ingestion_timestamp": str(payload.get("ingestion_timestamp") or payload.get("timestamp") or ""),
+            "warnings": warnings[:20],
+        }
+        cleaned = EnterpriseRepository._sanitize_contract_object(base, max_items=100, max_string_length=512)
+        metadata_context = EnterpriseRepository._sanitize_contract_object(
+            metadata_payload,
+            max_items=50,
+            max_string_length=512,
+        )
+        if metadata_context:
+            cleaned["context"] = metadata_context
+        return cleaned
 
     @staticmethod
     def _json_safe(value: Any) -> Any:

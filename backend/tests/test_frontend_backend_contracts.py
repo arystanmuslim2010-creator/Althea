@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -113,11 +114,102 @@ class _FakeRepo:
 
 
 class _FakePipeline:
+    def __init__(self) -> None:
+        self.last_ingestion_kwargs: dict[str, object] = {}
+        self.primary_mode = "alert_jsonl"
+
     def get_run_info(self, tenant_id: str, user_scope: str):
         return {"run_id": "run-1"}
 
     def list_runs(self, tenant_id: str):
         return [{"run_id": "run-1"}]
+
+    def run_alert_ingestion_pipeline(
+        self,
+        file_path: str,
+        run_id: str,
+        tenant_id: str | None = None,
+        user_scope: str = "public",
+        canary_override: bool = False,
+        upload_row_count: int | None = None,
+    ):
+        self.last_ingestion_kwargs = {
+            "file_path": file_path,
+            "run_id": run_id,
+            "tenant_id": tenant_id,
+            "user_scope": user_scope,
+            "canary_override": canary_override,
+            "upload_row_count": upload_row_count,
+        }
+        return {
+            "run_id": run_id,
+            "total_rows": 2,
+            "success_count": 2,
+            "failed_count": 0,
+            "warning_count": 0,
+            "strict_mode_used": False,
+            "source_system": "alert_jsonl",
+            "elapsed_ms": 15,
+            "status": "accepted",
+            "failure_reason_category": "none",
+            "ingested_alert_count": 2,
+            "ingested_transaction_count": 3,
+            "data_quality_inconsistency_count": 0,
+            "data_quality_counts": {},
+            "rollout_mode": "full",
+            "rollout_decision": "GO",
+        }
+
+    def get_rollout_status(self, tenant_id: str, window_runs: int = 20):
+        return {
+            "primary_ingestion_mode": self.primary_mode,
+            "rollout_mode": "full",
+            "ingestion_enabled": True,
+            "strict_validation_enabled": False,
+            "max_upload_rows": 1000,
+            "last_ingestion_result": {"run_id": "run-1", "status": "accepted"},
+            "decision": "GO",
+            "reasons": ["all_rollout_gates_passing"],
+            "metrics_snapshot": {"run_count": 3},
+            "thresholds": {"max_failure_rate_hold": 0.01},
+            "legacy_ingestion_enabled": False,
+            "legacy_disabled": True,
+            "blocked_legacy_attempts_recent": 0,
+            "legacy_access_attempts_recent": 0,
+            "legacy_access_by_endpoint": {},
+            "recent_ingestion_failure_runs": 0,
+            "recent_ingestion_warning_count": 0,
+            "new_ingestion_healthy": True,
+        }
+
+    def get_finalization_status(self, tenant_id: str, window_runs: int = 20):
+        return self.get_rollout_status(tenant_id=tenant_id, window_runs=window_runs)
+
+    def get_primary_ingestion_mode(self):
+        return self.primary_mode
+
+    def set_runtime_primary_ingestion_mode(self, mode: str):
+        previous = self.primary_mode
+        self.primary_mode = str(mode)
+        return {
+            "status": "ok",
+            "primary_ingestion_mode": self.primary_mode,
+            "previous_primary_ingestion_mode": previous,
+            "source": "runtime_override",
+        }
+
+
+class _FakeIngestionService:
+    def upload_transactions_csv(self, tenant_id: str, user_scope: str, raw_bytes: bytes):
+        rows = sum(1 for line in raw_bytes.decode("utf-8", errors="ignore").splitlines() if line.strip()) - 1
+        return {"rows": max(0, rows), "source": "LegacyCSV"}
+
+    def upload_bank_csv(self, tenant_id: str, user_scope: str, raw_bytes: bytes):
+        rows = sum(1 for line in raw_bytes.decode("utf-8", errors="ignore").splitlines() if line.strip()) - 1
+        return {"rows": max(0, rows), "source": "BankCSV"}
+
+    def generate_synthetic(self, tenant_id: str, user_scope: str, n_rows: int = 400):
+        return {"rows": int(n_rows), "source": "Synthetic"}
 
 
 class _FakeCaseService:
@@ -275,9 +367,18 @@ def client():
     app.include_router(investigation_router)
     app.include_router(intelligence_router)
 
-    app.state.settings = SimpleNamespace(default_tenant_id="tenant-a", rq_queue_name="althea-pipeline")
+    app.state.settings = SimpleNamespace(
+        default_tenant_id="tenant-a",
+        rq_queue_name="althea-pipeline",
+        enable_alert_jsonl_ingestion=True,
+        enable_legacy_ingestion=True,
+        alert_jsonl_max_upload_rows=1000,
+        ingestion_max_upload_bytes=10 * 1024 * 1024,
+        primary_ingestion_mode="alert_jsonl",
+    )
     app.state.repository = _FakeRepo()
     app.state.pipeline_service = _FakePipeline()
+    app.state.ingestion_service = _FakeIngestionService()
     app.state.case_service = _FakeCaseService()
     app.state.workflow_engine = _FakeWorkflow()
     app.state.feedback_service = _FakeFeedback()
@@ -329,6 +430,138 @@ def test_health_endpoint_contract_shape(client: TestClient):
     assert payload["status"] in {"healthy", "degraded"}
     assert "worker_heartbeat" in payload["checks"]
     assert "feature_store" in payload["checks"]
+
+
+def test_alert_jsonl_upload_returns_structured_503_when_disabled(client: TestClient):
+    client.app.state.settings.enable_alert_jsonl_ingestion = False
+    res = client.post(
+        "/api/data/upload-alert-jsonl",
+        files={"file": ("alerts.jsonl", b'{"alert_id":"A1"}\n', "application/json")},
+    )
+    assert res.status_code == 503
+    payload = res.json()
+    assert payload["error"] == "alert_jsonl_ingestion_disabled"
+    assert payload["message"] == "Alert JSONL ingestion is disabled by configuration."
+
+
+def test_alert_jsonl_upload_enabled_returns_summary_payload(client: TestClient, tmp_path: Path):
+    client.app.state.settings.enable_alert_jsonl_ingestion = True
+    client.app.state.settings.strict_ingestion_validation = False
+    client.app.state.settings.enable_ibm_amlsim_import = False
+    client.app.state.settings.alert_jsonl_max_upload_rows = 1000
+    client.app.state.settings.data_dir = tmp_path
+
+    res = client.post(
+        "/api/data/upload-alert-jsonl",
+        files={"file": ("alerts.jsonl", b'{"alert_id":"A1"}\n{"alert_id":"A2"}\n', "application/json")},
+    )
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["status"] == "accepted"
+    assert payload["success_count"] == 2
+    assert payload["failed_count"] == 0
+    assert payload["source_system"] == "alert_jsonl"
+    assert "summary" in payload
+    assert payload["summary"]["strict_mode_used"] is False
+
+
+def test_finalization_status_endpoint_returns_stabilization_summary(client: TestClient):
+    res = client.get("/internal/migration/finalization-status")
+    assert res.status_code == 200
+    payload = res.json()
+    assert "legacy_disabled" in payload
+    assert "blocked_legacy_attempts_recent" in payload
+    assert "new_ingestion_healthy" in payload
+
+
+def test_internal_rollout_status_endpoint_returns_operator_summary(client: TestClient):
+    res = client.get("/internal/rollout/status")
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["decision"] in {"GO", "HOLD", "ROLLBACK"}
+    assert "metrics_snapshot" in payload
+
+
+def test_unified_upload_routes_to_primary_alert_jsonl_mode(client: TestClient, tmp_path: Path):
+    client.app.state.settings.enable_alert_jsonl_ingestion = True
+    client.app.state.settings.data_dir = tmp_path
+    client.app.state.pipeline_service.primary_mode = "alert_jsonl"
+
+    res = client.post(
+        "/api/data/upload",
+        files={"file": ("alerts.jsonl", b'{"alert_id":"A1"}\n', "application/json")},
+    )
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["status"] == "accepted"
+    assert payload["source_system"] == "alert_jsonl"
+
+
+def test_unified_upload_routes_to_legacy_mode_when_primary_is_legacy(client: TestClient):
+    client.app.state.pipeline_service.primary_mode = "legacy"
+    csv_bytes = (
+        "alert_id,user_id,amount,segment,country,typology,source_system,timestamp_utc\n"
+        "ALT001,U1,1500.00,retail,US,structuring,core_bank,2026-04-05T00:00:00Z\n"
+    ).encode("utf-8")
+    res = client.post(
+        "/api/data/upload",
+        files={"file": ("alerts.csv", csv_bytes, "text/csv")},
+    )
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["source"] == "BankCSV"
+    assert payload["rows"] == 1
+
+
+def test_legacy_endpoints_return_503_when_legacy_ingestion_disabled(client: TestClient):
+    client.app.state.settings.enable_legacy_ingestion = False
+    csv_bytes = (
+        "alert_id,user_id,amount,segment,country,typology,source_system,timestamp_utc\n"
+        "ALT001,U1,1500.00,retail,US,structuring,core_bank,2026-04-05T00:00:00Z\n"
+    ).encode("utf-8")
+    for path in ("/api/data/upload-csv", "/api/data/upload-bank-csv"):
+        res = client.post(path, files={"file": ("alerts.csv", csv_bytes, "text/csv")})
+        assert res.status_code == 503
+        payload = res.json()
+        assert payload["error"] == "legacy_ingestion_disabled"
+        assert "finalization" in payload["message"].lower()
+
+
+def test_unified_upload_returns_503_for_legacy_override_when_legacy_disabled(client: TestClient):
+    client.app.state.settings.enable_legacy_ingestion = False
+    client.app.state.pipeline_service.primary_mode = "alert_jsonl"
+    csv_bytes = (
+        "alert_id,user_id,amount,segment,country,typology,source_system,timestamp_utc\n"
+        "ALT001,U1,1500.00,retail,US,structuring,core_bank,2026-04-05T00:00:00Z\n"
+    ).encode("utf-8")
+    res = client.post(
+        "/api/data/upload?ingestion_mode=legacy",
+        files={"file": ("alerts.csv", csv_bytes, "text/csv")},
+    )
+    assert res.status_code == 503
+    assert res.json()["error"] == "legacy_ingestion_disabled"
+
+
+def test_upload_returns_413_when_file_exceeds_size_limit(client: TestClient):
+    client.app.state.settings.ingestion_max_upload_bytes = 4
+    payload = b'{"alert_id":"A1"}\n'
+    res = client.post(
+        "/api/data/upload-alert-jsonl",
+        files={"file": ("alerts.jsonl", payload, "application/json")},
+    )
+    assert res.status_code == 413
+    detail = res.json()["detail"]
+    assert detail["error"] == "upload_too_large"
+
+
+def test_primary_mode_runtime_switch_allows_fast_rollback(client: TestClient):
+    to_legacy = client.post("/internal/ingestion/primary-mode", json={"mode": "legacy"})
+    assert to_legacy.status_code == 200
+    assert to_legacy.json()["primary_ingestion_mode"] == "legacy"
+
+    to_alert = client.post("/internal/ingestion/primary-mode", json={"mode": "alert_jsonl"})
+    assert to_alert.status_code == 200
+    assert to_alert.json()["primary_ingestion_mode"] == "alert_jsonl"
 
 
 def test_work_queue_includes_sla_fields(client: TestClient):

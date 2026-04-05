@@ -142,6 +142,76 @@ class WorkflowStateTransitionRequest(BaseModel):
     reason: str = "manual_transition"
 
 
+@router.get("/alerts/{alert_id}/time-estimate")
+def get_time_estimate(
+    alert_id: str,
+    request: Request,
+    run_id: str | None = None,
+    user: dict = Depends(require_any_permission("view_assigned_alerts", "view_all_alerts")),
+) -> dict:
+    """Return ML-estimated investigation time (p50, p90) for a single alert.
+
+    Delegates to InvestigationTimeService if wired; falls back to cached
+    priority_score data stored in the alert payload.
+    """
+    tenant_id: str = user["tenant_id"]
+
+    # Resolve run_id
+    rid = run_id
+    if not rid:
+        info = request.app.state.pipeline_service.get_run_info(tenant_id, _user_scope(request, user))
+        rid = info.get("run_id")
+
+    payload: dict = {}
+    if rid:
+        try:
+            payload = request.app.state.repository.get_alert_payload(
+                tenant_id=tenant_id, alert_id=str(alert_id), run_id=rid
+            ) or {}
+        except Exception:
+            pass
+
+    time_service = getattr(request.app.state, "investigation_time_service", None)
+    if time_service is not None:
+        import pandas as pd
+
+        try:
+            feature_frame = pd.DataFrame([payload]) if payload else pd.DataFrame()
+            result = time_service.predict(tenant_id=tenant_id, feature_frame=feature_frame)
+            return {
+                "alert_id": alert_id,
+                "p50_hours": result.get("p50_hours"),
+                "p90_hours": result.get("p90_hours"),
+                "model_version": result.get("model_version"),
+                "source": "time_model",
+            }
+        except Exception as exc:
+            import logging as _logging
+            _logging.getLogger("althea.api.investigation").warning(
+                "Time estimate model failed for alert %s: %s", alert_id, exc
+            )
+
+    # Fallback: return stored p50/p90 values from scored payload if present
+    p50 = payload.get("p50_hours")
+    p90 = payload.get("p90_hours")
+    if p50 is not None or p90 is not None:
+        return {
+            "alert_id": alert_id,
+            "p50_hours": float(p50) if p50 is not None else None,
+            "p90_hours": float(p90) if p90 is not None else None,
+            "model_version": payload.get("time_model_version"),
+            "source": "cached_payload",
+        }
+
+    return {
+        "alert_id": alert_id,
+        "p50_hours": None,
+        "p90_hours": None,
+        "model_version": None,
+        "source": "unavailable",
+    }
+
+
 @router.get("/work/queue")
 def get_work_queue(
     request: Request,

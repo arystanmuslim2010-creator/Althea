@@ -9,22 +9,35 @@ import numpy as np
 import pandas as pd
 
 from core.config import Settings
-from core.observability import record_queue_depth
+from core.observability import (
+    get_legacy_path_access_snapshot,
+    get_recent_ingestion_summaries,
+    get_rollout_metrics_snapshot,
+    record_ingestion_attempt,
+    record_ingestion_path_used,
+    record_ingestion_summary,
+    record_primary_ingestion_mode,
+    record_queue_depth,
+)
 from events.event_bus import EventBus
 from models.inference_service import InferenceService
-from services.alert_ingestion_service import AlertIngestionService
+from services.alert_ingestion_service import AlertIngestionService, AlertIngestionValidationError
 from services.feature_adapter import AlertFeatureAdapter
 from services.feature_service import EnterpriseFeatureService
 from services.governance_service import GovernanceService
 from services.ingestion_service import EnterpriseIngestionService
 from services.job_queue_service import JobQueueService
 from services.model_monitoring_service import ModelMonitoringService
+from services.rollout_evaluator import RolloutEvaluator
 from storage.postgres_repository import EnterpriseRepository
 
 logger = logging.getLogger("althea.pipeline")
 
 
 class PipelineService:
+    _SCALE_WARNING_LATENCY_MS = 30000
+    _SCALE_WARNING_PROCESSING_TIME_PER_ALERT_MS = 250.0
+
     def __init__(
         self,
         settings: Settings,
@@ -39,6 +52,7 @@ class PipelineService:
         streaming_orchestrator=None,
         alert_ingestion_service: AlertIngestionService | None = None,
         feature_adapter: AlertFeatureAdapter | None = None,
+        rollout_evaluator: RolloutEvaluator | None = None,
     ) -> None:
         self._settings = settings
         self._repository = repository
@@ -52,6 +66,52 @@ class PipelineService:
         self._streaming_orchestrator = streaming_orchestrator
         self._alert_ingestion_service = alert_ingestion_service or AlertIngestionService()
         self._feature_adapter = feature_adapter or AlertFeatureAdapter()
+        self._rollout_evaluator = rollout_evaluator or RolloutEvaluator()
+        self._last_alert_ingestion_result: dict[str, Any] = {}
+        self._runtime_primary_ingestion_mode_override: str | None = None
+        self._last_primary_ingestion_mode: str | None = None
+
+    @staticmethod
+    def _normalize_primary_ingestion_mode(mode: str | None) -> str:
+        normalized = str(mode or "").strip().lower()
+        if normalized not in {"legacy", "alert_jsonl"}:
+            return "legacy"
+        return normalized
+
+    def _is_alert_jsonl_ingestion_enabled(self) -> bool:
+        return bool(getattr(self._settings, "enable_alert_jsonl_ingestion", False))
+
+    def get_primary_ingestion_mode(self) -> str:
+        configured_mode = self._normalize_primary_ingestion_mode(
+            self._runtime_primary_ingestion_mode_override or getattr(self._settings, "primary_ingestion_mode", "alert_jsonl")
+        )
+        if configured_mode != self._last_primary_ingestion_mode:
+            logger.info(
+                "Primary ingestion mode active",
+                extra={
+                    "primary_ingestion_mode": configured_mode,
+                    "previous_primary_ingestion_mode": self._last_primary_ingestion_mode,
+                },
+            )
+            self._last_primary_ingestion_mode = configured_mode
+        record_primary_ingestion_mode(configured_mode)
+        return configured_mode
+
+    def set_runtime_primary_ingestion_mode(self, mode: str) -> dict[str, Any]:
+        resolved = self._normalize_primary_ingestion_mode(mode)
+        previous = self.get_primary_ingestion_mode()
+        self._runtime_primary_ingestion_mode_override = resolved
+        active = self.get_primary_ingestion_mode()
+        logger.warning(
+            "Primary ingestion mode changed at runtime",
+            extra={"previous_primary_ingestion_mode": previous, "primary_ingestion_mode": active},
+        )
+        return {
+            "status": "ok",
+            "primary_ingestion_mode": active,
+            "previous_primary_ingestion_mode": previous,
+            "source": "runtime_override",
+        }
 
     def get_runtime_context(self, tenant_id: str, user_scope: str) -> dict[str, Any]:
         return self._repository.get_runtime_context(tenant_id, user_scope)
@@ -188,10 +248,18 @@ class PipelineService:
         run_id: str,
         tenant_id: str | None = None,
         user_scope: str = "public",
+        canary_override: bool = False,
+        upload_row_count: int | None = None,
     ) -> dict[str, Any]:
+        if not self._is_alert_jsonl_ingestion_enabled():
+            raise RuntimeError("alert_jsonl_ingestion_disabled")
+
         resolved_tenant_id = str(tenant_id or self._settings.default_tenant_id)
         resolved_user_scope = str(user_scope or "public")
         self._repository.set_tenant_context(resolved_tenant_id)
+        configured_max_upload_rows = int(getattr(self._settings, "alert_jsonl_max_upload_rows", 1000))
+        observed_upload_rows = max(0, int(upload_row_count or 0))
+        effective_max_upload_rows = max(1, configured_max_upload_rows)
 
         logger.info(
             json.dumps(
@@ -199,16 +267,65 @@ class PipelineService:
                     "event": "alert_jsonl_pipeline_started",
                     "tenant_id": resolved_tenant_id,
                     "run_id": run_id,
+                    "strict_validation": bool(self._settings.strict_ingestion_validation),
+                    "max_upload_rows": int(effective_max_upload_rows),
+                    "legacy_emergency_override_enabled": bool(getattr(self._settings, "enable_legacy_ingestion", False)),
+                    "upload_row_count": observed_upload_rows,
+                    "primary_ingestion_mode": self.get_primary_ingestion_mode(),
                 },
                 ensure_ascii=True,
             )
         )
+        record_ingestion_attempt(source_system="alert_jsonl", strict_mode=bool(self._settings.strict_ingestion_validation))
+        known_recent_alert_ids = set(
+            self._repository.list_recent_alert_ids(tenant_id=resolved_tenant_id, limit=5000)
+        )
 
-        summary = self._alert_ingestion_service.ingest_jsonl(file_path=file_path, run_id=run_id)
+        try:
+            summary = self._alert_ingestion_service.ingest_jsonl(
+                file_path=file_path,
+                run_id=run_id,
+                strict_validation=self._settings.strict_ingestion_validation,
+                max_upload_rows=int(effective_max_upload_rows),
+                allow_ibm_amlsim_import=bool(getattr(self._settings, "enable_ibm_amlsim_import", False)),
+                known_recent_alert_ids=known_recent_alert_ids,
+            )
+        except AlertIngestionValidationError as exc:
+            summary = dict(exc.summary or {})
+            summary.setdefault("run_id", run_id)
+            record_ingestion_summary(summary)
+            self._last_alert_ingestion_result = {k: v for k, v in summary.items() if k != "alerts"}
+            logger.warning(
+                json.dumps(
+                    {
+                        "event": "alert_jsonl_pipeline_validation_failed",
+                        "tenant_id": resolved_tenant_id,
+                        "run_id": run_id,
+                        "status": str(summary.get("status") or "failed_validation"),
+                        "source_system": str(summary.get("source_system") or "unknown"),
+                        "strict_mode": bool(summary.get("strict_mode_used", self._settings.strict_ingestion_validation)),
+                        "total_rows": int(summary.get("total_rows") or 0),
+                        "success_count": int(summary.get("success_count") or 0),
+                        "failed_count": int(summary.get("failed_count") or 0),
+                        "warning_count": int(summary.get("warning_count") or 0),
+                        "failure_reason_category": str(summary.get("failure_reason_category") or "validation_failure"),
+                    },
+                    ensure_ascii=True,
+                )
+            )
+            raise
         alerts = list(summary.get("alerts") or [])
         success_count = int(summary.get("success_count") or 0)
         failed_count = int(summary.get("failed_count") or 0)
         total_rows = int(summary.get("total_rows") or 0)
+        warning_count = int(summary.get("warning_count") or 0)
+        source_system = str(summary.get("source_system") or "unknown")
+        status = str(summary.get("status") or ("accepted" if success_count > 0 else "rejected"))
+        elapsed_ms = int(summary.get("elapsed_ms") or 0)
+        ingested_transaction_count = int(summary.get("ingested_transaction_count") or 0)
+        failure_reason_category = str(summary.get("failure_reason_category") or "none")
+        critical_issue_count = int(summary.get("critical_issue_count") or 0)
+        processing_time_per_alert_ms = float(summary.get("processing_time_per_alert_ms") or 0.0)
 
         persisted_raw = 0
         persisted_scored = 0
@@ -255,13 +372,62 @@ class PipelineService:
                         },
                     )
 
-        self._repository.upsert_runtime_context(
-            tenant_id=resolved_tenant_id,
-            user_scope=resolved_user_scope,
-            active_run_id=run_id,
-            run_source="AlertJSONL",
-            row_count=max(persisted_scored, persisted_raw, success_count),
-            active_job_id=None,
+        if success_count > 0:
+            self._repository.upsert_runtime_context(
+                tenant_id=resolved_tenant_id,
+                user_scope=resolved_user_scope,
+                active_run_id=run_id,
+                run_source="AlertJSONL",
+                row_count=max(persisted_scored, persisted_raw, success_count),
+                active_job_id=None,
+            )
+
+        summary_payload = {
+            **summary,
+            "source_system": source_system,
+            "status": status,
+            "failure_reason_category": failure_reason_category,
+            "warning_count": warning_count,
+            "elapsed_ms": elapsed_ms,
+            "ingested_transaction_count": ingested_transaction_count,
+            "success_count": success_count,
+            "failed_count": failed_count,
+            "rollout_mode": "full",
+            "canary_override_used": False,
+            "critical_issue_count": critical_issue_count,
+            "processing_time_per_alert_ms": processing_time_per_alert_ms,
+        }
+        record_ingestion_summary(summary_payload)
+        record_ingestion_path_used(
+            ingestion_path="alert_jsonl",
+            primary_mode=self.get_primary_ingestion_mode(),
+            status=status,
+            alerts_ingested=int(summary.get("ingested_alert_count") or success_count),
+        )
+        self._last_alert_ingestion_result = {k: v for k, v in summary_payload.items() if k != "alerts"}
+        if elapsed_ms >= self._SCALE_WARNING_LATENCY_MS:
+            logger.warning(
+                "Alert ingestion latency exceeded scale warning threshold",
+                extra={"run_id": run_id, "elapsed_ms": elapsed_ms, "threshold_ms": self._SCALE_WARNING_LATENCY_MS},
+            )
+        if processing_time_per_alert_ms >= self._SCALE_WARNING_PROCESSING_TIME_PER_ALERT_MS:
+            logger.warning(
+                "Alert ingestion processing time per alert exceeded threshold",
+                extra={
+                    "run_id": run_id,
+                    "processing_time_per_alert_ms": processing_time_per_alert_ms,
+                    "threshold_ms": self._SCALE_WARNING_PROCESSING_TIME_PER_ALERT_MS,
+                },
+            )
+        if success_count > 0 and persisted_raw <= 0:
+            logger.warning(
+                "Alert ingestion persistence anomaly detected",
+                extra={"run_id": run_id, "success_count": success_count, "persisted_raw": persisted_raw},
+            )
+        rollout_snapshot = get_rollout_metrics_snapshot(window_runs=20, source_system="alert_jsonl")
+        rollout_decision = self._rollout_evaluator.evaluate(
+            metrics_snapshot=rollout_snapshot,
+            recent_runs=get_recent_ingestion_summaries(limit=20, source_system="alert_jsonl"),
         )
 
         logger.info(
@@ -270,12 +436,23 @@ class PipelineService:
                     "event": "alert_jsonl_pipeline_completed",
                     "tenant_id": resolved_tenant_id,
                     "run_id": run_id,
+                    "status": status,
+                    "source_system": source_system,
+                    "strict_mode": bool(summary.get("strict_mode_used", self._settings.strict_ingestion_validation)),
                     "total_rows": total_rows,
                     "success_count": success_count,
                     "failed_count": failed_count,
+                    "warning_count": warning_count,
+                    "elapsed_ms": elapsed_ms,
+                    "ingested_transaction_count": ingested_transaction_count,
+                    "failure_reason_category": failure_reason_category,
+                    "critical_issue_count": critical_issue_count,
+                    "rollout_mode": "full",
+                    "canary_override": False,
                     "persisted_raw": persisted_raw,
                     "persisted_scored": persisted_scored,
                     "model_version": model_version,
+                    "rollout_decision": str(rollout_decision.get("decision") or "HOLD"),
                 },
                 ensure_ascii=True,
             )
@@ -286,9 +463,69 @@ class PipelineService:
             "total_rows": total_rows,
             "success_count": success_count,
             "failed_count": failed_count,
+            "warning_count": warning_count,
+            "strict_mode_used": bool(summary.get("strict_mode_used", self._settings.strict_ingestion_validation)),
+            "source_system": source_system,
+            "elapsed_ms": elapsed_ms,
+            "status": status,
+            "failure_reason_category": failure_reason_category,
+            "ingested_alert_count": int(summary.get("ingested_alert_count") or success_count),
+            "ingested_transaction_count": ingested_transaction_count,
+            "data_quality_inconsistency_count": int(summary.get("data_quality_inconsistency_count") or 0),
+            "data_quality_counts": dict(summary.get("data_quality_counts") or {}),
             "persisted_raw": int(persisted_raw),
             "persisted_scored": int(persisted_scored),
+            "rollout_mode": "full",
+            "canary_override_used": False,
+            "critical_issue_count": critical_issue_count,
+            "critical_data_quality_issues": list(summary.get("critical_data_quality_issues") or []),
+            "processing_time_per_alert_ms": processing_time_per_alert_ms,
+            "rollout_decision": str(rollout_decision.get("decision") or "HOLD"),
         }
+
+    def get_rollout_status(self, tenant_id: str, window_runs: int = 20) -> dict[str, Any]:
+        if not str(tenant_id or "").strip():
+            raise ValueError("tenant_id is required")
+        primary_mode = self.get_primary_ingestion_mode()
+        ingestion_enabled = self._is_alert_jsonl_ingestion_enabled()
+        metrics_snapshot = get_rollout_metrics_snapshot(window_runs=window_runs, source_system="alert_jsonl")
+        recent_runs = get_recent_ingestion_summaries(limit=window_runs, source_system="alert_jsonl")
+        legacy_snapshot = get_legacy_path_access_snapshot(limit=200)
+        decision_payload = self._rollout_evaluator.evaluate(metrics_snapshot=metrics_snapshot, recent_runs=recent_runs)
+        last_result = dict(self._last_alert_ingestion_result or {})
+        last_result.pop("alerts", None)
+        recent_failures = sum(
+            1
+            for row in recent_runs
+            if str(row.get("status") or "").strip().lower() in {"rejected", "failed_validation"}
+        )
+        warning_total = sum(max(0, int(row.get("warning_count") or 0)) for row in recent_runs)
+        legacy_enabled = bool(getattr(self._settings, "enable_legacy_ingestion", False))
+        decision = str(decision_payload.get("decision") or "HOLD")
+        new_ingestion_healthy = bool(ingestion_enabled) and decision != "ROLLBACK"
+        return {
+            "primary_ingestion_mode": primary_mode,
+            "rollout_mode": "full",
+            "ingestion_enabled": ingestion_enabled,
+            "strict_validation_enabled": bool(getattr(self._settings, "strict_ingestion_validation", False)),
+            "max_upload_rows": int(getattr(self._settings, "alert_jsonl_max_upload_rows", 1000)),
+            "last_ingestion_result": last_result,
+            "decision": decision,
+            "reasons": list(decision_payload.get("reasons") or []),
+            "metrics_snapshot": dict(decision_payload.get("metrics_snapshot") or {}),
+            "thresholds": dict(decision_payload.get("thresholds") or {}),
+            "legacy_ingestion_enabled": legacy_enabled,
+            "legacy_disabled": not legacy_enabled,
+            "blocked_legacy_attempts_recent": int(legacy_snapshot.get("blocked_count") or 0),
+            "legacy_access_attempts_recent": int(legacy_snapshot.get("attempt_count") or 0),
+            "legacy_access_by_endpoint": dict(legacy_snapshot.get("by_endpoint") or {}),
+            "recent_ingestion_failure_runs": int(recent_failures),
+            "recent_ingestion_warning_count": int(warning_total),
+            "new_ingestion_healthy": new_ingestion_healthy,
+        }
+
+    def get_finalization_status(self, tenant_id: str, window_runs: int = 20) -> dict[str, Any]:
+        return self.get_rollout_status(tenant_id=tenant_id, window_runs=window_runs)
 
     @staticmethod
     def _is_demo_source(source: str | None) -> bool:
@@ -302,12 +539,14 @@ class PipelineService:
         run_id: str | None = None,
         run_source: str | None = None,
     ) -> tuple[str, int, str, list[float]]:
+        # Step 1: Feature generation
         feature_bundle = self._feature_service.generate_features_batch(source_df)
         alerts_df = feature_bundle.get("alerts_df", pd.DataFrame()).copy()
         feature_matrix = feature_bundle.get("feature_matrix", pd.DataFrame()).copy()
         if alerts_df.empty or feature_matrix.empty:
             raise ValueError("Feature generation produced no records.")
 
+        # Step 2: Escalation scoring
         inference = self._inference_service.predict(
             tenant_id=tenant_id,
             feature_frame=feature_matrix,
@@ -324,29 +563,21 @@ class PipelineService:
         alerts_df["risk_prob"] = np.clip(alerts_df["risk_score"] / 100.0, 0.0, 1.0)
         alerts_df["model_version"] = model_version
 
+        # Step 3: Explanation assembly
         top_features_json: list[str] = []
         top_contrib_json: list[str] = []
         explain_json: list[str] = []
         ml_signals_json: list[str] = []
         for idx in range(len(alerts_df)):
             row_explain = explanations[idx] if idx < len(explanations) else {}
-
-            # New explanation format from unified explainability service
-            # Contains: feature_attribution, risk_reason_codes, explanation_method, explanation_status, explanation_warning
             feature_attribution = row_explain.get("feature_attribution", []) if isinstance(row_explain, dict) else []
-
-            # top_feature_contributions: list of {feature, value, shap_value} dicts
             top_contrib_json.append(json.dumps(feature_attribution, ensure_ascii=True))
-
-            # top_features: list of feature names only
             top_features_json.append(
                 json.dumps(
                     [item.get("feature") for item in feature_attribution if isinstance(item, dict) and item.get("feature")],
                     ensure_ascii=True,
                 )
             )
-
-            # risk_explain_json: detailed explanation with metadata
             explain_json.append(
                 json.dumps(
                     {
@@ -363,8 +594,6 @@ class PipelineService:
                     ensure_ascii=True,
                 )
             )
-
-            # ml_signals_json: behavioral signals for investigation
             ml_signals_json.append(
                 json.dumps(
                     {
@@ -378,7 +607,6 @@ class PipelineService:
                     ensure_ascii=True,
                 )
             )
-
         alerts_df["top_feature_contributions_json"] = top_contrib_json
         alerts_df["top_features_json"] = top_features_json
         alerts_df["risk_explain_json"] = explain_json
@@ -386,10 +614,13 @@ class PipelineService:
         alerts_df["rules_json"] = alerts_df.get("rules_json", "[]")
         alerts_df["rule_evidence_json"] = alerts_df.get("rule_evidence_json", "{}")
 
+        # Step 4: Governance enforcement (ranking + policy)
         governed = self._governance_service.apply_governance(
             alerts_df,
             stabilize_for_demo=self._is_demo_source(run_source),
         )
+
+        # Step 5: Persist
         resolved_run_id = run_id or f"run_{uuid.uuid4().hex[:16]}"
         persisted = self._persist_outputs(
             tenant_id=tenant_id,
@@ -397,7 +628,7 @@ class PipelineService:
             alerts_df=governed,
             feature_matrix=feature_matrix,
         )
-        score_values = [float(v) for v in governed["risk_score"].fillna(0.0).tolist()]
+        score_values = [float(v) for v in governed.get("priority_score", governed["risk_score"]).fillna(0.0).tolist()]
         logger.info(
             json.dumps(
                 {

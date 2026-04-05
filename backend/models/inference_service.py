@@ -4,7 +4,6 @@ import hashlib
 import io
 import json
 import logging
-import pickle
 from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any
@@ -83,6 +82,10 @@ class InferenceService:
             if feature_frame.empty:
                 raise ValueError("No online features found for requested alert_ids.")
 
+        resolved_alert_ids: list[str] | None = [str(item) for item in (alert_ids or []) if str(item)]
+        if not resolved_alert_ids and feature_frame is not None and "alert_id" in feature_frame.columns:
+            resolved_alert_ids = [str(item) for item in feature_frame["alert_id"].tolist()]
+
         model_record = self._registry.resolve_model(tenant_id=tenant_id, strategy=strategy)
         if not model_record:
             if not self._allow_dev_models:
@@ -93,12 +96,27 @@ class InferenceService:
             raise ValueError("No approved model artifact available for inference.")
 
         schema = self._registry.load_feature_schema(model_record)
-        feature_frame = self._coerce_frame_to_schema(feature_frame, schema)
+        feature_frame, alignment = self._align_frame_to_schema(feature_frame, schema)
         validation = self._schema_validator.validate(schema, feature_frame)
+        validation["imputed_columns"] = list(alignment.get("imputed_columns") or [])
+        validation["dropped_columns"] = list(alignment.get("dropped_columns") or [])
         if not validation["is_valid"]:
             raise ValueError(
                 f"Feature schema mismatch. Missing={validation['missing_columns']}, "
                 f"mismatched={validation['mismatched_types']}"
+            )
+        if validation["imputed_columns"] or validation["dropped_columns"]:
+            logger.warning(
+                json.dumps(
+                    {
+                        "event": "feature_schema_alignment_applied",
+                        "tenant_id": tenant_id,
+                        "model_version": str(model_record.get("model_version") or "unknown"),
+                        "imputed_columns": validation["imputed_columns"],
+                        "dropped_columns": validation["dropped_columns"],
+                    },
+                    ensure_ascii=True,
+                )
             )
 
         metadata = dict(model_record.get("training_metadata_json") or {})
@@ -109,10 +127,6 @@ class InferenceService:
         model = self._load_model(model_record)
         probabilities = self._predict_proba(model=model, feature_frame=feature_frame)
         scores = np.clip(probabilities * 100.0, 0.0, 100.0)
-        resolved_alert_ids: list[str] | None = [str(item) for item in (alert_ids or []) if str(item)]
-        if not resolved_alert_ids and "alert_id" in feature_frame.columns:
-            resolved_alert_ids = [str(item) for item in feature_frame["alert_id"].tolist()]
-
         explanations = self._build_explanations(
             tenant_id=tenant_id,
             model=model,
@@ -182,11 +196,8 @@ class InferenceService:
 
         try:
             return joblib_load(io.BytesIO(artifact))
-        except Exception:
-            try:
-                return pickle.loads(artifact)
-            except Exception as exc:
-                raise ValueError(f"Failed to deserialize model artifact: {exc}") from exc
+        except Exception as exc:
+            raise ValueError(f"Failed to deserialize model artifact: {exc}") from exc
 
     def _assert_safe_model(self, model: Any) -> None:
         class_path = f"{model.__class__.__module__}.{model.__class__.__name__}"
@@ -294,6 +305,46 @@ class InferenceService:
             else:
                 out[name] = out[name].astype(str)
         return out
+
+    @staticmethod
+    def _default_series_for_dtype(dtype: str, size: int, index: pd.Index) -> pd.Series:
+        raw = str(dtype).lower()
+        if "float" in raw:
+            return pd.Series(np.zeros(size, dtype=float), index=index)
+        if "int" in raw:
+            return pd.Series(np.zeros(size, dtype=int), index=index)
+        if "bool" in raw:
+            return pd.Series([False] * size, index=index, dtype=bool)
+        if "datetime" in raw or "timestamp" in raw:
+            return pd.to_datetime(pd.Series(["1970-01-01T00:00:00Z"] * size, index=index), utc=True)
+        return pd.Series([""] * size, index=index, dtype="object")
+
+    def _align_frame_to_schema(self, frame: pd.DataFrame, schema: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, list[str]]]:
+        if frame is None or frame.empty:
+            return (pd.DataFrame() if frame is None else frame), {"imputed_columns": [], "dropped_columns": []}
+
+        out = frame.copy()
+        expected_items = [
+            (str(item.get("name")), str(item.get("dtype")))
+            for item in (schema.get("columns") or [])
+            if item.get("name")
+        ]
+        expected_columns = [name for name, _ in expected_items]
+        expected_set = set(expected_columns)
+
+        imputed: list[str] = []
+        for name, dtype in expected_items:
+            if name in out.columns:
+                continue
+            out[name] = self._default_series_for_dtype(dtype=dtype, size=len(out), index=out.index)
+            imputed.append(name)
+
+        dropped = [str(column) for column in list(out.columns) if str(column) not in expected_set]
+        if expected_columns:
+            out = out[expected_columns]
+
+        out = self._coerce_frame_to_schema(out, schema)
+        return out, {"imputed_columns": imputed, "dropped_columns": dropped}
 
     def _auto_bootstrap_model(self, tenant_id: str, feature_frame: pd.DataFrame) -> None:
         if feature_frame is None or feature_frame.empty:

@@ -199,6 +199,38 @@ def test_main_inference_path_never_returns_unlabeled_explanations():
         assert item["explanation_method"] in {"shap", "tree_shap", "numeric_fallback", "unavailable"}
 
 
+def test_inference_schema_alignment_imputes_missing_and_drops_extra_columns():
+    train_frame = _feature_frame(rows=8)
+    train_frame["user_amount_mean"] = train_frame["amount"] * 0.9
+    registry = _build_registry(train_frame)
+    recorder = _RecordingExplainability(
+        {
+            "feature_attribution": [{"feature": "amount", "value": 0.2, "shap_value": 0.2}],
+            "risk_reason_codes": ["amount:increase"],
+            "explanation_method": "shap",
+            "explanation_status": "ok",
+            "explanation_warning": None,
+            "explanation_warning_code": None,
+            "model_version": "test-model-v1",
+        }
+    )
+    service = InferenceService(
+        registry=registry,
+        schema_validator=FeatureSchemaValidator(),
+        explainability_service=recorder,  # type: ignore[arg-type]
+    )
+
+    infer_frame = train_frame.drop(columns=["user_amount_mean"]).iloc[:2].copy()
+    infer_frame["debug_only_extra"] = 1
+    result = service.predict(tenant_id="tenant-d", feature_frame=infer_frame)
+
+    assert len(result["scores"]) == 2
+    schema_validation = result.get("schema_validation") or {}
+    assert schema_validation.get("is_valid") is True
+    assert "user_amount_mean" in (schema_validation.get("imputed_columns") or [])
+    assert "debug_only_extra" in (schema_validation.get("dropped_columns") or [])
+
+
 def test_governance_and_runtime_explainability_share_same_engine():
     shared = ExplainabilityService()
     governance = GovernanceExplainabilityService(explainability_service=shared)
