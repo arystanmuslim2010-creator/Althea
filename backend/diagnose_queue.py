@@ -79,8 +79,8 @@ try:
                 print(f"     - {f}")
         else:
             print(f"[WARN] Dataset directory is empty!")
-    else:
-        print(f"[WARN] Dataset directory doesn't exist!")
+    else:Error: Pipeline failedм
+        print(f"[WARN] Dataset directory doesn't exist!
         print(f"   Path: {os.path.abspath(dataset_dir)}")
 except Exception as e:
     print(f"[FAIL] Dataset check error: {e}\n")
