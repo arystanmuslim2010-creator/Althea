@@ -248,7 +248,7 @@ export const api = {
   getRuns: () => req('GET', '/runs'),
   getCases: () => req('GET', '/cases'),
   getCaseAudit: (caseId) => req('GET', `/cases/${caseId}/audit`),
-  createCase: (alertIds, actor = 'Analyst_1') => req('POST', '/cases', { alert_ids: alertIds, actor }),
+  createCase: (alertIds, _actor = 'Analyst_1') => req('POST', '/cases', { alert_ids: alertIds }),
   updateCase: (caseId, payload) => {
     const normalized = { ...(payload || {}) }
     if (normalized.status) {
@@ -286,8 +286,12 @@ export const api = {
   getNarrativeDraft: async (alertId) => normalizeNarrativeDraft(await req('GET', `/alerts/${alertId}/narrative-draft`), alertId),
   getAlertOutcome: (alertId) => req('GET', `/alerts/${alertId}/outcome`),
   recordAlertOutcome: (alertId, payload) => req('POST', `/alerts/${alertId}/outcome`, payload),
-  workflowAssignAlert: (alertId, assignedTo, actor) => req('POST', `/workflows/alerts/${alertId}/assign`, { assigned_to: assignedTo, actor }),
-  workflowEscalateAlert: (alertId, actor, reason) => req('POST', `/workflows/alerts/${alertId}/escalate`, { actor, reason }),
-  workflowCloseAlert: (alertId, actor, reason) => req('POST', `/workflows/alerts/${alertId}/close`, { actor, reason }),
+  workflowAssignAlert: (alertId, assignedTo, _actor = null) => req('POST', `/workflows/alerts/${alertId}/assign`, { assigned_to: assignedTo }),
+  workflowEscalateAlert: (alertId, actorOrReason, maybeReason) => req('POST', `/workflows/alerts/${alertId}/escalate`, {
+    reason: maybeReason ?? actorOrReason ?? null,
+  }),
+  workflowCloseAlert: (alertId, actorOrReason, maybeReason) => req('POST', `/workflows/alerts/${alertId}/close`, {
+    reason: maybeReason ?? actorOrReason ?? null,
+  }),
   getSlaBreaches: () => req('GET', '/workflows/sla-breaches'),
 }

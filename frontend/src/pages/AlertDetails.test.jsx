@@ -3,6 +3,12 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { AlertDetails } from './AlertDetails'
 
+let mockUser = {
+  user_id: 'u1',
+  role: 'analyst',
+  permissions: ['add_investigation_notes', 'work_cases', 'change_alert_status', 'reassign_alerts'],
+}
+
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual('react-router-dom')
   return {
@@ -32,11 +38,16 @@ vi.mock('../services/api', () => ({
 }))
 
 vi.mock('../contexts/AuthContext', () => ({
-  useAuth: () => ({ user: { user_id: 'u1', role: 'analyst' } }),
+  useAuth: () => ({ user: mockUser }),
 }))
 
 describe('AlertDetails', () => {
   beforeEach(async () => {
+    mockUser = {
+      user_id: 'u1',
+      role: 'analyst',
+      permissions: ['add_investigation_notes', 'work_cases', 'change_alert_status', 'reassign_alerts'],
+    }
     const { api } = await import('../services/api')
     api.getAlert.mockResolvedValue({ alert_id: 'A1', risk_score: 88, risk_band: 'high' })
     api.getAlertExplain.mockResolvedValue({ primary_drivers: ['rule_hit'] })
@@ -188,5 +199,19 @@ describe('AlertDetails', () => {
     await waitFor(() => expect(screen.getByText('Risk Explanation')).not.toBeNull())
     expect(screen.getByText(/Method:/)).not.toBeNull()
     expect(screen.getByText(/\| Status:/)).not.toBeNull()
+  })
+
+  it('hides mutation controls when permissions are missing', async () => {
+    mockUser = { user_id: 'u1', role: 'analyst', permissions: [] }
+
+    render(
+      <MemoryRouter>
+        <AlertDetails />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('Workflow Actions')).not.toBeNull())
+    expect(screen.getByText(/Workflow actions require backend permissions/)).not.toBeNull()
+    expect(screen.getByText(/Outcome recording is disabled/)).not.toBeNull()
   })
 })

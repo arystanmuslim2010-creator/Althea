@@ -17,7 +17,8 @@ logger = logging.getLogger("althea.alerts")
 
 
 def _user_scope(request: Request) -> str:
-    return request.headers.get("X-User-Scope") or "public"
+    current_user = getattr(request.state, "current_user", None) or {}
+    return current_user.get("user_id") or request.headers.get("X-User-Scope") or "public"
 
 
 def _parse_json_field(raw, default, field_name: str = "json_field"):

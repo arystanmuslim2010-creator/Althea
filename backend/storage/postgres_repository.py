@@ -366,7 +366,38 @@ class AlertOutcomeRecord(Base):
     analyst_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     model_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
     risk_score_at_decision: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sar_filed_flag: Mapped[bool] = mapped_column(Boolean, default=False)
+    qa_override: Mapped[bool] = mapped_column(Boolean, default=False)
+    investigation_start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    investigation_end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolution_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    touch_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    notes_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    final_label_status: Mapped[str] = mapped_column(String(32), default="final")
+    final_label_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+
+
+class DecisionAuditRecord(Base):
+    __tablename__ = "decision_audit"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True, default=lambda: uuid.uuid4().hex)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    alert_id: Mapped[str] = mapped_column(String(128), index=True)
+    run_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    model_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    priority_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    escalation_prob: Mapped[float | None] = mapped_column(Float, nullable=True)
+    graph_risk_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    similar_suspicious_strength: Mapped[float | None] = mapped_column(Float, nullable=True)
+    p50_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    p90_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    governance_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    queue_action: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    priority_bucket: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    compliance_flags_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    signals_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
 
 class GlobalPatternSignalRecord(Base):
@@ -416,11 +447,66 @@ class EnterpriseRepository:
         self._log_active_alembic_revision()
         self._ensure_model_versions_columns()
         self._ensure_alerts_columns()
+        self._ensure_alert_outcomes_columns()
         self._ensure_user_email_uniqueness()
         self._ensure_rbac_seed()
         self._ensure_role_permissions_seed()
         self._ensure_tier1_enterprise_tables()
         self._ensure_investigation_intelligence_tables()
+
+    def _ensure_alert_outcomes_columns(self) -> None:
+        required_columns = {
+            "sar_filed_flag": "BOOLEAN",
+            "qa_override": "BOOLEAN",
+            "investigation_start_time": "TIMESTAMP",
+            "investigation_end_time": "TIMESTAMP",
+            "resolution_hours": "DOUBLE PRECISION",
+            "touch_count": "INTEGER",
+            "notes_count": "INTEGER",
+            "final_label_status": "VARCHAR(32)",
+            "final_label_timestamp": "TIMESTAMP",
+        }
+        with self.session() as session:
+            if self._database_url.startswith("sqlite"):
+                rows = session.execute(text("PRAGMA table_info(alert_outcomes)")).all()
+                existing = {str(row[1]) for row in rows}
+                for column, col_type in required_columns.items():
+                    if column in existing:
+                        continue
+                    sqlite_type = "TEXT"
+                    default_sql = ""
+                    if column in {"sar_filed_flag", "qa_override"}:
+                        sqlite_type = "INTEGER"
+                        default_sql = " DEFAULT 0"
+                    elif column in {"resolution_hours"}:
+                        sqlite_type = "REAL"
+                    elif column in {"touch_count", "notes_count"}:
+                        sqlite_type = "INTEGER"
+                    elif column == "final_label_status":
+                        sqlite_type = "TEXT"
+                        default_sql = " DEFAULT 'final'"
+                    session.execute(text(f"ALTER TABLE alert_outcomes ADD COLUMN {column} {sqlite_type}{default_sql}"))
+                return
+
+            rows = session.execute(
+                text(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = 'alert_outcomes'
+                    """
+                )
+            ).all()
+            existing = {str(row[0]) for row in rows}
+            for column, col_type in required_columns.items():
+                if column in existing:
+                    continue
+                if column in {"sar_filed_flag", "qa_override"}:
+                    session.execute(text(f"ALTER TABLE alert_outcomes ADD COLUMN {column} {col_type} DEFAULT FALSE"))
+                elif column == "final_label_status":
+                    session.execute(text("ALTER TABLE alert_outcomes ADD COLUMN final_label_status VARCHAR(32) DEFAULT 'final'"))
+                else:
+                    session.execute(text(f"ALTER TABLE alert_outcomes ADD COLUMN {column} {col_type}"))
 
     def _ensure_schema_version_tracking(self) -> None:
         with self.session() as session:
@@ -799,11 +885,44 @@ class EnterpriseRepository:
                 analyst_id VARCHAR(128) NULL,
                 model_version VARCHAR(128) NULL,
                 risk_score_at_decision REAL NULL,
+                sar_filed_flag BOOLEAN NOT NULL DEFAULT FALSE,
+                qa_override BOOLEAN NOT NULL DEFAULT FALSE,
+                investigation_start_time TIMESTAMP NULL,
+                investigation_end_time TIMESTAMP NULL,
+                resolution_hours REAL NULL,
+                touch_count INTEGER NULL,
+                notes_count INTEGER NULL,
+                final_label_status VARCHAR(32) NOT NULL DEFAULT 'final',
+                final_label_timestamp TIMESTAMP NULL,
                 timestamp TIMESTAMP NULL
             )
             """,
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_alert_outcomes_tenant_alert ON alert_outcomes (tenant_id, alert_id)",
             "CREATE INDEX IF NOT EXISTS ix_alert_outcomes_tenant_decision ON alert_outcomes (tenant_id, analyst_decision)",
+            """
+            CREATE TABLE IF NOT EXISTS decision_audit (
+                id VARCHAR(128) PRIMARY KEY,
+                tenant_id VARCHAR(128) NOT NULL,
+                alert_id VARCHAR(128) NOT NULL,
+                run_id VARCHAR(128) NULL,
+                model_version VARCHAR(128) NULL,
+                priority_score REAL NULL,
+                escalation_prob REAL NULL,
+                graph_risk_score REAL NULL,
+                similar_suspicious_strength REAL NULL,
+                p50_hours REAL NULL,
+                p90_hours REAL NULL,
+                governance_status VARCHAR(64) NULL,
+                queue_action VARCHAR(64) NULL,
+                priority_bucket VARCHAR(32) NULL,
+                compliance_flags_json JSON NULL,
+                signals_json JSON NULL,
+                decided_at TIMESTAMP NULL
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS ix_decision_audit_tenant_alert ON decision_audit (tenant_id, alert_id)",
+            "CREATE INDEX IF NOT EXISTS ix_decision_audit_tenant_run ON decision_audit (tenant_id, run_id)",
+            "CREATE INDEX IF NOT EXISTS ix_decision_audit_queue_action ON decision_audit (queue_action)",
             """
             CREATE TABLE IF NOT EXISTS global_pattern_signals (
                 id VARCHAR(128) PRIMARY KEY,
@@ -1187,6 +1306,48 @@ class EnterpriseRepository:
                 .limit(limit)
             ).scalars()
             return [self._alert_to_payload(row) for row in rows]
+
+    def list_latest_alert_payloads_for_alert_ids(
+        self,
+        tenant_id: str,
+        alert_ids: list[str],
+        limit: int = 50000,
+    ) -> list[dict[str, Any]]:
+        tenant_id = self._require_tenant(tenant_id)
+        clean_ids = [str(item or "").strip() for item in alert_ids if str(item or "").strip()]
+        if not clean_ids:
+            return []
+        wanted = []
+        seen_ids: set[str] = set()
+        for alert_id in clean_ids:
+            if alert_id in seen_ids:
+                continue
+            seen_ids.add(alert_id)
+            wanted.append(alert_id)
+        bounded_limit = max(1, min(int(limit or len(wanted)), len(wanted)))
+        out: list[dict[str, Any]] = []
+        collected: set[str] = set()
+        chunk_size = 500
+        with self.session(tenant_id=tenant_id) as session:
+            for start in range(0, len(wanted), chunk_size):
+                chunk = wanted[start : start + chunk_size]
+                rows = session.execute(
+                    select(AlertRecord)
+                    .where(
+                        AlertRecord.tenant_id == tenant_id,
+                        AlertRecord.alert_id.in_(chunk),
+                    )
+                    .order_by(AlertRecord.created_at.desc())
+                ).scalars()
+                for row in rows:
+                    alert_id = str(row.alert_id or "").strip()
+                    if not alert_id or alert_id in collected:
+                        continue
+                    collected.add(alert_id)
+                    out.append(self._alert_to_payload(row))
+                    if len(out) >= bounded_limit:
+                        return out
+        return out
 
     def list_recent_alert_ids(self, tenant_id: str, limit: int = 5000) -> list[str]:
         tenant_id = self._require_tenant(tenant_id)
@@ -1759,6 +1920,37 @@ class EnterpriseRepository:
             session.add(row)
             session.flush()
             return self._to_dict(row)
+
+    def save_decision_audit_records(self, tenant_id: str, records: list[dict[str, Any]]) -> int:
+        tenant_id = self._require_tenant(tenant_id)
+        if not records:
+            return 0
+        with self.session(tenant_id=tenant_id) as session:
+            for payload in records:
+                safe = dict(payload or {})
+                session.add(
+                    DecisionAuditRecord(
+                        id=str(safe.get("id") or uuid.uuid4().hex),
+                        tenant_id=tenant_id,
+                        alert_id=str(safe.get("alert_id") or ""),
+                        run_id=str(safe.get("run_id") or "") or None,
+                        model_version=str(safe.get("model_version") or "") or None,
+                        priority_score=self._json_safe(safe.get("priority_score")),
+                        escalation_prob=self._json_safe(safe.get("escalation_prob")),
+                        graph_risk_score=self._json_safe(safe.get("graph_risk_score")),
+                        similar_suspicious_strength=self._json_safe(safe.get("similar_suspicious_strength")),
+                        p50_hours=self._json_safe(safe.get("p50_hours")),
+                        p90_hours=self._json_safe(safe.get("p90_hours")),
+                        governance_status=str(safe.get("governance_status") or "") or None,
+                        queue_action=str(safe.get("queue_action") or "") or None,
+                        priority_bucket=str(safe.get("priority_bucket") or "") or None,
+                        compliance_flags_json=self._json_safe(dict(safe.get("compliance_flags_json") or {})),
+                        signals_json=self._json_safe(dict(safe.get("signals_json") or {})),
+                        decided_at=safe.get("decided_at") or _utcnow(),
+                    )
+                )
+            session.flush()
+            return len(records)
 
     def list_model_monitoring(self, tenant_id: str, limit: int = 200) -> list[dict[str, Any]]:
         tenant_id = self._require_tenant(tenant_id)

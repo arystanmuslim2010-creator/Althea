@@ -48,18 +48,10 @@ def _handle_event(envelope: dict[str, Any]) -> None:
         run_id = payload.get("run_id")
         if tenant_id and run_id:
             get_repository().set_tenant_context(tenant_id)
-            # Snapshot latest model health at scoring completion.
             health = get_pipeline_service().compute_health(run_id=run_id, tenant_id=tenant_id)
-            get_repository().save_model_monitoring(
-                {
-                    "tenant_id": tenant_id,
-                    "run_id": run_id,
-                    "model_version": str(payload.get("model_version") or "unknown"),
-                    "psi_score": _safe_float(payload.get("psi_score"), 0.0),
-                    "drift_score": _safe_float(payload.get("drift_score"), 0.0),
-                    "degradation_flag": str(health.get("status", "")).lower() in {"warning", "critical", "degraded"},
-                    "metrics_json": {"health": health, "event": payload},
-                }
+            logger.info(
+                "alert_scored event observed without secondary monitoring write",
+                extra={"tenant_id": tenant_id, "run_id": run_id, "health": health},
             )
 
 

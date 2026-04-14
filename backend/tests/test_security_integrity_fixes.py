@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import ast
+import inspect
+import re
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
@@ -12,13 +16,20 @@ from sqlalchemy import func, select, text
 from api.routers.alerts_router import router as alerts_router
 from api.routers.auth_router import _LOGIN_RATE_LIMITER
 from api.routers.auth_router import router as auth_router
+from api.routers.intelligence_router import router as intelligence_router
+from core.dependencies import build_app_state
 from core.config import Settings
 from core.security import build_access_token
 from core.security import get_authenticated_tenant_id
+from learning.feedback_collection_service import FeedbackCollectionService
 from models.feature_schema import FeatureSchemaValidator
 from models.inference_service import InferenceService
+from retrieval.retrieval_service import RetrievalService
 from services.interpretation_service import InterpretationService
+from services.model_monitoring_service import ModelMonitoringService
+from storage.object_storage import ObjectStorage
 from storage.postgres_repository import AlertRecord, EnterpriseRepository
+from workers import event_subscriber_worker
 from main import create_app
 
 
@@ -75,6 +86,27 @@ def test_duplicate_alert_insert_keeps_single_record(tmp_path) -> None:
             )
         ).scalar_one()
     assert int(count or 0) == 1
+
+
+def test_build_app_state_covers_live_router_state_usage() -> None:
+    router_dir = Path(__file__).resolve().parents[1] / "api" / "routers"
+    required_keys: set[str] = set()
+    for path in router_dir.glob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        required_keys.update(re.findall(r"request\.app\.state\.([A-Za-z_][A-Za-z0-9_]*)", text))
+
+    function_source = inspect.getsource(build_app_state)
+    module_ast = ast.parse(function_source)
+    return_node = next(
+        node for node in ast.walk(module_ast) if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict)
+    )
+    provided_keys = {
+        key.value
+        for key in return_node.value.keys
+        if isinstance(key, ast.Constant) and isinstance(key.value, str)
+    }
+    missing = sorted(required_keys - provided_keys)
+    assert not missing, f"build_app_state is missing live router dependencies: {missing}"
 
 
 def test_phase4_flag_defaults_reflect_primary_alert_jsonl_cutover(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -289,6 +321,148 @@ def test_interpretation_output_format_contract() -> None:
     assert isinstance(out["analyst_focus_points"], list)
     assert out["confidence_score"] is None or isinstance(out["confidence_score"], float)
     assert isinstance(out["technical_details"], dict)
+
+
+def test_decision_audit_records_persist_and_are_readable_via_api(tmp_path) -> None:
+    db_path = tmp_path / f"althea_decision_audit_{uuid.uuid4().hex}.db"
+    repo = EnterpriseRepository(f"sqlite:///{db_path.as_posix()}")
+    tenant_id = "tenant-a"
+    repo.save_decision_audit_records(
+        tenant_id=tenant_id,
+        records=[
+            {
+                "alert_id": "A1",
+                "run_id": "run-1",
+                "model_version": "model-v1",
+                "priority_score": 92.5,
+                "escalation_prob": 0.91,
+                "governance_status": "eligible",
+                "queue_action": "queue",
+                "priority_bucket": "critical",
+                "signals_json": {"reason_codes": ["R1"]},
+            }
+        ],
+    )
+
+    app = FastAPI()
+    app.include_router(intelligence_router)
+    app.state.repository = repo
+    app.state.pipeline_service = SimpleNamespace(get_run_info=lambda tenant_id, user_scope: {"run_id": "run-1"})
+    app.dependency_overrides[get_authenticated_tenant_id] = lambda: tenant_id
+    client = TestClient(app)
+
+    response = client.get("/api/alerts/A1/decision-audit")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["audit_records"][0]["alert_id"] == "A1"
+    assert payload["audit_records"][0]["queue_action"] == "queue"
+
+
+def test_retrieval_index_build_uses_latest_payload_for_alert_across_runs(tmp_path) -> None:
+    db_path = tmp_path / f"althea_retrieval_{uuid.uuid4().hex}.db"
+    storage_root = tmp_path / "objects"
+    repo = EnterpriseRepository(f"sqlite:///{db_path.as_posix()}")
+    storage = ObjectStorage(storage_root)
+    feedback = FeedbackCollectionService(repo)
+    service = RetrievalService(repo, storage)
+    tenant_id = "tenant-a"
+
+    repo.save_alert_payloads(
+        tenant_id=tenant_id,
+        run_id="run-old",
+        records=[
+            {
+                "alert_id": "A1",
+                "timestamp": "2026-04-01T00:00:00Z",
+                "risk_score": 30.0,
+                "typology": "structuring",
+                "features_json": {"amount_log1p": 2.0, "risk_score": 30.0},
+            }
+        ],
+    )
+    repo.save_alert_payloads(
+        tenant_id=tenant_id,
+        run_id="run-new",
+        records=[
+            {
+                "alert_id": "A1",
+                "timestamp": "2026-04-02T00:00:00Z",
+                "risk_score": 88.0,
+                "typology": "structuring",
+                "features_json": {"amount_log1p": 5.0, "risk_score": 88.0},
+            }
+        ],
+    )
+    feedback.record_outcome(
+        tenant_id=tenant_id,
+        alert_id="A1",
+        analyst_decision="true_positive",
+        analyst_id="u1",
+        risk_score_at_decision=88.0,
+    )
+
+    result = service.build_index(tenant_id=tenant_id)
+    assert result["status"] == "ok"
+    assert result["indexed_cases"] == 1
+
+    retrieved = service.retrieve_similar_cases(
+        tenant_id=tenant_id,
+        alert_payload={"alert_id": "Q1", "features_json": {"amount_log1p": 5.0, "risk_score": 88.0}},
+        top_k=1,
+    )
+    match = retrieved["similar_suspicious"][0]
+    assert match["alert_id"] == "A1"
+    assert match["risk_score"] == 88.0
+
+
+def test_event_subscriber_does_not_duplicate_monitoring_records(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    db_path = tmp_path / f"althea_monitoring_{uuid.uuid4().hex}.db"
+    repo = EnterpriseRepository(f"sqlite:///{db_path.as_posix()}")
+    monitoring = ModelMonitoringService(repo)
+    tenant_id = "tenant-a"
+    run_id = "run-1"
+
+    repo.create_pipeline_job(
+        {
+            "id": "job-1",
+            "tenant_id": tenant_id,
+            "source": "test",
+            "dataset_hash": "hash-1",
+            "status": "completed",
+            "row_count": 1,
+            "run_id": run_id,
+        }
+    )
+    repo.save_alert_payloads(
+        tenant_id=tenant_id,
+        run_id=run_id,
+        records=[{"alert_id": "A1", "timestamp": "2026-04-01T00:00:00Z", "risk_score": 42.0}],
+    )
+
+    monitoring.record_run_monitoring(
+        tenant_id=tenant_id,
+        run_id=run_id,
+        model_version="model-v1",
+        scores=[42.0],
+    )
+    monkeypatch.setattr(event_subscriber_worker, "get_repository", lambda: repo)
+    monkeypatch.setattr(
+        event_subscriber_worker,
+        "get_pipeline_service",
+        lambda: SimpleNamespace(compute_health=lambda run_id, tenant_id: {"status": "healthy"}),
+    )
+
+    event_subscriber_worker._handle_event(
+        {
+            "event_name": "alert_scored",
+            "tenant_id": tenant_id,
+            "payload": {"run_id": run_id},
+        }
+    )
+
+    rows = repo.list_model_monitoring(tenant_id=tenant_id, limit=10)
+    assert len(rows) == 1
 
 
 def test_login_ignores_stale_authorization_tenant_override() -> None:

@@ -55,7 +55,8 @@ class PrimaryIngestionModeRequest(BaseModel):
 
 
 def _user_scope(request: Request) -> str:
-    raw = (request.headers.get("X-User-Scope") or "public").strip()
+    current_user = getattr(request.state, "current_user", None) or {}
+    raw = str(current_user.get("user_id") or request.headers.get("X-User-Scope") or "public").strip()
     clean = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("._-")
     return clean[:128] if clean else "public"
 
@@ -696,6 +697,8 @@ def trigger_training_run(
             tenant_id=tenant_id,
             initiated_by=payload.initiated_by,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=_error_detail(request, exc))
     return result
@@ -852,6 +855,8 @@ def evaluate_retraining(
             force=payload.force,
             initiated_by=payload.initiated_by,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=_error_detail(request, exc))
 

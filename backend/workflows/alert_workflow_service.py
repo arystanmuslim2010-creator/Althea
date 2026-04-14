@@ -13,8 +13,8 @@ from workflows.state_model import (
 )
 
 
-def _resolve_run_id(request, tenant_id: str, actor: str) -> str:
-    run_info = request.app.state.pipeline_service.get_run_info(tenant_id, actor)
+def _resolve_run_id(request, tenant_id: str, user_scope: str) -> str:
+    run_info = request.app.state.pipeline_service.get_run_info(tenant_id, user_scope)
     return str(run_info.get("run_id") or "")
 
 
@@ -24,13 +24,14 @@ def _safe_case_sync(
     case_id: str,
     case_state: str,
     actor: str,
+    user_scope: str,
     run_id: str,
     assigned_to: str,
 ) -> None:
     try:
         request.app.state.case_service.update_case(
             tenant_id=tenant_id,
-            user_scope=actor,
+            user_scope=user_scope,
             case_id=case_id,
             run_id=run_id,
             actor=actor,
@@ -82,6 +83,7 @@ def apply_alert_assignment_transition(
     status: str,
     reason: str,
     assigned_to: str | None = None,
+    user_scope: str | None = None,
     strict_workflow: bool = False,
 ) -> dict[str, Any]:
     assignment_status = normalize_assignment_status(status)
@@ -95,6 +97,7 @@ def apply_alert_assignment_transition(
     repo = request.app.state.repository
     existing = repo.get_latest_assignment(tenant_id, alert_id) or {}
     resolved_assignee = str(assigned_to or existing.get("assigned_to") or actor)
+    resolved_user_scope = str(user_scope or actor or "").strip() or "public"
     now = datetime.now(timezone.utc)
     repo.upsert_assignment(
         {
@@ -109,7 +112,7 @@ def apply_alert_assignment_transition(
         }
     )
 
-    run_id = _resolve_run_id(request, tenant_id=tenant_id, actor=actor)
+    run_id = _resolve_run_id(request, tenant_id=tenant_id, user_scope=resolved_user_scope)
     case_id = request.app.state.workflow_engine.create_case_from_alert(
         tenant_id=tenant_id,
         alert_id=alert_id,
@@ -133,6 +136,7 @@ def apply_alert_assignment_transition(
             case_id=case_id,
             case_state=case_state,
             actor=actor,
+            user_scope=resolved_user_scope,
             run_id=run_id,
             assigned_to=resolved_assignee,
         )

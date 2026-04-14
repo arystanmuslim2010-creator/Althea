@@ -4,6 +4,7 @@ import { api } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 import { InvestigationGraph } from '../components/InvestigationGraph'
 import { normalizeExplanationPayload } from '../services/contracts'
+import { hasPermission } from '../services/permissions'
 
 function tryParseJson(value, fallback) {
   if (value == null) return fallback
@@ -39,8 +40,11 @@ export function AlertDetails() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  const canAddNotes = user?.role === 'analyst' || user?.role === 'investigator' || user?.role === 'lead' || user?.role === 'admin'
-  const canCreateCase = canAddNotes
+  const canAddNotes = hasPermission(user, 'add_investigation_notes')
+  const canCreateCase = hasPermission(user, 'work_cases')
+  const canAssign = hasPermission(user, 'reassign_alerts')
+  const canChangeStatus = hasPermission(user, 'change_alert_status')
+  const canRecordOutcome = canChangeStatus
 
   const loadGraph = async (alertId) => {
     setGraphLoading(true)
@@ -179,7 +183,7 @@ export function AlertDetails() {
     if (!user?.user_id) return
     try {
       setActionBusy(true)
-      await api.workflowAssignAlert(id, user.user_id, user.user_id)
+      await api.workflowAssignAlert(id, user.user_id)
       await load()
     } catch (err) {
       setError(err.message || 'Failed to assign alert')
@@ -192,7 +196,7 @@ export function AlertDetails() {
     if (!user?.user_id) return
     try {
       setActionBusy(true)
-      await api.workflowEscalateAlert(id, user.user_id, 'manual_escalation')
+      await api.workflowEscalateAlert(id, 'manual_escalation')
       await load()
     } catch (err) {
       setError(err.message || 'Failed to escalate alert')
@@ -205,7 +209,7 @@ export function AlertDetails() {
     if (!user?.user_id) return
     try {
       setActionBusy(true)
-      await api.workflowCloseAlert(id, user.user_id, 'manual_close')
+      await api.workflowCloseAlert(id, 'manual_close')
       await load()
     } catch (err) {
       setError(err.message || 'Failed to close alert')
@@ -221,7 +225,6 @@ export function AlertDetails() {
       const payload = {
         analyst_decision: decision,
         decision_reason: outcomeReason || null,
-        analyst_id: user?.user_id || null,
         model_version: context?.model_metadata?.model_version || alert?.model_version || null,
         risk_score_at_decision: Number(alert?.risk_score ?? 0),
       }
@@ -274,11 +277,15 @@ export function AlertDetails() {
 
       <div className="border rounded p-4 bg-white space-y-2">
         <h2 className="font-semibold">Workflow Actions</h2>
-        <div className="flex gap-2 flex-wrap">
-          <button className="px-3 py-1 border rounded" onClick={assignToMe} disabled={actionBusy}>Assign To Me</button>
-          <button className="px-3 py-1 border rounded" onClick={escalateAlert} disabled={actionBusy}>Escalate</button>
-          <button className="px-3 py-1 border rounded" onClick={closeAlert} disabled={actionBusy}>Close</button>
-        </div>
+        {canAssign || canChangeStatus ? (
+          <div className="flex gap-2 flex-wrap">
+            {canAssign ? <button className="px-3 py-1 border rounded" onClick={assignToMe} disabled={actionBusy}>Assign To Me</button> : null}
+            {canChangeStatus ? <button className="px-3 py-1 border rounded" onClick={escalateAlert} disabled={actionBusy}>Escalate</button> : null}
+            {canChangeStatus ? <button className="px-3 py-1 border rounded" onClick={closeAlert} disabled={actionBusy}>Close</button> : null}
+          </div>
+        ) : (
+          <p className="text-xs text-slate-500">Workflow actions require backend permissions from your current session.</p>
+        )}
       </div>
 
       <div className="border rounded p-4 bg-white space-y-2">
@@ -373,18 +380,24 @@ export function AlertDetails() {
 
       <div className="border rounded p-4 bg-white space-y-2">
         <h2 className="font-semibold">Outcome Feedback</h2>
-        <div className="flex gap-2 flex-wrap">
-          <button className="px-3 py-1 border rounded" onClick={() => saveOutcome('true_positive')} disabled={actionBusy}>Mark TP</button>
-          <button className="px-3 py-1 border rounded" onClick={() => saveOutcome('false_positive')} disabled={actionBusy}>Mark FP</button>
-          <button className="px-3 py-1 border rounded" onClick={() => saveOutcome('escalated')} disabled={actionBusy}>Mark Escalated</button>
-          <button className="px-3 py-1 border rounded" onClick={() => saveOutcome('sar_filed')} disabled={actionBusy}>Mark SAR Filed</button>
-        </div>
-        <input
-          className="w-full border rounded px-3 py-2 text-sm"
-          value={outcomeReason}
-          onChange={(e) => setOutcomeReason(e.target.value)}
-          placeholder="Outcome reason (optional)"
-        />
+        {canRecordOutcome ? (
+          <>
+            <div className="flex gap-2 flex-wrap">
+              <button className="px-3 py-1 border rounded" onClick={() => saveOutcome('true_positive')} disabled={actionBusy}>Mark TP</button>
+              <button className="px-3 py-1 border rounded" onClick={() => saveOutcome('false_positive')} disabled={actionBusy}>Mark FP</button>
+              <button className="px-3 py-1 border rounded" onClick={() => saveOutcome('escalated')} disabled={actionBusy}>Mark Escalated</button>
+              <button className="px-3 py-1 border rounded" onClick={() => saveOutcome('sar_filed')} disabled={actionBusy}>Mark SAR Filed</button>
+            </div>
+            <input
+              className="w-full border rounded px-3 py-2 text-sm"
+              value={outcomeReason}
+              onChange={(e) => setOutcomeReason(e.target.value)}
+              placeholder="Outcome reason (optional)"
+            />
+          </>
+        ) : (
+          <p className="text-xs text-slate-500">Outcome recording is disabled for your current permission set.</p>
+        )}
         <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(outcome || context?.outcome || {}, null, 2)}</pre>
       </div>
 

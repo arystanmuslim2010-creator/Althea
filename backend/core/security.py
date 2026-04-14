@@ -267,7 +267,7 @@ def get_current_user(
     role = normalize_role(user["role"])
     roles = repository.list_user_roles(tenant_id=tenant_id, user_id=user["id"]) or [role]
     permissions = repository.get_user_permissions(tenant_id=tenant_id, user_id=user["id"], fallback_role=role)
-    return {
+    current_user = {
         "user_id": user["id"],
         "id": user["id"],
         "email": user["email"],
@@ -278,6 +278,8 @@ def get_current_user(
         "tenant_id": tenant_id,
         "session_id": session_id,
     }
+    request.state.current_user = current_user
+    return current_user
 
 
 def get_current_user_optional(

@@ -76,7 +76,8 @@ class CloseRequest(BaseModel):
 
 
 def _active_run_id(request: Request, tenant_id: str) -> Optional[str]:
-    raw_scope = (request.headers.get("X-User-Scope") or "public").strip()
+    current_user = getattr(request.state, "current_user", None) or {}
+    raw_scope = str(current_user.get("user_id") or request.headers.get("X-User-Scope") or "public").strip()
     user_scope = re.sub(r"[^A-Za-z0-9._-]+", "_", raw_scope).strip("._-") or "public"
     info = request.app.state.pipeline_service.get_run_info(
         tenant_id=tenant_id,
@@ -271,16 +272,15 @@ def record_alert_outcome(
     alert_id: str,
     body: OutcomeRequest,
     request: Request,
-    tenant_id: str = Depends(get_authenticated_tenant_id),
-    _: dict = Depends(require_permissions("change_alert_status")),
+    user: dict = Depends(require_permissions("change_alert_status")),
 ) -> dict[str, Any]:
     try:
         return request.app.state.feedback_service.record_outcome(
-            tenant_id=tenant_id,
+            tenant_id=user["tenant_id"],
             alert_id=alert_id,
             analyst_decision=body.analyst_decision,
             decision_reason=body.decision_reason,
-            analyst_id=body.analyst_id,
+            analyst_id=user["user_id"],
             model_version=body.model_version,
             risk_score_at_decision=body.risk_score_at_decision,
             sar_filed_flag=body.sar_filed_flag,
@@ -356,16 +356,15 @@ def assign_alert(
     alert_id: str,
     body: AssignRequest,
     request: Request,
-    tenant_id: str = Depends(get_authenticated_tenant_id),
-    _: dict = Depends(require_permissions("reassign_alerts")),
+    user: dict = Depends(require_permissions("reassign_alerts")),
 ) -> dict[str, Any]:
-    actor = body.actor or body.assigned_to or "system"
     try:
         result = apply_alert_assignment_transition(
             request=request,
-            tenant_id=tenant_id,
+            tenant_id=user["tenant_id"],
             alert_id=alert_id,
-            actor=actor,
+            actor=user["user_id"],
+            user_scope=user["user_id"],
             assigned_to=body.assigned_to,
             status="open",
             reason="workflow_assign",
@@ -390,16 +389,15 @@ def escalate_alert(
     alert_id: str,
     body: EscalateRequest,
     request: Request,
-    tenant_id: str = Depends(get_authenticated_tenant_id),
-    _: dict = Depends(require_permissions("change_alert_status")),
+    user: dict = Depends(require_permissions("change_alert_status")),
 ) -> dict[str, Any]:
-    actor = body.actor or "system"
     try:
         result = apply_alert_assignment_transition(
             request=request,
-            tenant_id=tenant_id,
+            tenant_id=user["tenant_id"],
             alert_id=alert_id,
-            actor=actor,
+            actor=user["user_id"],
+            user_scope=user["user_id"],
             status="escalated",
             reason=body.reason or "workflow_escalate",
             strict_workflow=True,
@@ -424,17 +422,16 @@ def close_alert(
     alert_id: str,
     body: CloseRequest,
     request: Request,
-    tenant_id: str = Depends(get_authenticated_tenant_id),
-    _: dict = Depends(require_permissions("change_alert_status")),
+    user: dict = Depends(require_permissions("change_alert_status")),
 ) -> dict[str, Any]:
-    actor = body.actor or "system"
     reason = body.reason or "analyst_closed"
     try:
         result = apply_alert_assignment_transition(
             request=request,
-            tenant_id=tenant_id,
+            tenant_id=user["tenant_id"],
             alert_id=alert_id,
-            actor=actor,
+            actor=user["user_id"],
+            user_scope=user["user_id"],
             status="closed",
             reason=reason,
             strict_workflow=True,

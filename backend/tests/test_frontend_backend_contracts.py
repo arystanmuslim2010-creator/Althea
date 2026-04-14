@@ -36,22 +36,29 @@ class _FakeRepo:
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         self._outcome = None
+        self._alert_payload = {
+            "alert_id": "A1",
+            "risk_score": 91.3,
+            "risk_band": "critical",
+            "priority": "high",
+            "typology": "sanctions",
+            "segment": "retail",
+            "user_id": "U1",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "model_version": "model-v1",
+            "governance_status": "eligible",
+            "p50_hours": 8.5,
+            "p90_hours": 28.0,
+            "time_model_version": "time-fallback-v1",
+        }
 
     def list_alert_payloads_by_run(self, tenant_id: str, run_id: str, limit: int = 200000):
-        return [
-            {
-                "alert_id": "A1",
-                "risk_score": 91.3,
-                "risk_band": "critical",
-                "priority": "high",
-                "typology": "sanctions",
-                "segment": "retail",
-                "user_id": "U1",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "model_version": "model-v1",
-                "governance_status": "eligible",
-            }
-        ]
+        return [dict(self._alert_payload)]
+
+    def get_alert_payload(self, tenant_id: str, alert_id: str, run_id: str | None = None):
+        if alert_id == "A1":
+            return dict(self._alert_payload)
+        return None
 
     def list_cases(self, tenant_id: str):
         return [{"case_id": "CASE_001", "alert_id": "A1", "status": "open", "assigned_to": "u1"}]
@@ -213,17 +220,44 @@ class _FakeIngestionService:
 
 
 class _FakeCaseService:
+    def __init__(self) -> None:
+        self.last_create_case: dict | None = None
+        self.last_update_case: dict | None = None
+        self._actors: dict[tuple[str, str], str] = {}
+
     def list_cases(self, tenant_id: str):
         return {"CASE_001": {"case_id": "CASE_001", "status": "OPEN", "alert_ids": ["A1"]}}
 
     def get_actor(self, tenant_id: str, user_scope: str):
-        return "u1"
+        return self._actors.get((tenant_id, user_scope), "u1")
+
+    def set_actor(self, tenant_id: str, user_scope: str, actor: str):
+        self._actors[(tenant_id, user_scope)] = actor
+        return {"tenant_id": tenant_id, "user_scope": user_scope, "actor": actor}
 
     def create_case(self, tenant_id: str, user_scope: str, alert_ids: list[str], run_id: str, actor: str):
-        return {"case_id": "CASE_001", "status": "OPEN"}
+        self.last_create_case = {
+            "tenant_id": tenant_id,
+            "user_scope": user_scope,
+            "alert_ids": list(alert_ids),
+            "run_id": run_id,
+            "actor": actor,
+        }
+        return {
+            "case_id": "CASE_001",
+            "status": "OPEN",
+            "assigned_to": actor,
+            "created_by": actor,
+            "alert_ids": list(alert_ids),
+        }
 
     def update_case(self, **kwargs):
-        return True, "ok", {"status": kwargs.get("status", "open"), "closed_at": None}
+        self.last_update_case = dict(kwargs)
+        return True, "ok", {
+            "status": kwargs.get("status", "open"),
+            "assigned_to": kwargs.get("assigned_to") or "u1",
+            "closed_at": None,
+        }
 
     def delete_case(self, tenant_id: str, case_id: str):
         return True
@@ -671,11 +705,71 @@ def test_workflow_assign_alias_keeps_unified_case_status_shape(client: TestClien
 
 
 def test_outcome_feedback_round_trip(client: TestClient):
-    write = client.post("/api/alerts/A1/outcome", json={"analyst_decision": "true_positive"})
+    write = client.post("/api/alerts/A1/outcome", json={"analyst_decision": "true_positive", "analyst_id": "spoofed"})
     assert write.status_code == 200
     read = client.get("/api/alerts/A1/outcome")
     assert read.status_code == 200
     assert read.json()["analyst_decision"] == "true_positive"
+    assert read.json()["analyst_id"] == "u1"
+
+
+def test_case_creation_ignores_client_actor_and_uses_authenticated_user(client: TestClient):
+    res = client.post("/api/cases", json={"alert_ids": ["A1"], "actor": "spoofed-user"})
+    assert res.status_code == 200
+    assert client.app.state.case_service.last_create_case is not None
+    assert client.app.state.case_service.last_create_case["actor"] == "u1"
+    assert client.app.state.case_service.last_create_case["user_scope"] == "u1"
+
+
+def test_case_access_denies_cross_user_read_for_non_elevated_permissions(client: TestClient):
+    client.app.dependency_overrides[get_current_user] = lambda: {
+        "user_id": "u2",
+        "id": "u2",
+        "role": "analyst",
+        "permissions": ["work_cases"],
+        "tenant_id": "tenant-a",
+    }
+    res = client.get("/api/cases/CASE_001")
+    assert res.status_code == 403
+
+
+def test_case_delete_requires_manager_approval_permission(client: TestClient):
+    client.app.dependency_overrides[get_current_user] = lambda: {
+        "user_id": "u1",
+        "id": "u1",
+        "role": "manager",
+        "permissions": ["work_cases"],
+        "tenant_id": "tenant-a",
+    }
+    res = client.delete("/api/cases/CASE_001")
+    assert res.status_code == 403
+
+
+def test_time_estimate_endpoint_returns_scalar_values_for_model_predictions(client: TestClient):
+    client.app.state.investigation_time_service = SimpleNamespace(
+        predict=lambda **_: {
+            "p50_hours": [4.0],
+            "p90_hours": [11.5],
+            "model_version": "time-v2",
+        }
+    )
+    res = client.get("/api/alerts/A1/time-estimate")
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["source"] == "time_model"
+    assert payload["p50_hours"] == 4.0
+    assert payload["p90_hours"] == 11.5
+
+
+def test_time_estimate_endpoint_falls_back_to_cached_payload_when_model_not_wired(client: TestClient):
+    if hasattr(client.app.state, "investigation_time_service"):
+        delattr(client.app.state, "investigation_time_service")
+    res = client.get("/api/alerts/A1/time-estimate")
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["source"] == "cached_payload"
+    assert payload["p50_hours"] == 8.5
+    assert payload["p90_hours"] == 28.0
 
 
 def test_copilot_summary_endpoint_keeps_contract(client: TestClient):

@@ -2,16 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
+import { hasPermission } from '../services/permissions'
 
 const ALERT_STATUSES = ['open', 'in_review', 'escalated', 'closed']
-
-function canReassign(role) {
-  return role === 'investigator' || role === 'lead' || role === 'admin'
-}
-
-function canChangeStatus(role) {
-  return role === 'analyst' || role === 'investigator' || role === 'lead' || role === 'admin'
-}
 
 export function AnalystDashboard() {
   const navigate = useNavigate()
@@ -23,6 +16,10 @@ export function AnalystDashboard() {
   const [filters, setFilters] = useState({ search: '', status: 'all', assigned: 'all' })
   const [bulkStatus, setBulkStatus] = useState('in_review')
   const [actionBusy, setActionBusy] = useState(false)
+  const canReassign = hasPermission(user, 'reassign_alerts')
+  const canChangeStatus = hasPermission(user, 'change_alert_status')
+  const canViewDashboards = hasPermission(user, 'view_dashboards')
+  const canManageUsers = hasPermission(user, 'manage_users')
 
   const load = async () => {
     try {
@@ -145,10 +142,10 @@ export function AnalystDashboard() {
           <p className="text-sm text-slate-600">Role: {user?.role || '-'} | Team: {user?.team || '-'}</p>
         </div>
         <div className="flex gap-2">
-          {(user?.role === 'analyst' || user?.role === 'manager' || user?.role === 'admin') ? (
+          {canViewDashboards ? (
             <Link className="px-3 py-1 border rounded" to="/ops">View Dashboards</Link>
           ) : null}
-          {user?.role === 'admin' ? (
+          {canManageUsers ? (
             <Link className="px-3 py-1 border rounded" to="/investigation/admin/users">Manage Users</Link>
           ) : null}
           <button className="px-3 py-1 border rounded" onClick={() => { logout(); navigate('/login') }}>Logout</button>
@@ -195,12 +192,12 @@ export function AnalystDashboard() {
           </select>
         </div>
         <div className="flex flex-wrap gap-3">
-          {canReassign(user?.role) ? (
+          {canReassign ? (
             <button className="px-3 py-2 border rounded text-sm disabled:opacity-50" disabled={!selectedIds.length || actionBusy} onClick={bulkAssignToMe}>
               Assign Selected To Me
             </button>
           ) : null}
-          {canChangeStatus(user?.role) ? (
+          {canChangeStatus ? (
             <>
               <select className="border rounded px-3 py-2 text-sm" value={bulkStatus} onChange={(e) => setBulkStatus(e.target.value)}>
                 {ALERT_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
@@ -241,7 +238,7 @@ export function AnalystDashboard() {
                 <td className="p-2">{Number(item.risk_score || 0).toFixed(2)}</td>
                 <td className="p-2">{item.assigned_to || 'Unassigned'}</td>
                 <td className="p-2">
-                  {canChangeStatus(user?.role) ? (
+                  {canChangeStatus ? (
                     <div className="flex items-center gap-2">
                       <select
                         className="border rounded px-2 py-1"
@@ -259,7 +256,7 @@ export function AnalystDashboard() {
                   )}
                 </td>
                 <td className="p-2 flex gap-2">
-                  {canReassign(user?.role) ? (
+                  {canReassign ? (
                     <button className="px-2 py-1 border rounded" onClick={() => assignToMe(item.alert_id)}>Assign to me</button>
                   ) : null}
                   {item.case_id ? (

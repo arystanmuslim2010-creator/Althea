@@ -2,8 +2,17 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
+import { hasPermission } from '../services/permissions'
 
 const BASE_STATUSES = ['open', 'under_review', 'escalated', 'closed']
+
+function normalizeCaseStatus(status) {
+  const raw = String(status || '').trim().toLowerCase()
+  if (!raw) return 'open'
+  if (raw === 'in_review' || raw === 'investigating') return 'under_review'
+  if (raw === 'assigned') return 'open'
+  return raw
+}
 
 export function CaseDetails() {
   const { id } = useParams()
@@ -12,8 +21,8 @@ export function CaseDetails() {
   const [status, setStatus] = useState('open')
   const [error, setError] = useState('')
 
-  const canEditCase = user?.role === 'analyst' || user?.role === 'investigator' || user?.role === 'lead' || user?.role === 'manager' || user?.role === 'admin'
-  const canApproveSar = user?.role === 'manager' || user?.role === 'admin'
+  const canEditCase = hasPermission(user, 'work_cases')
+  const canApproveSar = hasPermission(user, 'manager_approval')
 
   const availableStatuses = useMemo(() => {
     if (canApproveSar) {
@@ -26,7 +35,7 @@ export function CaseDetails() {
     try {
       const res = await api.getInvestigationCase(id)
       setData(res)
-      setStatus(res?.case?.status || 'open')
+      setStatus(normalizeCaseStatus(res?.case?.status || res?.case?.case_status))
       setError('')
     } catch (err) {
       setError(err.message || 'Failed to load case')
@@ -49,6 +58,7 @@ export function CaseDetails() {
 
   const timeline = data?.timeline || []
   const currentCase = data?.case || {}
+  const displayStatus = normalizeCaseStatus(currentCase.case_status || currentCase.status)
 
   return (
     <div className="p-6 space-y-4">
@@ -64,7 +74,7 @@ export function CaseDetails() {
       <div className="grid gap-4 md:grid-cols-3">
         <div className="border rounded p-4 bg-white space-y-2">
           <div className="text-xs uppercase text-slate-500">Status</div>
-          <div className="text-xl font-semibold">{currentCase.status || '-'}</div>
+          <div className="text-xl font-semibold">{displayStatus || '-'}</div>
           <p>Alert: <Link className="text-blue-600" to={`/investigation/alerts/${currentCase.alert_id}`}>{currentCase.alert_id}</Link></p>
           <p>Created by: {currentCase.created_by}</p>
           <p>Created at: {currentCase.created_at}</p>

@@ -90,12 +90,24 @@ class RetrievalService:
             return {"status": "no_outcomes", "indexed": 0}
 
         alert_ids = [o["alert_id"] for o in outcomes]
-        payloads = self._repository.list_alert_payloads_by_run(
-            tenant_id=tenant_id, run_id="", limit=limit
+        payloads_filtered = self._repository.list_latest_alert_payloads_for_alert_ids(
+            tenant_id=tenant_id,
+            alert_ids=alert_ids,
+            limit=limit,
         )
-        # Filter to only the alerts with outcomes
-        aid_set = set(alert_ids)
-        payloads_filtered = [p for p in payloads if str(p.get("alert_id", "")) in aid_set]
+        if not payloads_filtered:
+            logger.info(
+                json.dumps(
+                    {
+                        "event": "case_index_build_skipped",
+                        "tenant_id": tenant_id,
+                        "reason": "no_alert_payloads_for_outcomes",
+                        "outcome_count": len(outcomes),
+                    },
+                    ensure_ascii=True,
+                )
+            )
+            return {"status": "no_payloads", "indexed": 0, "outcomes": len(outcomes)}
 
         index = CaseIndex(vectorizer=self._vectorizer)
         index.build(payloads=payloads_filtered, outcomes=outcomes)

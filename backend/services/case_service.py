@@ -44,6 +44,7 @@ class CaseWorkflowService:
             "case_id": case_id,
             "status": "OPEN",
             "state": "OPEN",
+            "created_by": actor,
             "assigned_to": actor,
             "owner": actor,
             "alert_ids": list(alert_ids),

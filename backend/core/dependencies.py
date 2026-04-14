@@ -15,6 +15,7 @@ from investigation.narrative_service import InvestigationNarrativeService
 from investigation.risk_explanation_service import RiskExplanationService
 from investigation.sar_generator import SARNarrativeGenerator
 from learning.feedback_collection_service import FeedbackCollectionService
+from models.investigation_time_service import InvestigationTimeService
 from events.streaming.broker import StreamingBackbone
 from events.streaming.consumers import (
     CaseCreationConsumer,
@@ -46,9 +47,14 @@ from services.model_monitoring_service import ModelMonitoringService
 from services.ops_service import OpsService
 from services.pipeline_service import PipelineService
 from services.scoring_service import EnterpriseScoringService
+from services.time_scoring_service import TimeScoringService
 from storage.object_storage import ObjectStorage
 from storage.postgres_repository import EnterpriseRepository
 from storage.redis_cache import RedisCache
+from training.outcome_joiner import OutcomeJoiner
+from training.retraining_scheduler import RetrainingScheduler
+from training.training_run_service import TrainingRunService
+from retrieval.retrieval_service import RetrievalService
 from workflows.workflow_engine import InvestigationWorkflowEngine
 
 
@@ -157,8 +163,21 @@ def get_ml_service() -> MLModelService:
 
 
 @lru_cache(maxsize=1)
+def get_investigation_time_service() -> InvestigationTimeService:
+    return InvestigationTimeService(
+        registry=get_model_registry(),
+        object_storage=get_object_storage(),
+    )
+
+
+@lru_cache(maxsize=1)
+def get_time_scoring_service() -> TimeScoringService:
+    return TimeScoringService(get_investigation_time_service())
+
+
+@lru_cache(maxsize=1)
 def get_scoring_service() -> EnterpriseScoringService:
-    return EnterpriseScoringService(get_ml_service())
+    return EnterpriseScoringService(get_ml_service(), get_time_scoring_service())
 
 
 @lru_cache(maxsize=1)
@@ -213,6 +232,33 @@ def get_governance_explainability_service() -> GovernanceExplainabilityService:
 @lru_cache(maxsize=1)
 def get_model_monitoring_service() -> ModelMonitoringService:
     return ModelMonitoringService(get_repository())
+
+
+@lru_cache(maxsize=1)
+def get_outcome_joiner() -> OutcomeJoiner:
+    return OutcomeJoiner(get_repository())
+
+
+@lru_cache(maxsize=1)
+def get_training_run_service() -> TrainingRunService:
+    return TrainingRunService(
+        repository=get_repository(),
+        object_storage=get_object_storage(),
+        model_registry=get_model_registry(),
+    )
+
+
+@lru_cache(maxsize=1)
+def get_retraining_scheduler() -> RetrainingScheduler:
+    return RetrainingScheduler(
+        training_run_service=get_training_run_service(),
+        outcome_joiner=get_outcome_joiner(),
+    )
+
+
+@lru_cache(maxsize=1)
+def get_retrieval_service() -> RetrievalService:
+    return RetrievalService(get_repository(), get_object_storage())
 
 
 @lru_cache(maxsize=1)
@@ -369,4 +415,9 @@ def build_app_state() -> dict:
         "relationship_graph_service": get_relationship_graph_service(),
         "feedback_service": get_feedback_service(),
         "global_pattern_service": get_global_pattern_service(),
+        "investigation_time_service": get_investigation_time_service(),
+        "time_scoring_service": get_time_scoring_service(),
+        "training_run_service": get_training_run_service(),
+        "retraining_scheduler": get_retraining_scheduler(),
+        "retrieval_service": get_retrieval_service(),
     }

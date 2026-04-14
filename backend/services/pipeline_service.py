@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Iterable
 
 import numpy as np
@@ -622,6 +623,17 @@ class PipelineService:
 
         # Step 5: Persist
         resolved_run_id = run_id or f"run_{uuid.uuid4().hex[:16]}"
+        decision_audit_records = self._build_decision_audit_records(
+            tenant_id=tenant_id,
+            run_id=resolved_run_id,
+            alerts_df=governed,
+            model_version=model_version,
+        )
+        if decision_audit_records:
+            self._repository.save_decision_audit_records(
+                tenant_id=tenant_id,
+                records=decision_audit_records,
+            )
         persisted = self._persist_outputs(
             tenant_id=tenant_id,
             run_id=resolved_run_id,
@@ -657,6 +669,71 @@ class PipelineService:
         if isinstance(value, pd.Timestamp):
             return value.isoformat()
         return value
+
+    @staticmethod
+    def _parse_json_object(value: Any) -> dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return {}
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+        return {}
+
+    def _build_decision_audit_records(
+        self,
+        tenant_id: str,
+        run_id: str,
+        alerts_df: pd.DataFrame,
+        model_version: str,
+    ) -> list[dict[str, Any]]:
+        if alerts_df is None or alerts_df.empty:
+            return []
+        decided_at = datetime.now(timezone.utc)
+        records: list[dict[str, Any]] = []
+        for row in alerts_df.to_dict("records"):
+            alert_id = str(row.get("alert_id") or "").strip()
+            if not alert_id:
+                continue
+            compliance_flags = self._parse_json_object(row.get("compliance_flags_json"))
+            signals = self._parse_json_object(row.get("ml_signals_json"))
+            if not signals:
+                signals = {
+                    "model_version": str(row.get("model_version") or model_version or "unknown"),
+                    "risk_reason_codes": row.get("risk_reason_codes") or [],
+                    "top_feature_contributions": self._parse_json_object(row.get("risk_explain_json")).get("feature_attribution", []),
+                }
+            records.append(
+                {
+                    "tenant_id": tenant_id,
+                    "alert_id": alert_id,
+                    "run_id": run_id,
+                    "model_version": str(row.get("model_version") or model_version or "unknown"),
+                    "priority_score": row.get("priority_score", row.get("risk_score")),
+                    "escalation_prob": row.get("risk_prob"),
+                    "graph_risk_score": row.get("graph_risk_score"),
+                    "similar_suspicious_strength": row.get("similar_suspicious_strength"),
+                    "p50_hours": row.get("p50_hours"),
+                    "p90_hours": row.get("p90_hours"),
+                    "governance_status": row.get("governance_status"),
+                    "queue_action": row.get("queue_action"),
+                    "priority_bucket": row.get("alert_priority") or row.get("priority") or row.get("risk_band"),
+                    "compliance_flags_json": compliance_flags,
+                    "signals_json": signals,
+                    "decided_at": decided_at,
+                }
+            )
+        if records:
+            logger.info(
+                "Persisting decision audit batch",
+                extra={"tenant_id": tenant_id, "run_id": run_id, "records": len(records)},
+            )
+        return records
 
     def _persist_outputs(
         self,
@@ -725,21 +802,11 @@ class PipelineService:
         self._event_bus.publish("features_generated", tenant_id, base, correlation_id=job_id, version="2.0")
         self._event_bus.publish("alert_scored", tenant_id, base, correlation_id=job_id, version="2.0")
         self._event_bus.publish("alert_governed", tenant_id, base, correlation_id=job_id, version="2.0")
-        if self._streaming_orchestrator is not None:
-            payloads = self._repository.list_alert_payloads_by_run(tenant_id=tenant_id, run_id=run_id, limit=500000)
-            alert_ids = [str(row.get("alert_id")) for row in payloads if str(row.get("alert_id") or "").strip()]
-            if alert_ids:
-                self._streaming_orchestrator.trigger_ingestion(
-                    tenant_id=tenant_id,
-                    run_id=run_id,
-                    alert_ids=alert_ids,
-                    feature_version="v1",
-                    correlation_id=job_id,
-                )
-                # Dedicated streaming worker is the primary executor for stream chain processing.
-                # Inline processing is optional and disabled by default to avoid double-processing.
-                if self._settings.streaming_inline_processing:
-                    self._streaming_orchestrator.process_once(batch_size=1000)
+        if self._streaming_orchestrator is not None and self._settings.streaming_inline_processing:
+            logger.info(
+                "Skipping automatic streaming reprocessing for completed pipeline run",
+                extra={"tenant_id": tenant_id, "run_id": run_id, "job_id": job_id},
+            )
 
     def compute_health(self, run_id: str, tenant_id: str) -> dict[str, Any]:
         if not run_id:

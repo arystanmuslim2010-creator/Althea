@@ -210,6 +210,11 @@ def register_user(
             "role": normalize_role(user["role"]),
             "team": user["team"],
             "roles": repository.list_user_roles(tenant_id=tenant_id, user_id=user["id"]),
+            "permissions": repository.get_user_permissions(
+                tenant_id=tenant_id,
+                user_id=user["id"],
+                fallback_role=normalize_role(user["role"]),
+            ),
         },
     }
 
@@ -257,6 +262,11 @@ def login_user(payload: LoginRequest, request: Request, tenant_id: str = Depends
             "role": normalize_role(user["role"]),
             "team": user["team"],
             "roles": repository.list_user_roles(tenant_id=tenant_id, user_id=user["id"]),
+            "permissions": repository.get_user_permissions(
+                tenant_id=tenant_id,
+                user_id=user["id"],
+                fallback_role=normalize_role(user["role"]),
+            ),
         },
     }
 

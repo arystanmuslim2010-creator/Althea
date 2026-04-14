@@ -48,6 +48,17 @@ def _to_hours(delta_seconds: float | int | None) -> float | None:
         return None
 
 
+def _first_numeric(value):
+    if isinstance(value, list):
+        value = value[0] if value else None
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
 def _log_event(
     request: Request,
     tenant_id: str,
@@ -81,6 +92,125 @@ def _log_event(
         },
         correlation_id=getattr(request.state, "request_id", None),
         version="2.0",
+    )
+
+
+def _has_elevated_case_access(user: dict) -> bool:
+    permissions = set(user.get("permissions") or [])
+    role = normalize_role(user.get("role"))
+    return role == "admin" or bool({"view_all_alerts", "view_team_queue", "manager_approval"} & permissions)
+
+
+def _can_access_case(user: dict, case: dict | None) -> bool:
+    if not case:
+        return False
+    if _has_elevated_case_access(user):
+        return True
+    user_id = str(user.get("user_id") or "").strip()
+    if not user_id:
+        return False
+    payload = case.get("payload_json")
+    payload = payload if isinstance(payload, dict) else {}
+    owners = {
+        str(case.get("assigned_to") or "").strip(),
+        str(case.get("created_by") or "").strip(),
+        str(payload.get("assigned_to") or "").strip(),
+        str(payload.get("owner") or "").strip(),
+        str(payload.get("created_by") or "").strip(),
+    }
+    return user_id in owners
+
+
+def _require_case_access(user: dict, case: dict | None) -> dict:
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    if not _can_access_case(user, case):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return case
+
+
+def _list_visible_cases(request: Request, user: dict) -> dict[str, dict]:
+    records = request.app.state.repository.list_cases(user["tenant_id"])
+    visible: dict[str, dict] = {}
+    for case in records:
+        if _can_access_case(user, case):
+            payload = _serialize_case(case)
+            visible[str(case.get("case_id"))] = payload
+    return visible
+
+
+def _serialize_case(case: dict | None) -> dict:
+    if not case:
+        return {}
+    payload = dict(case.get("payload_json") or {})
+    canonical_status = normalize_case_state(payload.get("status") or case.get("status")) or "open"
+    alert_ids = payload.get("alert_ids") if isinstance(payload.get("alert_ids"), list) else []
+    alert_id = case.get("alert_id") or (alert_ids[0] if alert_ids else None)
+    legacy_status = payload.get("status") or case.get("status")
+    return {
+        **payload,
+        "case_id": case.get("case_id") or payload.get("case_id"),
+        "alert_id": alert_id,
+        "alert_ids": alert_ids or ([alert_id] if alert_id else []),
+        "assigned_to": payload.get("assigned_to") or case.get("assigned_to"),
+        "created_by": payload.get("created_by") or case.get("created_by"),
+        "created_at": payload.get("created_at") or case.get("created_at"),
+        "updated_at": payload.get("updated_at") or case.get("updated_at"),
+        "status": canonical_status,
+        "case_status": canonical_status,
+        "workflow_state": workflow_state_from_case(canonical_status),
+        "legacy_status": legacy_status,
+    }
+
+
+def _create_case_record(request: Request, user: dict, alert_ids: list[str]) -> dict:
+    clean_alert_ids = [str(item).strip() for item in (alert_ids or []) if str(item).strip()]
+    if not clean_alert_ids:
+        raise HTTPException(status_code=400, detail="alert_ids is required")
+    run_info = request.app.state.pipeline_service.get_run_info(user["tenant_id"], _user_scope(request, user))
+    if not run_info.get("run_id"):
+        raise HTTPException(status_code=400, detail="No data loaded")
+    case = request.app.state.case_service.create_case(
+        tenant_id=user["tenant_id"],
+        user_scope=_user_scope(request, user),
+        alert_ids=clean_alert_ids,
+        run_id=run_info["run_id"],
+        actor=user["user_id"],
+    )
+    try:
+        request.app.state.workflow_engine.transition_case(
+            tenant_id=user["tenant_id"],
+            case_id=case["case_id"],
+            to_state="assigned",
+            actor=user["user_id"],
+            reason="manual_case_creation",
+        )
+    except Exception:
+        pass
+    _log_event(
+        request,
+        user["tenant_id"],
+        "case_created",
+        user["user_id"],
+        alert_id=clean_alert_ids[0],
+        case_id=case.get("case_id"),
+        details={"alert_ids": clean_alert_ids, "run_id": run_info["run_id"]},
+    )
+    case_record = request.app.state.repository.get_case(user["tenant_id"], case["case_id"])
+    if case_record:
+        return _serialize_case(case_record)
+    return _serialize_case(
+        {
+            "case_id": case.get("case_id"),
+            "tenant_id": user["tenant_id"],
+            "status": case.get("status"),
+            "created_by": user["user_id"],
+            "assigned_to": case.get("assigned_to") or user["user_id"],
+            "alert_id": clean_alert_ids[0],
+            "payload_json": case,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
     )
 
 
@@ -180,8 +310,8 @@ def get_time_estimate(
             result = time_service.predict(tenant_id=tenant_id, feature_frame=feature_frame)
             return {
                 "alert_id": alert_id,
-                "p50_hours": result.get("p50_hours"),
-                "p90_hours": result.get("p90_hours"),
+                "p50_hours": _first_numeric(result.get("p50_hours")),
+                "p90_hours": _first_numeric(result.get("p90_hours")),
                 "model_version": result.get("model_version"),
                 "source": "time_model",
             }
@@ -328,6 +458,7 @@ def assign_alert(
         tenant_id=user["tenant_id"],
         alert_id=alert_id,
         actor=user["user_id"],
+        user_scope=_user_scope(request, user),
         status="open",
         reason="assignment_updated",
         assigned_to=payload.assigned_to,
@@ -369,6 +500,7 @@ def update_alert_status(
         tenant_id=user["tenant_id"],
         alert_id=alert_id,
         actor=user["user_id"],
+        user_scope=_user_scope(request, user),
         status=status,
         reason="alert_status_updated",
         assigned_to=existing.get("assigned_to") or user["user_id"],
@@ -470,57 +602,36 @@ def get_alert_notes(
 def create_investigation_case(
     payload: CreateInvestigationCaseRequest,
     request: Request,
-    user: dict = Depends(require_permissions("change_alert_status")),
+    user: dict = Depends(require_permissions("work_cases")),
 ):
     repo = request.app.state.repository
-    existing = [case for case in repo.list_cases(user["tenant_id"]) if case.get("alert_id") == payload.alert_id and case.get("status") != "closed"]
+    existing = [
+        case
+        for case in repo.list_cases(user["tenant_id"])
+        if case.get("alert_id") == payload.alert_id and str(case.get("status") or "").lower() != "closed"
+    ]
     if existing:
         raise HTTPException(status_code=409, detail="Case already exists for this alert")
-    case_id = f"INV-{uuid.uuid4().hex[:12]}"
-    created_at = datetime.now(timezone.utc)
-    sla_due_at = (created_at + timedelta(hours=24)).isoformat()
-    case = repo.save_case(
-        {
-            "case_id": case_id,
-            "tenant_id": user["tenant_id"],
-            "status": "open",
-            "created_by": user["user_id"],
-            "assigned_to": user["user_id"],
-            "alert_id": payload.alert_id,
-            "payload_json": {
-                "case_id": case_id,
-                "alert_id": payload.alert_id,
-                "created_by": user["user_id"],
-                "status": "open",
-                "created_at": created_at.isoformat(),
-                "sla_due_at": sla_due_at,
-                "approval_chain": [
-                    {"step": "analyst_review", "status": "completed", "actor": user["user_id"], "timestamp": created_at.isoformat()},
-                    {"step": "manager_approval", "status": "pending", "actor": None, "timestamp": None},
-                ],
-            },
-            "immutable_timeline_json": [],
-            "created_at": created_at,
-            "updated_at": created_at,
-        }
-    )
-    _log_event(request, user["tenant_id"], "case_created", user["user_id"], alert_id=payload.alert_id, case_id=case_id, details={"status": "open"})
-    return case["payload_json"]
+    case = _create_case_record(request, user, [payload.alert_id])
+    return {
+        "case_id": case["case_id"],
+        "status": case["status"],
+        "case_status": case["case_status"],
+        "workflow_state": case["workflow_state"],
+    }
 
 
 @router.get("/cases/{case_id}")
 def get_case(
     case_id: str,
     request: Request,
-    user: dict = Depends(require_any_permission("view_assigned_alerts", "view_all_alerts")),
+    user: dict = Depends(require_any_permission("work_cases", "view_all_alerts", "view_team_queue")),
 ):
     repo = request.app.state.repository
-    case = repo.get_case(user["tenant_id"], case_id)
-    if case:
-        notes = repo.list_alert_notes(user["tenant_id"], case.get("alert_id") or "")
-        logs = repo.list_investigation_logs(user["tenant_id"], case_id=case_id, limit=200)
-        return {"case": case["payload_json"], "notes": notes, "timeline": logs}
-    raise HTTPException(status_code=404, detail="Case not found")
+    case = _require_case_access(user, repo.get_case(user["tenant_id"], case_id))
+    notes = repo.list_alert_notes(user["tenant_id"], case.get("alert_id") or "")
+    logs = repo.list_investigation_logs(user["tenant_id"], case_id=case_id, limit=200)
+    return {"case": _serialize_case(case), "notes": notes, "timeline": logs}
 
 
 @router.post("/cases/{case_id}/status")
@@ -528,7 +639,7 @@ def update_investigation_case_status(
     case_id: str,
     payload: UpdateCaseStatusRequest,
     request: Request,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_permissions("work_cases")),
 ):
     new_status = normalize_case_state(payload.status)
     if not new_status or new_status not in CASE_STATUSES:
@@ -536,9 +647,7 @@ def update_investigation_case_status(
     if new_status == "sar_filed" and user["role"] not in {"manager", "admin"}:
         raise HTTPException(status_code=403, detail="Only manager/admin can approve SAR cases")
     repo = request.app.state.repository
-    case = repo.get_case(user["tenant_id"], case_id)
-    if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
+    case = _require_case_access(user, repo.get_case(user["tenant_id"], case_id))
     old_status = str(case.get("status") or "").lower().strip() or "open"
     run_info = request.app.state.pipeline_service.get_run_info(user["tenant_id"], _user_scope(request, user))
     actor = user["user_id"]
@@ -651,64 +760,56 @@ def admin_logs(request: Request, user: dict = Depends(require_permissions("view_
 
 
 @router.get("/cases")
-def get_cases(request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
-    return {"cases": request.app.state.case_service.list_cases(tenant_id)}
+def get_cases(
+    request: Request,
+    user: dict = Depends(require_any_permission("work_cases", "view_all_alerts", "view_team_queue")),
+):
+    return {"cases": _list_visible_cases(request, user)}
 
 
 @router.post("/cases")
-def create_case(request: Request, payload: CreateCaseRequest, tenant_id: str = Depends(get_authenticated_tenant_id)):
-    run_info = request.app.state.pipeline_service.get_run_info(tenant_id, _user_scope(request))
-    if not run_info.get("run_id"):
-        raise HTTPException(status_code=400, detail="No data loaded")
-    case = request.app.state.case_service.create_case(
-        tenant_id=tenant_id,
-        user_scope=_user_scope(request),
-        alert_ids=payload.alert_ids,
-        run_id=run_info["run_id"],
-        actor=payload.actor,
-    )
-    try:
-        request.app.state.workflow_engine.transition_case(
-            tenant_id=tenant_id,
-            case_id=case["case_id"],
-            to_state="assigned",
-            actor=payload.actor,
-            reason="manual_case_creation",
-        )
-    except Exception:
-        # Keep existing API behavior unchanged if workflow transition cannot be persisted.
-        pass
-    request.app.state.event_bus.publish(
-        event_name="case_created",
-        tenant_id=tenant_id,
-        payload={"case_id": case.get("case_id"), "alert_ids": payload.alert_ids, "actor": payload.actor},
-        correlation_id=getattr(request.state, "request_id", None),
-        version="2.0",
-    )
-    return {"case_id": case["case_id"], "status": case["status"]}
+def create_case(
+    request: Request,
+    payload: CreateCaseRequest,
+    user: dict = Depends(require_permissions("work_cases")),
+):
+    case = _create_case_record(request, user, payload.alert_ids)
+    return {
+        "case_id": case["case_id"],
+        "status": case["status"],
+        "case_status": case["case_status"],
+        "workflow_state": case["workflow_state"],
+    }
 
 
 @router.get("/actor")
-def get_actor(request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
-    return {"actor": request.app.state.case_service.get_actor(tenant_id, _user_scope(request))}
+def get_actor(request: Request, user: dict = Depends(get_current_user)):
+    return {"actor": request.app.state.case_service.get_actor(user["tenant_id"], _user_scope(request, user))}
 
 
 @router.put("/actor")
-def set_actor(request: Request, payload: SetActorRequest, tenant_id: str = Depends(get_authenticated_tenant_id)):
-    request.app.state.case_service.set_actor(tenant_id, _user_scope(request), payload.actor)
+def set_actor(request: Request, payload: SetActorRequest, user: dict = Depends(get_current_user)):
+    request.app.state.case_service.set_actor(user["tenant_id"], _user_scope(request, user), payload.actor)
     return {"actor": payload.actor}
 
 
 @router.put("/cases/{case_id}")
-def update_case(case_id: str, request: Request, payload: UpdateCaseRequest, tenant_id: str = Depends(get_authenticated_tenant_id)):
-    run_info = request.app.state.pipeline_service.get_run_info(tenant_id, _user_scope(request))
-    actor = request.app.state.case_service.get_actor(tenant_id, _user_scope(request))
+def update_case(
+    case_id: str,
+    request: Request,
+    payload: UpdateCaseRequest,
+    user: dict = Depends(require_permissions("work_cases")),
+):
+    tenant_id = user["tenant_id"]
+    case_record = _require_case_access(user, request.app.state.repository.get_case(tenant_id, case_id))
+    run_info = request.app.state.pipeline_service.get_run_info(tenant_id, _user_scope(request, user))
+    actor = user["user_id"]
     normalized_status = normalize_case_state(payload.status) if payload.status is not None else None
     if payload.status is not None and not normalized_status:
         raise HTTPException(status_code=400, detail="Invalid case status")
     ok, message, case = request.app.state.case_service.update_case(
         tenant_id=tenant_id,
-        user_scope=_user_scope(request),
+        user_scope=_user_scope(request, user),
         case_id=case_id,
         run_id=run_info.get("run_id") or "",
         actor=actor,
@@ -730,12 +831,28 @@ def update_case(case_id: str, request: Request, payload: UpdateCaseRequest, tena
             )
         except Exception:
             pass
-    return {"case_id": case_id, "status": case["status"], "assigned_to": case.get("assigned_to")}
+    normalized_case = _serialize_case(
+        {
+            **case_record,
+            "status": normalize_case_state(case.get("status") or normalized_status or case_record.get("status")) or "open",
+            "assigned_to": case.get("assigned_to") or case_record.get("assigned_to"),
+            "payload_json": case,
+        }
+    )
+    return {
+        "case_id": case_id,
+        "status": normalized_case["status"],
+        "case_status": normalized_case["case_status"],
+        "workflow_state": normalized_case["workflow_state"],
+        "assigned_to": normalized_case.get("assigned_to"),
+    }
 
 
 @router.delete("/cases/{case_id}")
-def delete_case(case_id: str, request: Request, user: dict = Depends(get_current_user)):
+def delete_case(case_id: str, request: Request, user: dict = Depends(require_permissions("manager_approval"))):
     case = request.app.state.repository.get_case(user["tenant_id"], case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
     request.app.state.case_service.delete_case(user["tenant_id"], case_id)
     _log_event(
         request,
@@ -750,8 +867,13 @@ def delete_case(case_id: str, request: Request, user: dict = Depends(get_current
 
 
 @router.get("/cases/{case_id}/audit")
-def get_case_audit(case_id: str, request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
-    return {"events": request.app.state.case_service.get_case_audit(case_id, tenant_id)}
+def get_case_audit(
+    case_id: str,
+    request: Request,
+    user: dict = Depends(require_any_permission("work_cases", "view_all_alerts", "view_team_queue")),
+):
+    _require_case_access(user, request.app.state.repository.get_case(user["tenant_id"], case_id))
+    return {"events": request.app.state.case_service.get_case_audit(case_id, user["tenant_id"])}
 
 
 @router.get("/workflows/sla-breaches")
