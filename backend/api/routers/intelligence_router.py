@@ -77,7 +77,7 @@ class CloseRequest(BaseModel):
 
 def _active_run_id(request: Request, tenant_id: str) -> Optional[str]:
     current_user = getattr(request.state, "current_user", None) or {}
-    raw_scope = str(current_user.get("user_id") or request.headers.get("X-User-Scope") or "public").strip()
+    raw_scope = str(current_user.get("user_id") or "public").strip()
     user_scope = re.sub(r"[^A-Za-z0-9._-]+", "_", raw_scope).strip("._-") or "public"
     info = request.app.state.pipeline_service.get_run_info(
         tenant_id=tenant_id,

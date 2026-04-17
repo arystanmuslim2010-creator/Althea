@@ -64,19 +64,6 @@ function clearTokens() {
   accessTokenMemory = null
 }
 
-function decodeJwtPayload(token) {
-  if (!token) return null
-  try {
-    const parts = token.split('.')
-    if (parts.length !== 3) return null
-    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
-    const normalized = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=')
-    return JSON.parse(atob(normalized))
-  } catch {
-    return null
-  }
-}
-
 async function refreshAccessToken(apiBase) {
   if (refreshInFlight) return refreshInFlight
 
@@ -125,8 +112,6 @@ async function runFetchWithLifecycle(apiBase, path, options, allowRefresh = true
 async function req(method, path, body = null, allowRefresh = true, includeAuth = true, timeoutMs = REQUEST_TIMEOUT_MS) {
   const token = includeAuth ? getAccessToken() : null
   const headers = token ? { Authorization: `Bearer ${token}` } : {}
-  const tenantId = token ? decodeJwtPayload(token)?.tenant_id : null
-  if (tenantId) headers['X-Tenant-ID'] = tenantId
   if (body !== null && body !== undefined) {
     headers['Content-Type'] = 'application/json'
   }
@@ -163,10 +148,6 @@ async function req(method, path, body = null, allowRefresh = true, includeAuth =
 async function reqForm(path, formData, timeoutMs = UPLOAD_TIMEOUT_MS) {
   const token = getAccessToken()
   const headers = token ? { Authorization: `Bearer ${token}` } : undefined
-  if (headers) {
-    const tenantId = decodeJwtPayload(token)?.tenant_id
-    if (tenantId) headers['X-Tenant-ID'] = tenantId
-  }
   let lastNetworkError = null
 
   for (const apiBase of API_CANDIDATES) {

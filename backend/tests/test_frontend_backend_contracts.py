@@ -36,6 +36,17 @@ class _FakeRepo:
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         self._outcome = None
+        self._auth_logs = [
+            {
+                "id": "auth-1",
+                "tenant_id": "tenant-a",
+                "user_id": "u1",
+                "actor_id": "u1",
+                "action": "login_success",
+                "details_json": {"request_id": "req-1"},
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        ]
         self._alert_payload = {
             "alert_id": "A1",
             "risk_score": 91.3,
@@ -80,7 +91,21 @@ class _FakeRepo:
         return payload
 
     def list_investigation_logs(self, tenant_id: str, case_id: str | None = None, limit: int = 200):
-        return []
+        return [
+            {
+                "id": "inv-1",
+                "tenant_id": tenant_id,
+                "case_id": "CASE_001",
+                "alert_id": "A1",
+                "action": "case_created",
+                "performed_by": "u1",
+                "details_json": {"request_id": "req-1"},
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        ][:limit]
+
+    def list_auth_audit_logs(self, tenant_id: str, limit: int = 300):
+        return list(self._auth_logs)[:limit]
 
     def get_case(self, tenant_id: str, case_id: str):
         return {
@@ -124,8 +149,10 @@ class _FakePipeline:
     def __init__(self) -> None:
         self.last_ingestion_kwargs: dict[str, object] = {}
         self.primary_mode = "alert_jsonl"
+        self.run_info_calls: list[str] = []
 
     def get_run_info(self, tenant_id: str, user_scope: str):
+        self.run_info_calls.append(user_scope)
         return {"run_id": "run-1"}
 
     def list_runs(self, tenant_id: str):
@@ -403,6 +430,7 @@ def client():
 
     app.state.settings = SimpleNamespace(
         default_tenant_id="tenant-a",
+        tenant_header="X-Tenant-ID",
         rq_queue_name="althea-pipeline",
         enable_alert_jsonl_ingestion=True,
         enable_legacy_ingestion=True,
@@ -436,6 +464,8 @@ def client():
         get_json=lambda key, default=None: {"ts": datetime.now(timezone.utc).isoformat()}
         if key.startswith("heartbeat:worker")
         else default,
+        increment_counter=lambda key, ttl_seconds: 1,
+        delete=lambda key: None,
     )
     app.state.job_queue_service = SimpleNamespace(queue_depth=lambda _: 0)
     app.state.ml_service = SimpleNamespace(list_versions=lambda _: [{"model_version": "model-v1"}])
@@ -476,6 +506,24 @@ def test_health_endpoint_contract_shape(client: TestClient):
     assert "worker_heartbeat" in internal_payload["checks"]
     assert "feature_store" in internal_payload["checks"]
 
+    ready = client.get("/readyz")
+    assert ready.status_code == 200
+    ready_payload = ready.json()
+    assert ready_payload["status"] == "ready"
+    assert "checks" in ready_payload
+
+
+def test_readiness_endpoint_returns_503_when_dependency_is_unhealthy(client: TestClient):
+    client.app.state.cache = SimpleNamespace(
+        ping=lambda: (_ for _ in ()).throw(RuntimeError("redis unavailable")),
+        get_json=lambda key, default=None: default,
+    )
+    res = client.get("/readyz")
+    assert res.status_code == 503
+    payload = res.json()
+    assert payload["status"] == "degraded"
+    assert payload["ok"] is False
+
 
 def test_alert_jsonl_upload_returns_structured_503_when_disabled(client: TestClient):
     client.app.state.settings.enable_alert_jsonl_ingestion = False
@@ -508,6 +556,8 @@ def test_alert_jsonl_upload_enabled_returns_summary_payload(client: TestClient, 
     assert payload["source_system"] == "alert_jsonl"
     assert "summary" in payload
     assert payload["summary"]["strict_mode_used"] is False
+    upload_path = Path(str(client.app.state.pipeline_service.last_ingestion_kwargs["file_path"]))
+    assert not upload_path.exists()
 
 
 def test_finalization_status_endpoint_returns_stabilization_summary(client: TestClient):
@@ -758,6 +808,12 @@ def test_case_creation_ignores_client_actor_and_uses_authenticated_user(client: 
     assert client.app.state.case_service.last_create_case["user_scope"] == "u1"
 
 
+def test_work_queue_ignores_spoofed_user_scope_header(client: TestClient):
+    res = client.get("/api/work/queue", headers={"X-User-Scope": "spoofed-user"})
+    assert res.status_code == 200
+    assert client.app.state.pipeline_service.run_info_calls[-1] == "u1"
+
+
 def test_case_access_denies_cross_user_read_for_non_elevated_permissions(client: TestClient):
     client.app.dependency_overrides[get_current_user] = lambda: {
         "user_id": "u2",
@@ -780,6 +836,19 @@ def test_case_delete_requires_manager_approval_permission(client: TestClient):
     }
     res = client.delete("/api/cases/CASE_001")
     assert res.status_code == 403
+
+
+def test_admin_logs_export_supports_jsonl_and_csv(client: TestClient):
+    jsonl_response = client.get("/api/admin/logs/export?stream=auth&format=jsonl")
+    assert jsonl_response.status_code == 200
+    assert jsonl_response.headers["content-type"].startswith("application/x-ndjson")
+    assert '"log_type": "auth"' in jsonl_response.text
+
+    csv_response = client.get("/api/admin/logs/export?stream=all&format=csv")
+    assert csv_response.status_code == 200
+    assert csv_response.headers["content-type"].startswith("text/csv")
+    assert "log_type" in csv_response.text
+    assert "login_success" in csv_response.text
 
 
 def test_time_estimate_endpoint_returns_scalar_values_for_model_predictions(client: TestClient):

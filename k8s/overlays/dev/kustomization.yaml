@@ -14,6 +14,24 @@ patches:
         path: /data/ALTHEA_ALLOW_SQLITE_IN_DEV
         value: "true"
       - op: replace
+        path: /data/ALTHEA_ALLOWED_ORIGINS
+        value: http://localhost:5173,http://127.0.0.1:5173
+      - op: replace
+        path: /data/ALTHEA_ALLOWED_HOSTS
+        value: localhost,127.0.0.1,testserver
+      - op: replace
+        path: /data/ALTHEA_TRUST_PROXY_HEADERS
+        value: "false"
+      - op: replace
+        path: /data/ALTHEA_REFRESH_COOKIE_SECURE
+        value: "false"
+      - op: replace
+        path: /data/ALTHEA_ALLOW_REFRESH_TOKEN_IN_BODY
+        value: "true"
+      - op: replace
+        path: /data/ALTHEA_EXPOSE_REFRESH_TOKEN_IN_RESPONSE
+        value: "true"
+      - op: replace
         path: /data/ALTHEA_WORKER_CONCURRENCY
         value: "2"
   - target:

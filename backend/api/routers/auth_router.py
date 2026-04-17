@@ -103,6 +103,10 @@ def _record_auth_event(
     details: dict | None = None,
 ) -> None:
     repository = request.app.state.repository
+    details_payload = dict(details or {})
+    request_id = str(getattr(request.state, "request_id", "") or "").strip()
+    if request_id and "request_id" not in details_payload:
+        details_payload["request_id"] = request_id
     try:
         repository.append_auth_audit_log(
             {
@@ -113,7 +117,7 @@ def _record_auth_event(
                 "action": action,
                 "old_role": None,
                 "new_role": None,
-                "details_json": details or {},
+                "details_json": details_payload,
                 "timestamp": datetime.now(timezone.utc),
             }
         )
@@ -183,6 +187,45 @@ def _extract_refresh_token(request: Request, payload: RefreshRequest | None) -> 
             raise HTTPException(status_code=401, detail="Refresh token in request body is disabled")
         return body_token
     raise HTTPException(status_code=401, detail="Missing refresh token")
+
+
+def _rate_limit_cache(request: Request):
+    return getattr(request.app.state, "cache", None)
+
+
+def _consume_rate_limit(
+    request: Request,
+    *,
+    bucket: str,
+    key: str,
+    max_attempts: int,
+    window_seconds: int,
+) -> bool:
+    cache = _rate_limit_cache(request)
+    counter_key = f"auth-rate-limit:{bucket}:{key}"
+    if cache is not None and hasattr(cache, "increment_counter"):
+        try:
+            current = int(cache.increment_counter(counter_key, window_seconds))
+            return current > max_attempts
+        except Exception:
+            logger.exception("Distributed auth rate limiter failed", extra={"bucket": bucket})
+    limiter = _LOGIN_RATE_LIMITER if bucket == "login" else _REFRESH_RATE_LIMITER
+    if limiter.is_limited(key):
+        return True
+    limiter.register(key)
+    return False
+
+
+def _clear_rate_limit(request: Request, *, bucket: str, key: str) -> None:
+    cache = _rate_limit_cache(request)
+    counter_key = f"auth-rate-limit:{bucket}:{key}"
+    if cache is not None and hasattr(cache, "delete"):
+        try:
+            cache.delete(counter_key)
+        except Exception:
+            logger.exception("Distributed auth rate limiter cleanup failed", extra={"bucket": bucket})
+    limiter = _LOGIN_RATE_LIMITER if bucket == "login" else _REFRESH_RATE_LIMITER
+    limiter.clear(key)
 
 
 class RegisterRequest(BaseModel):
@@ -368,9 +411,22 @@ def login_user(payload: LoginRequest, request: Request, tenant_id: str = Depends
         raise HTTPException(status_code=400, detail="Email is required")
 
     client_ip = _client_ip(request)
+    settings = request.app.state.settings
     limiter_key_ip = f"{tenant_id}:{client_ip}:ip"
     limiter_key_identity = f"{tenant_id}:{email_normalized}:{client_ip}"
-    if _LOGIN_RATE_LIMITER.is_limited(limiter_key_ip) or _LOGIN_RATE_LIMITER.is_limited(limiter_key_identity):
+    if _consume_rate_limit(
+        request,
+        bucket="login",
+        key=limiter_key_ip,
+        max_attempts=int(getattr(settings, "login_rate_limit_max_attempts", 5)),
+        window_seconds=int(getattr(settings, "login_rate_limit_window_seconds", 60)),
+    ) or _consume_rate_limit(
+        request,
+        bucket="login",
+        key=limiter_key_identity,
+        max_attempts=int(getattr(settings, "login_rate_limit_max_attempts", 5)),
+        window_seconds=int(getattr(settings, "login_rate_limit_window_seconds", 60)),
+    ):
         _record_auth_event(
             request=request,
             tenant_id=tenant_id,
@@ -385,8 +441,6 @@ def login_user(payload: LoginRequest, request: Request, tenant_id: str = Depends
         )
         logger.warning("Login rate limit exceeded", extra={"tenant_id": tenant_id, "client_ip": client_ip})
         raise HTTPException(status_code=429, detail="Too many login attempts. Please retry later.")
-    _LOGIN_RATE_LIMITER.register(limiter_key_ip)
-    _LOGIN_RATE_LIMITER.register(limiter_key_identity)
 
     repository = request.app.state.repository
     user = repository.get_user_by_email(tenant_id, email_normalized)
@@ -419,11 +473,10 @@ def login_user(payload: LoginRequest, request: Request, tenant_id: str = Depends
             },
         )
         raise HTTPException(status_code=403, detail="User disabled")
-    _LOGIN_RATE_LIMITER.clear(limiter_key_ip)
-    _LOGIN_RATE_LIMITER.clear(limiter_key_identity)
+    _clear_rate_limit(request, bucket="login", key=limiter_key_ip)
+    _clear_rate_limit(request, bucket="login", key=limiter_key_identity)
 
     session_id = uuid.uuid4().hex
-    settings = request.app.state.settings
     refresh_token = build_refresh_token(settings, tenant_id, user, session_id)
     repository.create_session(
         {
@@ -474,9 +527,14 @@ def refresh_session(request: Request, payload: RefreshRequest | None = None):
     repository = request.app.state.repository
     refresh_token = _extract_refresh_token(request, payload)
     refresh_limiter_key = f"{_client_ip(request)}:refresh"
-    if _REFRESH_RATE_LIMITER.is_limited(refresh_limiter_key):
+    if _consume_rate_limit(
+        request,
+        bucket="refresh",
+        key=refresh_limiter_key,
+        max_attempts=int(getattr(settings, "refresh_rate_limit_max_attempts", 30)),
+        window_seconds=int(getattr(settings, "refresh_rate_limit_window_seconds", 60)),
+    ):
         raise HTTPException(status_code=429, detail="Too many refresh attempts. Please retry later.")
-    _REFRESH_RATE_LIMITER.register(refresh_limiter_key)
     claims = decode_token(settings, refresh_token)
     if claims.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid refresh token")
@@ -533,7 +591,7 @@ def refresh_session(request: Request, payload: RefreshRequest | None = None):
             "user_agent": str(request.headers.get("user-agent") or ""),
         },
     )
-    _REFRESH_RATE_LIMITER.clear(refresh_limiter_key)
+    _clear_rate_limit(request, bucket="refresh", key=refresh_limiter_key)
     return _build_auth_response(
         request=request,
         access_token=access_token,

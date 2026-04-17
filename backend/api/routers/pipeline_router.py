@@ -71,7 +71,7 @@ class PrimaryIngestionModeRequest(BaseModel):
 
 def _user_scope(request: Request) -> str:
     current_user = getattr(request.state, "current_user", None) or {}
-    raw = str(current_user.get("user_id") or request.headers.get("X-User-Scope") or "public").strip()
+    raw = str(current_user.get("user_id") or "public").strip()
     clean = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("._-")
     return clean[:128] if clean else "public"
 
@@ -242,6 +242,19 @@ def _compute_detailed_health(request: Request) -> dict:
 def health_check() -> dict:
     # Public liveness only; dependency diagnostics are restricted to /internal/health.
     return {"ok": True, "status": "alive"}
+
+
+@router.get("/readyz")
+def readiness_check(request: Request):
+    summary = _compute_detailed_health(request)
+    response = {
+        "ok": bool(summary.get("ok")),
+        "status": "ready" if bool(summary.get("ok")) else "degraded",
+        "checks": dict(summary.get("checks") or {}),
+    }
+    if response["ok"]:
+        return response
+    return JSONResponse(status_code=503, content=response)
 
 
 @router.get("/internal/health")
@@ -485,6 +498,7 @@ async def upload_alert_jsonl(
     _: dict = Depends(require_permissions("manager_approval")),
 ):
     primary_mode = _resolve_primary_ingestion_mode(request)
+    file_path: Path | None = None
     if not bool(getattr(request.app.state.settings, "enable_alert_jsonl_ingestion", False)):
         record_ingestion_path_used(ingestion_path="alert_jsonl", primary_mode=primary_mode, status="disabled", alerts_ingested=0)
         return JSONResponse(
@@ -595,6 +609,12 @@ async def upload_alert_jsonl(
     except Exception as exc:
         record_ingestion_path_used(ingestion_path="alert_jsonl", primary_mode=primary_mode, status="failed", alerts_ingested=0)
         raise HTTPException(status_code=500, detail=_error_detail(request, exc))
+    finally:
+        if file_path is not None:
+            try:
+                file_path.unlink(missing_ok=True)
+            except Exception:
+                logger.warning("Failed to remove transient upload artifact", extra={"path": str(file_path), "run_id": run_id})
 
 
 @router.post("/api/data/upload")

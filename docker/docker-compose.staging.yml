@@ -1,20 +1,33 @@
 services:
   postgres:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?set_POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER:?set_POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set_POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:7
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   backend:
     build:
       context: ..
       dockerfile: backend/Dockerfile
+    restart: unless-stopped
     environment:
       ALTHEA_ENV: staging
       ALTHEA_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
@@ -41,14 +54,29 @@ services:
       ALTHEA_INGESTION_MAX_UPLOAD_BYTES: "10485760"
       ALTHEA_PRIMARY_INGESTION_MODE: "alert_jsonl"
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - althea_data:/app/data
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   worker:
     build:
       context: ..
       dockerfile: backend/Dockerfile
     command: python -m workers.pipeline_worker
+    restart: unless-stopped
     environment:
       ALTHEA_ENV: staging
       ALTHEA_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
@@ -72,14 +100,23 @@ services:
       ALTHEA_INGESTION_MAX_UPLOAD_BYTES: "10485760"
       ALTHEA_PRIMARY_INGESTION_MODE: "alert_jsonl"
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - althea_data:/app/data
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
 
   event-worker:
     build:
       context: ..
       dockerfile: backend/Dockerfile
     command: python -m workers.event_worker
+    restart: unless-stopped
     environment:
       ALTHEA_ENV: staging
       ALTHEA_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
@@ -103,8 +140,17 @@ services:
       ALTHEA_INGESTION_MAX_UPLOAD_BYTES: "10485760"
       ALTHEA_PRIMARY_INGESTION_MODE: "alert_jsonl"
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - althea_data:/app/data
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
 
 volumes:
   postgres_data:
+  althea_data:

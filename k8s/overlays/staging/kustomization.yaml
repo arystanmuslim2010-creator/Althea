@@ -14,6 +14,12 @@ patches:
         path: /data/ALTHEA_ALLOW_SQLITE_IN_DEV
         value: "false"
       - op: replace
+        path: /data/ALTHEA_ALLOWED_ORIGINS
+        value: https://staging.althea.example.invalid
+      - op: replace
+        path: /data/ALTHEA_ALLOWED_HOSTS
+        value: staging.althea.example.invalid
+      - op: replace
         path: /data/ALTHEA_WORKER_CONCURRENCY
         value: "4"
   - target:

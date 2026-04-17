@@ -96,12 +96,20 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(IngestionError)
     def ingestion_exception_handler(request, exc: IngestionError):
-        return JSONResponse(status_code=400, content={"detail": str(exc)})
+        response = JSONResponse(status_code=400, content={"detail": str(exc)})
+        request_id = str(getattr(request.state, "request_id", "") or "").strip()
+        if request_id:
+            response.headers["X-Request-ID"] = request_id
+        return response
 
     @app.exception_handler(Exception)
     def global_exception_handler(request, exc: Exception):
         if isinstance(exc, HTTPException):
-            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+            response = JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+            request_id = str(getattr(request.state, "request_id", "") or "").strip()
+            if request_id:
+                response.headers["X-Request-ID"] = request_id
+            return response
         logger.exception("Unhandled exception", exc_info=exc)
         safe_detail = "Internal server error"
         try:
@@ -110,7 +118,11 @@ def create_app() -> FastAPI:
                 safe_detail = str(exc) or safe_detail
         except Exception:
             pass
-        return JSONResponse(status_code=500, content={"detail": safe_detail})
+        response = JSONResponse(status_code=500, content={"detail": safe_detail})
+        request_id = str(getattr(request.state, "request_id", "") or "").strip()
+        if request_id:
+            response.headers["X-Request-ID"] = request_id
+        return response
 
     app.include_router(pipeline_router)
     app.include_router(alerts_router)

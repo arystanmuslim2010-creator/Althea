@@ -160,6 +160,7 @@ ENV/
 env/
 
 # Legacy nested copy left by local migration attempts
+Althea/
 Althea-main/
 
 # Runtime data (must stay out of git)
@@ -169,6 +170,7 @@ data/reports/
 data/model_cache/
 data/object_storage/
 data/dead_letter/
+data/uploads/
 data/data/models/_health/
 data/data/models/datasets/default-bank/public/
 backend/data/*.db
@@ -177,6 +179,7 @@ backend/data/reports/
 backend/data/model_cache/
 backend/data/object_storage/
 backend/data/dead_letter/
+backend/data/uploads/
 dead_letter/
 
 # Sensitive local auth/session artifacts

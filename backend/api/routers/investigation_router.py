@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import csv
+import io
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from core.observability import record_integration_error, record_workflow_transition
@@ -17,7 +21,7 @@ CASE_STATUSES = set(ALLOWED_CASE_TRANSITIONS.keys())
 
 
 def _user_scope(request: Request, user: dict | None = None) -> str:
-    return (user or {}).get("user_id") or request.headers.get("X-User-Scope") or "public"
+    return (user or {}).get("user_id") or "public"
 
 
 def _load_alerts_df(request: Request, tenant_id: str, run_id: str):
@@ -272,6 +276,31 @@ class WorkflowStateTransitionRequest(BaseModel):
     reason: str = "manual_transition"
 
 
+def _serialize_export_value(value):
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=True, default=str)
+    return str(value)
+
+
+def _build_log_export(rows: list[dict], *, log_type: str, export_format: str) -> tuple[str, str]:
+    normalized_rows = [{"log_type": log_type, **dict(row or {})} for row in rows]
+    if export_format == "jsonl":
+        body = "\n".join(json.dumps(item, ensure_ascii=True, default=str) for item in normalized_rows)
+        if body:
+            body += "\n"
+        return body, "application/x-ndjson"
+
+    fieldnames = sorted({key for row in normalized_rows for key in row.keys()})
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames)
+    writer.writeheader()
+    for row in normalized_rows:
+        writer.writerow({key: _serialize_export_value(row.get(key)) for key in fieldnames})
+    return buffer.getvalue(), "text/csv; charset=utf-8"
+
+
 @router.get("/alerts/{alert_id}/time-estimate")
 def get_time_estimate(
     alert_id: str,
@@ -352,11 +381,7 @@ def get_work_queue(
 ):
     # Resolve active run with compatibility fallbacks because different screens may persist
     # runtime context under different scopes ("public" vs user-specific).
-    scope_candidates: list[str] = []
-    header_scope = (request.headers.get("X-User-Scope") or "").strip()
-    if header_scope:
-        scope_candidates.append(header_scope)
-    scope_candidates.extend(["public", str(user.get("user_id") or "").strip()])
+    scope_candidates: list[str] = [str(user.get("user_id") or "").strip(), "public"]
     deduped_scopes: list[str] = []
     for scope in scope_candidates:
         if scope and scope not in deduped_scopes:
@@ -757,6 +782,43 @@ def admin_logs(request: Request, user: dict = Depends(require_permissions("view_
         "logs": request.app.state.repository.list_investigation_logs(user["tenant_id"], limit=300),
         "auth_audit_logs": request.app.state.repository.list_auth_audit_logs(user["tenant_id"], limit=300),
     }
+
+
+@router.get("/admin/logs/export")
+def admin_logs_export(
+    request: Request,
+    stream: str = Query(default="all", pattern="^(all|investigation|auth)$"),
+    format: str = Query(default="jsonl", pattern="^(jsonl|csv)$"),
+    limit: int = Query(default=1000, ge=1, le=5000),
+    user: dict = Depends(require_permissions("view_system_logs")),
+):
+    repo = request.app.state.repository
+    payloads: list[tuple[str, list[dict]]] = []
+    if stream in {"all", "investigation"}:
+        payloads.append(("investigation", repo.list_investigation_logs(user["tenant_id"], limit=limit)))
+    if stream in {"all", "auth"}:
+        payloads.append(("auth", repo.list_auth_audit_logs(user["tenant_id"], limit=limit)))
+
+    if format == "jsonl":
+        body = "".join(_build_log_export(rows, log_type=log_type, export_format="jsonl")[0] for log_type, rows in payloads)
+        media_type = "application/x-ndjson"
+    else:
+        merged_rows: list[dict] = []
+        for log_type, rows in payloads:
+            merged_rows.extend({"log_type": log_type, **dict(row or {})} for row in rows)
+        fieldnames = sorted({key for row in merged_rows for key in row.keys()})
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in merged_rows:
+            writer.writerow({key: _serialize_export_value(row.get(key)) for key in fieldnames})
+        body = buffer.getvalue()
+        media_type = "text/csv; charset=utf-8"
+
+    response = Response(content=body, media_type=media_type)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Content-Disposition"] = f'attachment; filename="althea-{stream}-audit.{format}"'
+    return response
 
 
 @router.get("/cases")

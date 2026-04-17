@@ -168,6 +168,10 @@ class Settings:
     cors_allow_credentials: bool = os.getenv("ALTHEA_CORS_ALLOW_CREDENTIALS", "true").lower() in {"1", "true", "yes"}
     trusted_proxy_headers: bool = os.getenv("ALTHEA_TRUST_PROXY_HEADERS", "false").lower() in {"1", "true", "yes"}
     security_headers_enabled: bool = os.getenv("ALTHEA_SECURITY_HEADERS_ENABLED", "true").lower() in {"1", "true", "yes"}
+    login_rate_limit_max_attempts: int = int(os.getenv("ALTHEA_LOGIN_RATE_LIMIT_MAX_ATTEMPTS", "5"))
+    login_rate_limit_window_seconds: int = int(os.getenv("ALTHEA_LOGIN_RATE_LIMIT_WINDOW_SECONDS", "60"))
+    refresh_rate_limit_max_attempts: int = int(os.getenv("ALTHEA_REFRESH_RATE_LIMIT_MAX_ATTEMPTS", "30"))
+    refresh_rate_limit_window_seconds: int = int(os.getenv("ALTHEA_REFRESH_RATE_LIMIT_WINDOW_SECONDS", "60"))
     enable_public_tenant_bootstrap: bool = os.getenv("ALTHEA_ENABLE_PUBLIC_TENANT_BOOTSTRAP", "").lower() in {"1", "true", "yes"}
     bootstrap_provisioning_secret: str | None = os.getenv("ALTHEA_BOOTSTRAP_PROVISIONING_SECRET")
     refresh_cookie_name: str = os.getenv("ALTHEA_REFRESH_COOKIE_NAME", "althea_rt")
@@ -274,6 +278,26 @@ class Settings:
         self.cors_allow_credentials = _parse_bool_env("ALTHEA_CORS_ALLOW_CREDENTIALS", self.cors_allow_credentials)
         self.trusted_proxy_headers = _parse_bool_env("ALTHEA_TRUST_PROXY_HEADERS", self.trusted_proxy_headers)
         self.security_headers_enabled = _parse_bool_env("ALTHEA_SECURITY_HEADERS_ENABLED", self.security_headers_enabled)
+        self.login_rate_limit_max_attempts = _parse_int_env(
+            "ALTHEA_LOGIN_RATE_LIMIT_MAX_ATTEMPTS",
+            self.login_rate_limit_max_attempts,
+            min_value=1,
+        )
+        self.login_rate_limit_window_seconds = _parse_int_env(
+            "ALTHEA_LOGIN_RATE_LIMIT_WINDOW_SECONDS",
+            self.login_rate_limit_window_seconds,
+            min_value=1,
+        )
+        self.refresh_rate_limit_max_attempts = _parse_int_env(
+            "ALTHEA_REFRESH_RATE_LIMIT_MAX_ATTEMPTS",
+            self.refresh_rate_limit_max_attempts,
+            min_value=1,
+        )
+        self.refresh_rate_limit_window_seconds = _parse_int_env(
+            "ALTHEA_REFRESH_RATE_LIMIT_WINDOW_SECONDS",
+            self.refresh_rate_limit_window_seconds,
+            min_value=1,
+        )
         self.enable_public_tenant_bootstrap = _parse_bool_env(
             "ALTHEA_ENABLE_PUBLIC_TENANT_BOOTSTRAP",
             self.enable_public_tenant_bootstrap,
@@ -416,6 +440,10 @@ def get_settings() -> Settings:
             "allow_refresh_token_in_body": settings.allow_refresh_token_in_body,
             "cors_allow_origin_regex": bool(settings.cors_allow_origin_regex),
             "trusted_proxy_headers": settings.trusted_proxy_headers,
+            "login_rate_limit_max_attempts": settings.login_rate_limit_max_attempts,
+            "login_rate_limit_window_seconds": settings.login_rate_limit_window_seconds,
+            "refresh_rate_limit_max_attempts": settings.refresh_rate_limit_max_attempts,
+            "refresh_rate_limit_window_seconds": settings.refresh_rate_limit_window_seconds,
         },
     )
     settings.data_dir.mkdir(parents=True, exist_ok=True)

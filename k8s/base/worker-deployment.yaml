@@ -12,13 +12,28 @@ spec:
       labels:
         app: althea-worker
     spec:
+      serviceAccountName: althea-runtime
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: worker
           image: ghcr.io/your-org/althea-backend:latest
+          imagePullPolicy: IfNotPresent
           command:
             - python
             - -m
             - workers.pipeline_worker
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           envFrom:
             - configMapRef:
                 name: althea-config

@@ -3,18 +3,17 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Althea — Behavioral Governance for Financial Risk Operations</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https: http: ws: wss:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+    />
+    <meta http-equiv="Referrer-Policy" content="no-referrer" />
+    <meta http-equiv="X-Content-Type-Options" content="nosniff" />
+    <meta http-equiv="Permissions-Policy" content="geolocation=(), microphone=(), camera=()" />
+    <title>Althea - Behavioral Governance for Financial Risk Operations</title>
   </head>
   <body>
-    <script>
-      (function() {
-        var t = localStorage.getItem('theme') || 'light';
-        document.documentElement.setAttribute('data-theme', t);
-      })();
-    </script>
+    <script src="/theme-init.js"></script>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

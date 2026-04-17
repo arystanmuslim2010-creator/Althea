@@ -12,11 +12,26 @@ spec:
       labels:
         app: althea-backend
     spec:
+      serviceAccountName: althea-runtime
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: backend
           image: ghcr.io/your-org/althea-backend:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           envFrom:
             - configMapRef:
                 name: althea-config
@@ -38,7 +53,7 @@ spec:
                   key: jwt-secret
           readinessProbe:
             httpGet:
-              path: /health
+              path: /readyz
               port: 8000
             initialDelaySeconds: 8
             periodSeconds: 10
@@ -48,6 +63,12 @@ spec:
               port: 8000
             initialDelaySeconds: 20
             periodSeconds: 20
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            failureThreshold: 30
+            periodSeconds: 5
           resources:
             requests:
               cpu: "250m"

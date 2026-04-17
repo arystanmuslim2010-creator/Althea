@@ -66,8 +66,10 @@ Event subscriber worker:
 
 - JWT handled by `python-jose`.
 - Refresh-token rotation and session revocation (`logout`, `logout-all`).
+- Login and refresh throttling use Redis-backed counters when Redis is available, with in-process fallback only for local/test use.
 - Tenant isolation check between token and tenant header.
 - RBAC permissions enforced by dependency middleware.
+- Authenticated runtime context now derives user scope from the authenticated identity rather than client-provided scope headers.
 - Secret indirection supported via `ALTHEA_SECRET_KEY_REF`:
   - `env:VAR_NAME`
   - file path containing the secret value
@@ -76,6 +78,8 @@ Event subscriber worker:
 
 - OpenTelemetry initialization: `backend/core/telemetry.py`
 - Prometheus metrics endpoint: `GET /metrics`
+- Public liveness endpoint: `GET /health`
+- Public readiness endpoint: `GET /readyz`
 - Metrics include:
   - pipeline execution duration/status
   - worker task duration/status
@@ -97,4 +101,9 @@ CI/CD pipeline:
 
 - `.github/workflows/althea-enterprise-cicd.yml`
 
-It runs tests/builds, publishes container images, and deploys overlays by environment branch/tag.
+It runs tests/builds, validates Docker Compose and Kubernetes overlays, publishes container images, and deploys overlays by environment branch/tag.
+
+## Operations
+
+- Audit logs are available through `/api/admin/logs` and exportable through `/api/admin/logs/export`.
+- A consolidated operations runbook lives at `docs/operations/pilot_runbook.md`.

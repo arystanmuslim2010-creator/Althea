@@ -25,5 +25,5 @@ test:
 	cd frontend; npm run test -- --run
 
 lint:
-	cd backend; python -m compileall .
+	cd backend; python -m compileall . -x "(\\.venv|__pycache__)"
 	cd frontend; npm run build

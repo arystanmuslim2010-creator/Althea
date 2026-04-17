@@ -18,6 +18,9 @@ class RedisCache:
     def __init__(self, url: str) -> None:
         self._lock = threading.RLock()
         self._memory: dict[str, Any] = {}
+        self._memory_expirations: dict[str, float] = {}
+        self._counters: dict[str, int] = {}
+        self._counter_expirations: dict[str, float] = {}
         self._streams: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self._client = None
         if redis is not None:
@@ -33,6 +36,11 @@ class RedisCache:
             raw = self._client.get(key)
             return json.loads(raw) if raw else default
         with self._lock:
+            expiry = float(self._memory_expirations.get(key, 0.0) or 0.0)
+            if expiry and expiry <= time.time():
+                self._memory.pop(key, None)
+                self._memory_expirations.pop(key, None)
+                return default
             return self._memory.get(key, default)
 
     def ping(self) -> bool:
@@ -51,6 +59,10 @@ class RedisCache:
             return
         with self._lock:
             self._memory[key] = value
+            if ttl_seconds:
+                self._memory_expirations[key] = time.time() + max(1, int(ttl_seconds))
+            else:
+                self._memory_expirations.pop(key, None)
 
     def delete(self, key: str) -> None:
         if self._client is not None:
@@ -58,6 +70,29 @@ class RedisCache:
             return
         with self._lock:
             self._memory.pop(key, None)
+            self._memory_expirations.pop(key, None)
+            self._counters.pop(key, None)
+            self._counter_expirations.pop(key, None)
+
+    def increment_counter(self, key: str, ttl_seconds: int) -> int:
+        ttl = max(1, int(ttl_seconds or 1))
+        if self._client is not None:
+            pipeline = self._client.pipeline()
+            pipeline.incr(key)
+            pipeline.ttl(key)
+            count, current_ttl = pipeline.execute()
+            if int(count or 0) == 1 or int(current_ttl or -1) < 0:
+                self._client.expire(key, ttl)
+            return int(count or 0)
+
+        now = time.time()
+        with self._lock:
+            expiry = float(self._counter_expirations.get(key, 0.0) or 0.0)
+            if expiry <= now:
+                self._counters[key] = 0
+            self._counter_expirations[key] = now + ttl
+            self._counters[key] = int(self._counters.get(key, 0)) + 1
+            return self._counters[key]
 
     def publish_event(self, stream: str, payload: dict[str, Any]) -> str:
         if self._client is not None:

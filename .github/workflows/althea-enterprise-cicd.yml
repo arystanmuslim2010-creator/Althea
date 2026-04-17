@@ -10,6 +10,9 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/althea-backend
 
+permissions:
+  contents: read
+
 jobs:
   backend-test:
     runs-on: ubuntu-latest
@@ -21,9 +24,14 @@ jobs:
       - name: Install backend deps
         run: pip install -r backend/requirements.txt
       - name: Compile backend
-        run: python -m compileall backend
+        run: cd backend && python -m compileall . -x "(\.venv|__pycache__)"
       - name: Run backend tests
+        env:
+          ALTHEA_JWT_SECRET: ci-test-secret-ci-test-secret-ci
+          ALTHEA_REFRESH_COOKIE_SECURE: "false"
         run: pytest backend/tests -q
+      - name: Validate backend image build
+        run: docker build -f backend/Dockerfile .
 
   frontend-build:
     runs-on: ubuntu-latest
@@ -38,10 +46,29 @@ jobs:
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+      - run: npm run test -- --run
       - run: npm run build
+      - run: docker build -f Dockerfile ..
+
+  deployment-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-kubectl@v4
+      - name: Validate docker compose definitions
+        run: |
+          docker compose -f docker/docker-compose.dev.yml config -q
+          docker compose -f docker/docker-compose.staging.yml config -q
+          docker compose -f docker/docker-compose.prod.yml config -q
+      - name: Validate Kubernetes overlays
+        run: |
+          kubectl kustomize k8s/base >/dev/null
+          kubectl kustomize k8s/overlays/dev >/dev/null
+          kubectl kustomize k8s/overlays/staging >/dev/null
+          kubectl kustomize k8s/overlays/prod >/dev/null
 
   build-and-push:
-    needs: [backend-test, frontend-build]
+    needs: [backend-test, frontend-build, deployment-config]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:

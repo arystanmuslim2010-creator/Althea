@@ -8,7 +8,7 @@
     "event-worker": "cd backend && python -m workers.event_worker",
     "streaming-worker": "cd backend && python -m workers.streaming_worker",
     "test": "cd backend && pytest -q && npm --prefix frontend run test -- --run",
-    "lint": "cd backend && python -m compileall . && npm --prefix frontend run build",
+    "lint": "cd backend && python -m compileall . -x \"(\\\\.venv|__pycache__)\" && npm --prefix frontend run build",
     "dev:frontend": "npm --prefix frontend run dev",
     "build:frontend": "npm --prefix frontend run build",
     "dev:backend": "cd backend && python -m uvicorn main:app --host 127.0.0.1 --port 8000",
