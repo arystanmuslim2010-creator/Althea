@@ -1504,6 +1504,18 @@ class EnterpriseRepository:
             if row is None:
                 return None
             row.is_active = bool(is_active)
+            revoked_sessions = 0
+            if not bool(is_active):
+                active_sessions = session.execute(
+                    select(UserSessionRecord).where(
+                        UserSessionRecord.tenant_id == tenant_id,
+                        UserSessionRecord.user_id == user_id,
+                        UserSessionRecord.revoked == False,
+                    )
+                ).scalars()
+                for session_row in active_sessions:
+                    session_row.revoked = True
+                    revoked_sessions += 1
             action = "user_enabled" if bool(is_active) else "user_disabled"
             session.add(
                 AuthAuditLogRecord(
@@ -1513,7 +1525,7 @@ class EnterpriseRepository:
                     action=action,
                     old_role=str(row.role or "").lower().strip() or None,
                     new_role=str(row.role or "").lower().strip() or None,
-                    details_json={"is_active": bool(is_active)},
+                    details_json={"is_active": bool(is_active), "revoked_sessions": revoked_sessions},
                     timestamp=_utcnow(),
                 )
             )

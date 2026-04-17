@@ -4,10 +4,12 @@ import uuid
 import logging
 import threading
 import time
+import hmac
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from core.security import (
@@ -15,12 +17,14 @@ from core.security import (
     build_access_token,
     build_refresh_token,
     decode_token,
+    get_authenticated_tenant_id,
     get_current_user,
     get_current_user_optional,
     get_tenant_id,
     hash_password,
     hash_refresh_token,
     normalize_role,
+    require_permissions,
     verify_password,
 )
 
@@ -60,15 +64,125 @@ class _InMemoryRateLimiter:
 
 
 _LOGIN_RATE_LIMITER = _InMemoryRateLimiter(max_attempts=5, window_seconds=60)
+_REFRESH_RATE_LIMITER = _InMemoryRateLimiter(max_attempts=30, window_seconds=60)
 
 
 def _client_ip(request: Request) -> str:
-    forwarded_for = (request.headers.get("X-Forwarded-For") or "").strip()
-    if forwarded_for:
-        first = forwarded_for.split(",")[0].strip()
-        if first:
-            return first
+    settings = request.app.state.settings
+    if bool(getattr(settings, "trusted_proxy_headers", False)):
+        forwarded_for = (request.headers.get("X-Forwarded-For") or "").strip()
+        if forwarded_for:
+            first = forwarded_for.split(",")[0].strip()
+            if first:
+                return first
     return str((request.client.host if request.client else "") or "unknown")
+
+
+def _normalize_email(email: str | None) -> str:
+    return str(email or "").strip().lower()
+
+
+def _coerce_utc(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _record_auth_event(
+    request: Request,
+    tenant_id: str,
+    action: str,
+    user_id: str | None = None,
+    actor_id: str | None = None,
+    details: dict | None = None,
+) -> None:
+    repository = request.app.state.repository
+    try:
+        repository.append_auth_audit_log(
+            {
+                "id": uuid.uuid4().hex,
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "actor_id": actor_id,
+                "action": action,
+                "old_role": None,
+                "new_role": None,
+                "details_json": details or {},
+                "timestamp": datetime.now(timezone.utc),
+            }
+        )
+    except Exception:
+        logger.exception(
+            "Failed to write auth audit event",
+            extra={"tenant_id": tenant_id, "action": action},
+        )
+
+
+def _set_refresh_cookie(request: Request, response: Response, refresh_token: str) -> None:
+    settings = request.app.state.settings
+    response.set_cookie(
+        key=str(getattr(settings, "refresh_cookie_name", "althea_rt")),
+        value=refresh_token,
+        max_age=max(1, int(settings.refresh_token_minutes) * 60),
+        httponly=True,
+        secure=bool(getattr(settings, "refresh_cookie_secure", False)),
+        samesite=str(getattr(settings, "refresh_cookie_samesite", "strict")).lower(),
+        path=str(getattr(settings, "refresh_cookie_path", "/api/auth")),
+        domain=getattr(settings, "refresh_cookie_domain", None),
+    )
+
+
+def _clear_refresh_cookie(request: Request, response: Response) -> None:
+    settings = request.app.state.settings
+    response.delete_cookie(
+        key=str(getattr(settings, "refresh_cookie_name", "althea_rt")),
+        path=str(getattr(settings, "refresh_cookie_path", "/api/auth")),
+        domain=getattr(settings, "refresh_cookie_domain", None),
+    )
+
+
+def _build_auth_response(
+    request: Request,
+    *,
+    access_token: str,
+    refresh_token: str,
+    user_payload: dict | None = None,
+) -> JSONResponse:
+    settings = request.app.state.settings
+    body: dict[str, object] = {
+        "access_token": access_token,
+        "token_type": "bearer",
+    }
+    if bool(getattr(settings, "expose_refresh_token_in_response", False)):
+        body["refresh_token"] = refresh_token
+    if user_payload is not None:
+        body["user"] = user_payload
+    response = JSONResponse(content=body)
+    response.headers["Cache-Control"] = "no-store"
+    _set_refresh_cookie(request, response, refresh_token)
+    return response
+
+
+def _extract_refresh_token(request: Request, payload: RefreshRequest | None) -> str:
+    settings = request.app.state.settings
+    cookie_name = str(getattr(settings, "refresh_cookie_name", "althea_rt"))
+    cookie_token = str(request.cookies.get(cookie_name) or "").strip()
+    body_token = str((payload.refresh_token if payload else "") or "").strip()
+    if cookie_token and body_token and not hmac.compare_digest(cookie_token, body_token):
+        raise HTTPException(status_code=401, detail="Conflicting refresh token sources")
+    if cookie_token:
+        return cookie_token
+    if body_token:
+        if not bool(getattr(settings, "allow_refresh_token_in_body", False)):
+            raise HTTPException(status_code=401, detail="Refresh token in request body is disabled")
+        return body_token
+    raise HTTPException(status_code=401, detail="Missing refresh token")
 
 
 class RegisterRequest(BaseModel):
@@ -93,11 +207,15 @@ class LoginRequest(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str | None = None
 
 
 @router.get("/providers")
-def list_identity_providers(request: Request, tenant_id: str = Depends(get_tenant_id)):
+def list_identity_providers(
+    request: Request,
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+    _: dict = Depends(require_permissions("manage_roles")),
+):
     settings = request.app.state.settings
     configured = request.app.state.repository.list_identity_providers(tenant_id=tenant_id)
     return {
@@ -130,7 +248,7 @@ def register_user(
 ):
     repository = request.app.state.repository
     settings = request.app.state.settings
-    email_normalized = str(payload.email or "").strip().lower()
+    email_normalized = _normalize_email(payload.email)
     if not email_normalized:
         raise HTTPException(status_code=400, detail="Email is required")
     provision_mode = str(payload.provision_mode or "").upper().strip()
@@ -142,6 +260,16 @@ def register_user(
     role = "analyst"
 
     if provision_mode == "TENANT_BOOTSTRAP_USER":
+        if not bool(getattr(settings, "enable_public_tenant_bootstrap", False)):
+            raise HTTPException(status_code=403, detail="Tenant bootstrap registration is disabled")
+        bootstrap_secret = (getattr(settings, "bootstrap_provisioning_secret", None) or "").strip()
+        provided_secret = (
+            request.headers.get("X-Bootstrap-Provisioning-Token")
+            or request.headers.get("X-SSO-Provisioning-Token")
+            or ""
+        ).strip()
+        if not bootstrap_secret or not provided_secret or not hmac.compare_digest(provided_secret, bootstrap_secret):
+            raise HTTPException(status_code=403, detail="Invalid bootstrap provisioning token")
         if repository.count_users(tenant_id) > 0:
             raise HTTPException(status_code=403, detail="Tenant bootstrap is only allowed for empty tenants")
         # Bootstrap role is fixed and not user-selected.
@@ -153,7 +281,7 @@ def register_user(
     elif provision_mode == "SSO_PROVISION_USER":
         provisioning_secret = (getattr(settings, "sso_provisioning_secret", None) or "").strip()
         provided_secret = (request.headers.get("X-SSO-Provisioning-Token") or "").strip()
-        if not provisioning_secret or provided_secret != provisioning_secret:
+        if not provisioning_secret or not provided_secret or not hmac.compare_digest(provided_secret, provisioning_secret):
             raise HTTPException(status_code=403, detail="Invalid SSO provisioning token")
         # SSO provisioning defaults to least-privilege role unless changed later by admins.
         role = "analyst"
@@ -199,11 +327,25 @@ def register_user(
         }
     )
     access_token = build_access_token(settings, tenant_id, user, session_id)
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "bearer",
-        "user": {
+    _record_auth_event(
+        request=request,
+        tenant_id=tenant_id,
+        action="register_success",
+        user_id=user["id"],
+        actor_id=(current_user or {}).get("user_id"),
+        details={
+            "provision_mode": provision_mode,
+            "email": user["email"],
+            "role": normalize_role(user["role"]),
+            "client_ip": _client_ip(request),
+            "user_agent": str(request.headers.get("user-agent") or ""),
+        },
+    )
+    return _build_auth_response(
+        request=request,
+        access_token=access_token,
+        refresh_token=refresh_token,
+        user_payload={
             "id": user["id"],
             "user_id": user["id"],
             "email": user["email"],
@@ -216,26 +358,69 @@ def register_user(
                 fallback_role=normalize_role(user["role"]),
             ),
         },
-    }
+    )
 
 
 @router.post("/login")
 def login_user(payload: LoginRequest, request: Request, tenant_id: str = Depends(get_tenant_id)):
-    email_normalized = str(payload.email or "").strip().lower()
+    email_normalized = _normalize_email(payload.email)
     if not email_normalized:
         raise HTTPException(status_code=400, detail="Email is required")
 
-    limiter_key = f"{tenant_id}:{_client_ip(request)}"
-    if _LOGIN_RATE_LIMITER.is_limited(limiter_key):
-        logger.warning("Login rate limit exceeded", extra={"tenant_id": tenant_id, "client_ip": _client_ip(request)})
+    client_ip = _client_ip(request)
+    limiter_key_ip = f"{tenant_id}:{client_ip}:ip"
+    limiter_key_identity = f"{tenant_id}:{email_normalized}:{client_ip}"
+    if _LOGIN_RATE_LIMITER.is_limited(limiter_key_ip) or _LOGIN_RATE_LIMITER.is_limited(limiter_key_identity):
+        _record_auth_event(
+            request=request,
+            tenant_id=tenant_id,
+            action="login_rate_limited",
+            user_id=None,
+            actor_id=None,
+            details={
+                "email": email_normalized,
+                "client_ip": client_ip,
+                "user_agent": str(request.headers.get("user-agent") or ""),
+            },
+        )
+        logger.warning("Login rate limit exceeded", extra={"tenant_id": tenant_id, "client_ip": client_ip})
         raise HTTPException(status_code=429, detail="Too many login attempts. Please retry later.")
-    _LOGIN_RATE_LIMITER.register(limiter_key)
+    _LOGIN_RATE_LIMITER.register(limiter_key_ip)
+    _LOGIN_RATE_LIMITER.register(limiter_key_identity)
 
     repository = request.app.state.repository
     user = repository.get_user_by_email(tenant_id, email_normalized)
     if not user or not verify_password(payload.password, user["password_hash"]):
+        _record_auth_event(
+            request=request,
+            tenant_id=tenant_id,
+            action="login_failed",
+            user_id=(user or {}).get("id"),
+            actor_id=None,
+            details={
+                "email": email_normalized,
+                "reason": "invalid_credentials",
+                "client_ip": client_ip,
+                "user_agent": str(request.headers.get("user-agent") or ""),
+            },
+        )
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    _LOGIN_RATE_LIMITER.clear(limiter_key)
+    if not bool(user.get("is_active", True)):
+        _record_auth_event(
+            request=request,
+            tenant_id=tenant_id,
+            action="login_blocked_disabled_user",
+            user_id=user.get("id"),
+            actor_id=user.get("id"),
+            details={
+                "email": email_normalized,
+                "client_ip": client_ip,
+                "user_agent": str(request.headers.get("user-agent") or ""),
+            },
+        )
+        raise HTTPException(status_code=403, detail="User disabled")
+    _LOGIN_RATE_LIMITER.clear(limiter_key_ip)
+    _LOGIN_RATE_LIMITER.clear(limiter_key_identity)
 
     session_id = uuid.uuid4().hex
     settings = request.app.state.settings
@@ -251,11 +436,23 @@ def login_user(payload: LoginRequest, request: Request, tenant_id: str = Depends
         }
     )
     access_token = build_access_token(settings, tenant_id, user, session_id)
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "bearer",
-        "user": {
+    _record_auth_event(
+        request=request,
+        tenant_id=tenant_id,
+        action="login_success",
+        user_id=user["id"],
+        actor_id=user["id"],
+        details={
+            "email": email_normalized,
+            "client_ip": client_ip,
+            "user_agent": str(request.headers.get("user-agent") or ""),
+        },
+    )
+    return _build_auth_response(
+        request=request,
+        access_token=access_token,
+        refresh_token=refresh_token,
+        user_payload={
             "id": user["id"],
             "user_id": user["id"],
             "email": user["email"],
@@ -268,25 +465,55 @@ def login_user(payload: LoginRequest, request: Request, tenant_id: str = Depends
                 fallback_role=normalize_role(user["role"]),
             ),
         },
-    }
+    )
 
 
 @router.post("/refresh")
-def refresh_session(payload: RefreshRequest, request: Request):
+def refresh_session(request: Request, payload: RefreshRequest | None = None):
     settings = request.app.state.settings
     repository = request.app.state.repository
-    claims = decode_token(settings, payload.refresh_token)
+    refresh_token = _extract_refresh_token(request, payload)
+    refresh_limiter_key = f"{_client_ip(request)}:refresh"
+    if _REFRESH_RATE_LIMITER.is_limited(refresh_limiter_key):
+        raise HTTPException(status_code=429, detail="Too many refresh attempts. Please retry later.")
+    _REFRESH_RATE_LIMITER.register(refresh_limiter_key)
+    claims = decode_token(settings, refresh_token)
     if claims.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid refresh token")
-    tenant_id = claims.get("tenant_id") or settings.default_tenant_id
+    tenant_id = str(claims.get("tenant_id") or "").strip()
+    if not tenant_id:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+    requested_tenant = request.headers.get(settings.tenant_header)
+    if requested_tenant and requested_tenant != tenant_id:
+        raise HTTPException(status_code=403, detail="Tenant mismatch between token and request header")
     session = repository.get_session(tenant_id, claims.get("sid", ""))
     if not session or session.get("revoked"):
         raise HTTPException(status_code=401, detail="Session revoked")
-    if session["refresh_token_hash"] != hash_refresh_token(payload.refresh_token):
+    if str(session.get("user_id") or "") != str(claims.get("sub") or ""):
+        raise HTTPException(status_code=401, detail="Session/token user mismatch")
+    session_expiry = _coerce_utc(session.get("expires_at"))
+    if session_expiry and session_expiry <= datetime.now(timezone.utc):
+        repository.revoke_session(tenant_id=tenant_id, session_id=session.get("session_id"))
+        raise HTTPException(status_code=401, detail="Session expired")
+    if session["refresh_token_hash"] != hash_refresh_token(refresh_token):
         raise HTTPException(status_code=401, detail="Invalid refresh token")
     user = repository.get_user_by_id(tenant_id, claims.get("sub", ""))
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    if not bool(user.get("is_active", True)):
+        repository.revoke_session(tenant_id=tenant_id, session_id=session["session_id"])
+        _record_auth_event(
+            request=request,
+            tenant_id=tenant_id,
+            action="refresh_blocked_disabled_user",
+            user_id=user.get("id"),
+            actor_id=user.get("id"),
+            details={
+                "client_ip": _client_ip(request),
+                "user_agent": str(request.headers.get("user-agent") or ""),
+            },
+        )
+        raise HTTPException(status_code=403, detail="User disabled")
     rotated_refresh_token = build_refresh_token(settings, tenant_id, user, session["session_id"])
     repository.update_session_refresh_token(
         tenant_id=tenant_id,
@@ -295,21 +522,70 @@ def refresh_session(payload: RefreshRequest, request: Request):
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=settings.refresh_token_minutes),
     )
     access_token = build_access_token(settings, tenant_id, user, session["session_id"])
-    return {"access_token": access_token, "refresh_token": rotated_refresh_token, "token_type": "bearer"}
+    _record_auth_event(
+        request=request,
+        tenant_id=tenant_id,
+        action="refresh_success",
+        user_id=user["id"],
+        actor_id=user["id"],
+        details={
+            "client_ip": _client_ip(request),
+            "user_agent": str(request.headers.get("user-agent") or ""),
+        },
+    )
+    _REFRESH_RATE_LIMITER.clear(refresh_limiter_key)
+    return _build_auth_response(
+        request=request,
+        access_token=access_token,
+        refresh_token=rotated_refresh_token,
+        user_payload=None,
+    )
 
 
 @router.post("/logout")
 def logout(request: Request, user: dict = Depends(get_current_user)):
     request.app.state.repository.revoke_session(user["tenant_id"], user["session_id"])
-    return {"status": "revoked"}
+    _record_auth_event(
+        request=request,
+        tenant_id=user["tenant_id"],
+        action="logout_success",
+        user_id=user["user_id"],
+        actor_id=user["user_id"],
+        details={
+            "session_id": user.get("session_id"),
+            "client_ip": _client_ip(request),
+            "user_agent": str(request.headers.get("user-agent") or ""),
+        },
+    )
+    response = JSONResponse(content={"status": "revoked"})
+    _clear_refresh_cookie(request, response)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @router.post("/logout-all")
 def logout_all(request: Request, user: dict = Depends(get_current_user)):
     revoked = request.app.state.repository.revoke_all_user_sessions(user["tenant_id"], user["user_id"])
-    return {"status": "revoked", "revoked_sessions": revoked}
+    _record_auth_event(
+        request=request,
+        tenant_id=user["tenant_id"],
+        action="logout_all_success",
+        user_id=user["user_id"],
+        actor_id=user["user_id"],
+        details={
+            "revoked_sessions": int(revoked or 0),
+            "client_ip": _client_ip(request),
+            "user_agent": str(request.headers.get("user-agent") or ""),
+        },
+    )
+    response = JSONResponse(content={"status": "revoked", "revoked_sessions": revoked})
+    _clear_refresh_cookie(request, response)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @router.get("/me")
 def auth_me(user: dict = Depends(get_current_user)):
-    return user
+    response = JSONResponse(content=user)
+    response.headers["Cache-Control"] = "no-store"
+    return response

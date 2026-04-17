@@ -784,13 +784,22 @@ def create_case(
 
 @router.get("/actor")
 def get_actor(request: Request, user: dict = Depends(get_current_user)):
-    return {"actor": request.app.state.case_service.get_actor(user["tenant_id"], _user_scope(request, user))}
+    # Identity source of truth is authenticated user, not mutable client actor aliases.
+    return {"actor": str(user.get("user_id") or "")}
 
 
 @router.put("/actor")
 def set_actor(request: Request, payload: SetActorRequest, user: dict = Depends(get_current_user)):
-    request.app.state.case_service.set_actor(user["tenant_id"], _user_scope(request, user), payload.actor)
-    return {"actor": payload.actor}
+    requested_actor = str(payload.actor or "").strip()
+    current_user_id = str(user.get("user_id") or "").strip()
+    is_admin = normalize_role(user.get("role")) == "admin"
+    if not requested_actor:
+        raise HTTPException(status_code=400, detail="actor is required")
+    if not is_admin and requested_actor != current_user_id:
+        raise HTTPException(status_code=403, detail="Only admins can set actor aliases for other users")
+    resolved_actor = requested_actor if is_admin else current_user_id
+    request.app.state.case_service.set_actor(user["tenant_id"], _user_scope(request, user), resolved_actor)
+    return {"actor": resolved_actor}
 
 
 @router.put("/cases/{case_id}")
@@ -807,6 +816,11 @@ def update_case(
     normalized_status = normalize_case_state(payload.status) if payload.status is not None else None
     if payload.status is not None and not normalized_status:
         raise HTTPException(status_code=400, detail="Invalid case status")
+    permissions = set(user.get("permissions") or [])
+    if payload.assigned_to is not None and "reassign_alerts" not in permissions and normalize_role(user.get("role")) != "admin":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if normalized_status == "sar_filed" and normalize_role(user.get("role")) not in {"manager", "admin"}:
+        raise HTTPException(status_code=403, detail="Only manager/admin can approve SAR cases")
     ok, message, case = request.app.state.case_service.update_case(
         tenant_id=tenant_id,
         user_scope=_user_scope(request, user),

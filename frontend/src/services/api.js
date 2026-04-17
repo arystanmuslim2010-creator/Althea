@@ -13,12 +13,11 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
 const API_CANDIDATES = API_BASE
   ? [`${API_BASE}/api`, '/api', 'http://127.0.0.1:8000/api', 'http://localhost:8000/api']
   : ['/api', 'http://127.0.0.1:8000/api', 'http://localhost:8000/api']
-const ACCESS_TOKEN_KEY = 'althea_auth_token'
-const REFRESH_TOKEN_KEY = 'althea_refresh_token'
 const REQUEST_TIMEOUT_MS = Number(import.meta.env.VITE_REQUEST_TIMEOUT_MS ?? 30000)
 const UPLOAD_TIMEOUT_MS = Number(import.meta.env.VITE_UPLOAD_TIMEOUT_MS ?? 180000)
 
 let refreshInFlight = null
+let accessTokenMemory = null
 
 export const CONNECTION_ERROR_MESSAGE = 'Cannot connect to backend service. Please try again.'
 
@@ -54,21 +53,15 @@ async function parseResponse(res) {
 }
 
 function getAccessToken() {
-  return localStorage.getItem(ACCESS_TOKEN_KEY)
+  return accessTokenMemory
 }
 
-function getRefreshToken() {
-  return localStorage.getItem(REFRESH_TOKEN_KEY)
-}
-
-function setTokens(accessToken, refreshToken) {
-  if (accessToken) localStorage.setItem(ACCESS_TOKEN_KEY, accessToken)
-  if (refreshToken) localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken)
+function setTokens(accessToken, _refreshToken) {
+  accessTokenMemory = accessToken || null
 }
 
 function clearTokens() {
-  localStorage.removeItem(ACCESS_TOKEN_KEY)
-  localStorage.removeItem(REFRESH_TOKEN_KEY)
+  accessTokenMemory = null
 }
 
 function decodeJwtPayload(token) {
@@ -87,16 +80,13 @@ function decodeJwtPayload(token) {
 async function refreshAccessToken(apiBase) {
   if (refreshInFlight) return refreshInFlight
 
-  const refreshToken = getRefreshToken()
-  if (!refreshToken) return false
-
   refreshInFlight = (async () => {
     const timeout = withTimeout()
     try {
       const res = await fetch(`${apiBase}/auth/refresh`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refreshToken }),
         signal: timeout.signal,
       })
       if (!res.ok) {
@@ -104,7 +94,7 @@ async function refreshAccessToken(apiBase) {
         return false
       }
       const payload = await parseResponse(res)
-      setTokens(payload.access_token, payload.refresh_token)
+      setTokens(payload.access_token, null)
       return Boolean(payload.access_token)
     } catch {
       clearTokens()
@@ -145,6 +135,7 @@ async function req(method, path, body = null, allowRefresh = true, includeAuth =
     method,
     headers,
     body: body !== null && body !== undefined ? JSON.stringify(body) : undefined,
+    credentials: 'include',
   }
 
   let lastNetworkError = null
@@ -184,7 +175,7 @@ async function reqForm(path, formData, timeoutMs = UPLOAD_TIMEOUT_MS) {
       const res = await runFetchWithLifecycle(
         apiBase,
         path,
-        { method: 'POST', body: formData, headers, signal: timeout.signal },
+        { method: 'POST', body: formData, headers, signal: timeout.signal, credentials: 'include' },
         true
       )
       return await parseResponse(res)
@@ -210,9 +201,8 @@ export const api = {
   clearToken: () => clearTokens(),
   setTokens: (accessToken, refreshToken) => setTokens(accessToken, refreshToken),
   getAccessToken: () => getAccessToken(),
-  getRefreshToken: () => getRefreshToken(),
   clearTokens: () => clearTokens(),
-  refresh: () => req('POST', '/auth/refresh', { refresh_token: getRefreshToken() }, false, false),
+  refresh: () => req('POST', '/auth/refresh', null, false, false),
   register: (payload) => req('POST', '/auth/register', payload, false, false),
   login: (payload) => req('POST', '/auth/login', payload, false, false),
   me: () => req('GET', '/auth/me'),

@@ -1,6 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
-import { api } from '../services/api'
 import { useLanguage } from '../contexts/LanguageContext'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -12,22 +11,10 @@ const nav = [
   { path: '/data', icon: '☰' },
 ]
 
-const ACTORS = ['Analyst_1', 'Analyst_2', 'Manager']
-
 export function Sidebar({ title = 'Althea' }) {
-  const [actor, setActor] = useState('Analyst_1')
   const [collapsed, setCollapsed] = useState(false)
   const { t } = useLanguage()
   const { user } = useAuth()
-
-  useEffect(() => {
-    api.getActor().then((r) => setActor(r.actor || 'Analyst_1')).catch(() => {})
-  }, [])
-
-  const handleActorChange = (val) => {
-    setActor(val)
-    api.setActor(val).catch(() => {})
-  }
 
   return (
     <aside
@@ -117,22 +104,6 @@ export function Sidebar({ title = 'Althea' }) {
           </NavLink>
         ) : null}
       </nav>
-      {!collapsed && (
-        <div className="mt-4 pt-4 px-4 border-t border-[var(--border)]">
-          <span className="text-[0.65rem] font-semibold uppercase tracking-wider text-[var(--muted)] mt-0 mx-0 mb-1 ml-2 block">
-            {t.sidebar.analyst}
-          </span>
-          <select
-            className="w-full mt-2 px-3 py-2 text-sm bg-[var(--surface)] border border-[var(--border)] rounded-md text-[var(--text)]"
-            value={actor}
-            onChange={(e) => handleActorChange(e.target.value)}
-          >
-            {ACTORS.map((a) => (
-              <option key={a} value={a}>{a}</option>
-            ))}
-          </select>
-        </div>
-      )}
     </aside>
   )
 }

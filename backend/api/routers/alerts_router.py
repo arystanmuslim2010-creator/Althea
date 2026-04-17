@@ -10,7 +10,7 @@ import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from core.observability import record_copilot_generation, record_integration_error
-from core.security import get_authenticated_tenant_id
+from core.security import get_authenticated_tenant_id, require_permissions
 
 router = APIRouter(tags=["alerts"])
 logger = logging.getLogger("althea.alerts")
@@ -280,7 +280,8 @@ def generate_ai_summary(alert_id: str, request: Request, tenant_id: str = Depend
     if row.empty:
         raise HTTPException(status_code=404, detail="Alert not found")
     summary = _generate_alert_summary(row.iloc[0].to_dict())
-    actor = request.headers.get("X-Actor") or request.app.state.case_service.get_actor(tenant_id, _user_scope(request))
+    current_user = getattr(request.state, "current_user", None) or {}
+    actor = str(current_user.get("user_id") or "") or request.app.state.case_service.get_actor(tenant_id, _user_scope(request))
     rec = request.app.state.repository.save_ai_summary(
         {
             "tenant_id": tenant_id,
@@ -339,7 +340,12 @@ def get_ops_metrics(request: Request, analyst_capacity: int = 50, tenant_id: str
 
 
 @router.post("/internal/ml/predict")
-def internal_ml_predict(payload: dict, request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
+def internal_ml_predict(
+    payload: dict,
+    request: Request,
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+    _: dict = Depends(require_permissions("manager_approval")),
+):
     alert_ids = [str(item) for item in (payload.get("alert_ids") or []) if str(item)]
     frame = pd.DataFrame(payload.get("rows", []))
     if not frame.empty:

@@ -25,6 +25,21 @@ from services.ingestion_service import IngestionError
 router = APIRouter(tags=["pipeline"])
 logger = logging.getLogger("althea.pipeline_router")
 
+_JSONL_ALLOWED_EXTENSIONS = {".jsonl", ".ndjson"}
+_JSONL_ALLOWED_CONTENT_TYPES = {
+    "application/json",
+    "application/x-ndjson",
+    "application/ndjson",
+    "text/plain",
+}
+_CSV_ALLOWED_EXTENSIONS = {".csv"}
+_CSV_ALLOWED_CONTENT_TYPES = {
+    "text/csv",
+    "application/csv",
+    "application/vnd.ms-excel",
+    "text/plain",
+}
+
 
 class StreamReplayRequest(BaseModel):
     topic: str
@@ -95,6 +110,28 @@ def _count_non_empty_lines(raw_bytes: bytes) -> int:
     return sum(1 for line in (raw_bytes or b"").splitlines() if line.strip())
 
 
+def _validate_uploaded_file_metadata(
+    file: UploadFile,
+    *,
+    allowed_extensions: set[str],
+    allowed_content_types: set[str],
+    label: str,
+) -> None:
+    raw_name = str(file.filename or "").strip()
+    safe_name = Path(raw_name).name
+    extension = Path(safe_name).suffix.lower()
+    content_type = str(file.content_type or "").strip().lower()
+
+    if not safe_name:
+        raise HTTPException(status_code=400, detail=f"{label} file name is required.")
+    if extension not in allowed_extensions:
+        allowed_ext = ", ".join(sorted(allowed_extensions))
+        raise HTTPException(status_code=400, detail=f"{label} must use one of: {allowed_ext}.")
+    if content_type and content_type not in allowed_content_types:
+        allowed_types = ", ".join(sorted(allowed_content_types))
+        raise HTTPException(status_code=400, detail=f"{label} content type must be one of: {allowed_types}.")
+
+
 def _legacy_ingestion_enabled(request: Request) -> bool:
     return bool(getattr(request.app.state.settings, "enable_legacy_ingestion", False))
 
@@ -137,8 +174,7 @@ def root() -> dict:
     return {"status": "ok", "app": "AML Alert Prioritization API"}
 
 
-@router.get("/health")
-def health_check(request: Request) -> dict:
+def _compute_detailed_health(request: Request) -> dict:
     checks = {
         "database": False,
         "redis": False,
@@ -202,8 +238,27 @@ def health_check(request: Request) -> dict:
     return {"ok": ok, "status": status, "checks": checks, "queue_depth": depth, "details": details}
 
 
+@router.get("/health")
+def health_check() -> dict:
+    # Public liveness only; dependency diagnostics are restricted to /internal/health.
+    return {"ok": True, "status": "alive"}
+
+
+@router.get("/internal/health")
+def internal_health_check(
+    request: Request,
+    _tenant_id: str = Depends(get_authenticated_tenant_id),
+    _: dict = Depends(require_permissions("view_system_logs")),
+) -> dict:
+    return _compute_detailed_health(request)
+
+
 @router.get("/metrics")
-def metrics(request: Request):
+def metrics(
+    request: Request,
+    _tenant_id: str = Depends(get_authenticated_tenant_id),
+    _: dict = Depends(require_permissions("view_system_logs")),
+):
     return metrics_response(request.app.state.metrics)
 
 
@@ -248,12 +303,22 @@ def set_primary_ingestion_mode(
 
 
 @router.post("/api/data/generate-synthetic")
-def generate_synthetic(n_rows: int = 400, request: Request = None, tenant_id: str = Depends(get_authenticated_tenant_id)):
+def generate_synthetic(
+    n_rows: int = 400,
+    request: Request = None,
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+    _: dict = Depends(require_permissions("manager_approval")),
+):
     return request.app.state.ingestion_service.generate_synthetic(tenant_id=tenant_id, user_scope=_user_scope(request), n_rows=n_rows)
 
 
 @router.post("/api/data/upload-csv")
-async def upload_csv(request: Request, file: UploadFile = File(...), tenant_id: str = Depends(get_authenticated_tenant_id)):
+async def upload_csv(
+    request: Request,
+    file: UploadFile = File(...),
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+    _: dict = Depends(require_permissions("manager_approval")),
+):
     primary_mode = _resolve_primary_ingestion_mode(request)
     if not _legacy_ingestion_enabled(request):
         record_legacy_ingestion_usage(endpoint="upload_csv", status="disabled")
@@ -272,6 +337,12 @@ async def upload_csv(request: Request, file: UploadFile = File(...), tenant_id: 
     record_legacy_path_access(endpoint="upload_csv", caller="api", blocked=False)
     record_legacy_ingestion_usage(endpoint="upload_csv", status="attempt")
     try:
+        _validate_uploaded_file_metadata(
+            file,
+            allowed_extensions=_CSV_ALLOWED_EXTENSIONS,
+            allowed_content_types=_CSV_ALLOWED_CONTENT_TYPES,
+            label="CSV upload",
+        )
         contents = await file.read()
         _ensure_upload_size_within_limit(request, contents)
         out = request.app.state.ingestion_service.upload_transactions_csv(
@@ -318,18 +389,28 @@ def generate_bank_csv(
     seed: int = 42,
     request: Request = None,
     tenant_id: str = Depends(get_authenticated_tenant_id),
+    _: dict = Depends(require_permissions("manager_approval")),
 ):
     try:
         out = request.app.state.ingestion_service.generate_bank_alerts_csv(n_rows=max(1, min(n_rows, 10000)), seed=seed)
         out_path = request.app.state.settings.data_dir / f"bank_alerts_{len(out)}.csv"
         out.to_csv(out_path, index=False, encoding="utf-8")
-        return {"rows": len(out), "path": str(out_path), "message": f"Saved to {out_path}. Upload this file via Upload bank CSV."}
+        return {
+            "rows": len(out),
+            "artifact": out_path.name,
+            "message": "Bank CSV generated successfully. Upload this file via Upload bank CSV.",
+        }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=_error_detail(request, exc))
 
 
 @router.post("/api/data/upload-bank-csv")
-async def upload_bank_csv(request: Request, file: UploadFile = File(...), tenant_id: str = Depends(get_authenticated_tenant_id)):
+async def upload_bank_csv(
+    request: Request,
+    file: UploadFile = File(...),
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+    _: dict = Depends(require_permissions("manager_approval")),
+):
     primary_mode = _resolve_primary_ingestion_mode(request)
     if not _legacy_ingestion_enabled(request):
         record_legacy_ingestion_usage(endpoint="upload_bank_csv", status="disabled")
@@ -348,6 +429,12 @@ async def upload_bank_csv(request: Request, file: UploadFile = File(...), tenant
     record_legacy_path_access(endpoint="upload_bank_csv", caller="api", blocked=False)
     record_legacy_ingestion_usage(endpoint="upload_bank_csv", status="attempt")
     try:
+        _validate_uploaded_file_metadata(
+            file,
+            allowed_extensions=_CSV_ALLOWED_EXTENSIONS,
+            allowed_content_types=_CSV_ALLOWED_CONTENT_TYPES,
+            label="Bank CSV upload",
+        )
         contents = await file.read()
         _ensure_upload_size_within_limit(request, contents)
         if not contents:
@@ -391,7 +478,12 @@ async def upload_bank_csv(request: Request, file: UploadFile = File(...), tenant
 
 
 @router.post("/api/data/upload-alert-jsonl")
-async def upload_alert_jsonl(request: Request, file: UploadFile = File(...), tenant_id: str = Depends(get_authenticated_tenant_id)):
+async def upload_alert_jsonl(
+    request: Request,
+    file: UploadFile = File(...),
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+    _: dict = Depends(require_permissions("manager_approval")),
+):
     primary_mode = _resolve_primary_ingestion_mode(request)
     if not bool(getattr(request.app.state.settings, "enable_alert_jsonl_ingestion", False)):
         record_ingestion_path_used(ingestion_path="alert_jsonl", primary_mode=primary_mode, status="disabled", alerts_ingested=0)
@@ -404,6 +496,12 @@ async def upload_alert_jsonl(request: Request, file: UploadFile = File(...), ten
         )
     run_id = f"run_{uuid.uuid4().hex[:16]}"
     try:
+        _validate_uploaded_file_metadata(
+            file,
+            allowed_extensions=_JSONL_ALLOWED_EXTENSIONS,
+            allowed_content_types=_JSONL_ALLOWED_CONTENT_TYPES,
+            label="Alert JSONL upload",
+        )
         contents = await file.read()
         _ensure_upload_size_within_limit(request, contents)
         if not contents:
@@ -505,6 +603,7 @@ async def upload_data_default(
     file: UploadFile = File(...),
     ingestion_mode: str | None = Query(default=None, description="Optional override: legacy|alert_jsonl"),
     tenant_id: str = Depends(get_authenticated_tenant_id),
+    _: dict = Depends(require_permissions("manager_approval")),
 ):
     primary_mode = _resolve_primary_ingestion_mode(request)
     selected_mode = _resolve_primary_ingestion_mode(request, override_mode=ingestion_mode) if ingestion_mode else primary_mode
@@ -531,9 +630,13 @@ async def upload_data_default(
 
 
 @router.post("/api/pipeline/run")
-def run_pipeline(request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
+def run_pipeline(
+    request: Request,
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+    user: dict = Depends(require_permissions("manager_approval")),
+):
     try:
-        initiated_by = request.headers.get("X-Actor")
+        initiated_by = str(user.get("user_id") or "system")
         return request.app.state.pipeline_service.enqueue_pipeline_run(
             tenant_id=tenant_id,
             user_scope=_user_scope(request),
@@ -551,7 +654,11 @@ def get_pipeline_job(job_id: str, request: Request, tenant_id: str = Depends(get
 
 
 @router.post("/api/pipeline/clear")
-def clear_run(request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
+def clear_run(
+    request: Request,
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+    _: dict = Depends(require_permissions("manager_approval")),
+):
     return request.app.state.pipeline_service.clear_active_run(tenant_id=tenant_id, user_scope=_user_scope(request))
 
 
@@ -641,7 +748,7 @@ def submit_model_governance_approval(
     tenant_id: str = Depends(get_authenticated_tenant_id),
     user: dict = Depends(require_permissions("manager_approval")),
 ):
-    actor = request.headers.get("X-Actor") or user.get("user_id") or "system"
+    actor = str(user.get("user_id") or "system")
     result = request.app.state.model_governance_lifecycle.submit_approval(
         tenant_id=tenant_id,
         model_version=payload.model_version,
@@ -686,7 +793,7 @@ def trigger_training_run(
     payload: TrainingTriggerRequest,
     request: Request,
     tenant_id: str = Depends(get_authenticated_tenant_id),
-    _: dict = Depends(require_permissions("manager_approval")),
+    user: dict = Depends(require_permissions("manager_approval")),
 ) -> dict:
     """Manually trigger a supervised training run for the tenant's models."""
     training_service = getattr(request.app.state, "training_run_service", None)
@@ -695,7 +802,7 @@ def trigger_training_run(
     try:
         result = training_service.run(
             tenant_id=tenant_id,
-            initiated_by=payload.initiated_by,
+            initiated_by=str(user.get("user_id") or "system"),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -824,7 +931,7 @@ def evaluate_retraining(
     payload: RetrainingEvaluateRequest,
     request: Request,
     tenant_id: str = Depends(get_authenticated_tenant_id),
-    _: dict = Depends(require_permissions("manager_approval")),
+    user: dict = Depends(require_permissions("manager_approval")),
 ) -> dict:
     """Evaluate retraining triggers and optionally launch a training run.
 
@@ -853,7 +960,7 @@ def evaluate_retraining(
             reference_pr_auc=payload.reference_pr_auc,
             reference_ece=payload.reference_ece,
             force=payload.force,
-            initiated_by=payload.initiated_by,
+            initiated_by=str(user.get("user_id") or "system"),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

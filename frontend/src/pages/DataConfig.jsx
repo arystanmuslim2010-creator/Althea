@@ -1,17 +1,24 @@
 import { useState } from 'react'
 import { api } from '../services/api'
+import { useAuth } from '../contexts/AuthContext'
+import { hasPermission } from '../services/permissions'
 
 export function DataConfig() {
+  const { user } = useAuth()
   const [source, setSource] = useState('synthetic')
   const [loading, setLoading] = useState(false)
   const [msg, setMsg] = useState(null)
   const [file, setFile] = useState(null)
   const [nRows, setNRows] = useState(400)
+  const canManageData = hasPermission(user, 'manager_approval')
 
   const runPipeline = async () => {
     setLoading(true)
     setMsg(null)
     try {
+      if (!canManageData) {
+        throw new Error('Insufficient permissions to run pipeline operations.')
+      }
       const res = await api.runPipeline()
       if (res.job_id && res.status !== 'completed') {
         setMsg(`Pipeline job queued: ${res.job_id}. Waiting for completion...`)
@@ -72,6 +79,9 @@ export function DataConfig() {
     setLoading(true)
     setMsg(null)
     try {
+      if (!canManageData) {
+        throw new Error('Insufficient permissions to upload data.')
+      }
       if (source === 'alert_jsonl') {
         const res = await api.uploadAlertJsonl(file)
         setMsg(
@@ -97,6 +107,9 @@ export function DataConfig() {
   const clearRun = async () => {
     setLoading(true)
     try {
+      if (!canManageData) {
+        throw new Error('Insufficient permissions to clear pipeline state.')
+      }
       await api.clearRun()
       setMsg('Run cleared.')
     } catch (e) {
@@ -168,6 +181,11 @@ export function DataConfig() {
         <div className="mb-4 rounded-md border border-[var(--border)] bg-[var(--surface2)] px-4 py-3 text-sm text-[var(--muted)]">
           Pipeline execution now goes through a persisted job flow. Local runs can still complete inline, while enterprise deployments can switch to Redis/RQ workers without changing the UI contract.
         </div>
+        {!canManageData && (
+          <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            Pipeline and ingestion controls require manager-level permissions.
+          </div>
+        )}
         {source === 'synthetic' && (
           <>
             <div className="flex items-center gap-4 my-3">
@@ -181,7 +199,7 @@ export function DataConfig() {
                 onChange={(e) => setNRows(Number(e.target.value) || 400)}
               />
             </div>
-            <button className="px-4 py-2 text-sm font-medium rounded-md bg-[var(--accent2)] text-white dark:bg-white dark:text-[#0c0c0c] mr-2 mb-2 disabled:opacity-60" onClick={generateSynthetic} disabled={loading}>
+            <button className="px-4 py-2 text-sm font-medium rounded-md bg-[var(--accent2)] text-white dark:bg-white dark:text-[#0c0c0c] mr-2 mb-2 disabled:opacity-60" onClick={generateSynthetic} disabled={loading || !canManageData}>
               {loading ? 'Running...' : 'Generate Demo Data & Run Pipeline'}
             </button>
           </>
@@ -194,12 +212,12 @@ export function DataConfig() {
               onChange={(e) => setFile(e.target.files?.[0])}
               className="my-3 text-sm text-[var(--muted)] block"
             />
-            <button className="px-4 py-2 text-sm font-medium rounded-md bg-[var(--accent2)] text-white dark:bg-white dark:text-[#0c0c0c] mr-2 mb-2 disabled:opacity-60" onClick={uploadCsv} disabled={loading || !file}>
+            <button className="px-4 py-2 text-sm font-medium rounded-md bg-[var(--accent2)] text-white dark:bg-white dark:text-[#0c0c0c] mr-2 mb-2 disabled:opacity-60" onClick={uploadCsv} disabled={loading || !file || !canManageData}>
               {loading ? 'Running...' : 'Upload & Run Pipeline'}
             </button>
           </>
         )}
-        <button className="px-4 py-2 text-sm font-medium rounded-md border border-[var(--border)] bg-transparent text-[var(--text)] mr-2 mb-2 disabled:opacity-60" onClick={clearRun} disabled={loading}>
+        <button className="px-4 py-2 text-sm font-medium rounded-md border border-[var(--border)] bg-transparent text-[var(--text)] mr-2 mb-2 disabled:opacity-60" onClick={clearRun} disabled={loading || !canManageData}>
           Clear active run
         </button>
       </div>

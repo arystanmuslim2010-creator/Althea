@@ -11,9 +11,6 @@ function jsonResponse(payload, status = 200) {
 describe('api client contracts', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
-    if (globalThis.localStorage && typeof globalThis.localStorage.clear === 'function') {
-      globalThis.localStorage.clear()
-    }
   })
 
   it('maps legacy case statuses to backend workflow-safe statuses', async () => {
@@ -35,10 +32,10 @@ describe('api client contracts', () => {
   })
 
   it('refreshes access token on 401 and retries request', async () => {
-    api.setTokens('expired-access', 'valid-refresh')
+    api.setTokens('expired-access', null)
     const fetchMock = vi.fn(async (url) => {
       if (String(url).endsWith('/auth/refresh')) {
-        return jsonResponse({ access_token: 'new-access', refresh_token: 'new-refresh' })
+        return jsonResponse({ access_token: 'new-access' })
       }
       const auth = (fetchMock.mock.calls.at(-1)?.[1]?.headers || {}).Authorization
       if (auth === 'Bearer expired-access') {
@@ -51,7 +48,8 @@ describe('api client contracts', () => {
     const me = await api.me()
     expect(me.user_id).toBe('u1')
     expect(api.getAccessToken()).toBe('new-access')
-    expect(api.getRefreshToken()).toBe('new-refresh')
+    const refreshCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/auth/refresh'))
+    expect(refreshCall?.[1]?.credentials).toBe('include')
   })
 
   it('calls network graph endpoint and returns normalized payload', async () => {

@@ -44,31 +44,38 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     const init = async () => {
-      const token = api.getAccessToken()
-      if (!token) {
-        setLoading(false)
-        return
-      }
-
-      const jwtUser = buildUserFromJwt(token)
-      if (jwtUser) {
-        setUser(jwtUser)
-      }
-      setLoading(false)
-
       try {
-        const exp = getTokenExpiryMs(token)
-        if (exp && Date.now() >= exp - 15000 && api.getRefreshToken()) {
+        let token = api.getAccessToken()
+        if (!token) {
           const refreshed = await api.refresh()
           if (refreshed?.access_token) {
-            api.setTokens(refreshed.access_token, refreshed.refresh_token)
+            api.setTokens(refreshed.access_token, null)
+            token = refreshed.access_token
           }
+        }
+        const jwtUser = buildUserFromJwt(token)
+        if (jwtUser) {
+          setUser(jwtUser)
+        }
+        const exp = getTokenExpiryMs(token)
+        if (exp && Date.now() >= exp - 15000) {
+          const refreshed = await api.refresh()
+          if (refreshed?.access_token) {
+            api.setTokens(refreshed.access_token, null)
+            token = refreshed.access_token
+          }
+        }
+        if (!token) {
+          setUser(null)
+          return
         }
         const me = await api.me()
         setUser({ ...me, source: 'api' })
       } catch {
         api.clearTokens()
         setUser(null)
+      } finally {
+        setLoading(false)
       }
     }
 
@@ -77,8 +84,7 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     const accessToken = api.getAccessToken()
-    const refreshToken = api.getRefreshToken()
-    if (!accessToken || !refreshToken) return undefined
+    if (!accessToken) return undefined
 
     const expMs = getTokenExpiryMs(accessToken)
     if (!expMs) return undefined
@@ -88,7 +94,7 @@ export function AuthProvider({ children }) {
       try {
         const refreshed = await api.refresh()
         if (refreshed?.access_token) {
-          api.setTokens(refreshed.access_token, refreshed.refresh_token)
+          api.setTokens(refreshed.access_token, null)
           setRefreshTick((v) => v + 1)
         } else {
           api.clearTokens()
@@ -105,7 +111,7 @@ export function AuthProvider({ children }) {
 
   const login = async ({ email, password }) => {
     const res = await api.login({ email, password })
-    api.setTokens(res.access_token, res.refresh_token)
+    api.setTokens(res.access_token, null)
     const resolvedUser = res.user
       ? { ...res.user, user_id: res.user.user_id || res.user.id, source: 'login' }
       : buildUserFromJwt(res.access_token)

@@ -11,6 +11,7 @@ logger = logging.getLogger("althea.config")
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
 _PRIMARY_INGESTION_MODES = {"legacy", "alert_jsonl"}
+_COOKIE_SAMESITE_VALUES = {"lax", "strict", "none"}
 
 
 def _existing_insecure_artifacts(project_root: Path, backend_root: Path) -> list[str]:
@@ -153,6 +154,29 @@ class Settings:
             ],
         )
     )
+    allowed_hosts: List[str] = field(
+        default_factory=lambda: _split_csv(
+            os.getenv("ALTHEA_ALLOWED_HOSTS"),
+            [
+                "localhost",
+                "127.0.0.1",
+                "testserver",
+            ],
+        )
+    )
+    cors_allow_origin_regex: str | None = os.getenv("ALTHEA_CORS_ALLOW_ORIGIN_REGEX")
+    cors_allow_credentials: bool = os.getenv("ALTHEA_CORS_ALLOW_CREDENTIALS", "true").lower() in {"1", "true", "yes"}
+    trusted_proxy_headers: bool = os.getenv("ALTHEA_TRUST_PROXY_HEADERS", "false").lower() in {"1", "true", "yes"}
+    security_headers_enabled: bool = os.getenv("ALTHEA_SECURITY_HEADERS_ENABLED", "true").lower() in {"1", "true", "yes"}
+    enable_public_tenant_bootstrap: bool = os.getenv("ALTHEA_ENABLE_PUBLIC_TENANT_BOOTSTRAP", "").lower() in {"1", "true", "yes"}
+    bootstrap_provisioning_secret: str | None = os.getenv("ALTHEA_BOOTSTRAP_PROVISIONING_SECRET")
+    refresh_cookie_name: str = os.getenv("ALTHEA_REFRESH_COOKIE_NAME", "althea_rt")
+    refresh_cookie_path: str = os.getenv("ALTHEA_REFRESH_COOKIE_PATH", "/api/auth")
+    refresh_cookie_domain: str | None = os.getenv("ALTHEA_REFRESH_COOKIE_DOMAIN")
+    refresh_cookie_secure: bool = os.getenv("ALTHEA_REFRESH_COOKIE_SECURE", "").lower() in {"1", "true", "yes"}
+    refresh_cookie_samesite: str = os.getenv("ALTHEA_REFRESH_COOKIE_SAMESITE", "strict")
+    allow_refresh_token_in_body: bool = os.getenv("ALTHEA_ALLOW_REFRESH_TOKEN_IN_BODY", "").lower() in {"1", "true", "yes"}
+    expose_refresh_token_in_response: bool = os.getenv("ALTHEA_EXPOSE_REFRESH_TOKEN_IN_RESPONSE", "").lower() in {"1", "true", "yes"}
     oidc_issuer_url: str | None = os.getenv("ALTHEA_OIDC_ISSUER_URL")
     oidc_client_id: str | None = os.getenv("ALTHEA_OIDC_CLIENT_ID")
     oidc_client_secret: str | None = os.getenv("ALTHEA_OIDC_CLIENT_SECRET")
@@ -247,10 +271,51 @@ class Settings:
             "ALTHEA_PRIMARY_INGESTION_MODE",
             self.primary_ingestion_mode,
         )
+        self.cors_allow_credentials = _parse_bool_env("ALTHEA_CORS_ALLOW_CREDENTIALS", self.cors_allow_credentials)
+        self.trusted_proxy_headers = _parse_bool_env("ALTHEA_TRUST_PROXY_HEADERS", self.trusted_proxy_headers)
+        self.security_headers_enabled = _parse_bool_env("ALTHEA_SECURITY_HEADERS_ENABLED", self.security_headers_enabled)
+        self.enable_public_tenant_bootstrap = _parse_bool_env(
+            "ALTHEA_ENABLE_PUBLIC_TENANT_BOOTSTRAP",
+            self.enable_public_tenant_bootstrap,
+        )
+        self.allow_refresh_token_in_body = _parse_bool_env(
+            "ALTHEA_ALLOW_REFRESH_TOKEN_IN_BODY",
+            self.allow_refresh_token_in_body,
+        )
+        self.expose_refresh_token_in_response = _parse_bool_env(
+            "ALTHEA_EXPOSE_REFRESH_TOKEN_IN_RESPONSE",
+            self.expose_refresh_token_in_response,
+        )
+        self.refresh_cookie_secure = _parse_bool_env("ALTHEA_REFRESH_COOKIE_SECURE", self.refresh_cookie_secure)
+        self.refresh_cookie_samesite = str(self.refresh_cookie_samesite or "strict").strip().lower()
+        if self.refresh_cookie_samesite not in _COOKIE_SAMESITE_VALUES:
+            allowed = ", ".join(sorted(_COOKIE_SAMESITE_VALUES))
+            raise RuntimeError(f"ALTHEA_REFRESH_COOKIE_SAMESITE must be one of: {allowed}.")
+        if self.refresh_cookie_samesite == "none" and not self.refresh_cookie_secure:
+            raise RuntimeError("ALTHEA_REFRESH_COOKIE_SECURE must be true when ALTHEA_REFRESH_COOKIE_SAMESITE=none.")
+        if self.is_non_dev and not self.refresh_cookie_secure:
+            raise RuntimeError("ALTHEA_REFRESH_COOKIE_SECURE must be true in non-development environments.")
+        self.refresh_cookie_name = str(self.refresh_cookie_name or "").strip()
+        if not self.refresh_cookie_name:
+            raise RuntimeError("ALTHEA_REFRESH_COOKIE_NAME must be non-empty.")
+        self.refresh_cookie_path = str(self.refresh_cookie_path or "/api/auth").strip() or "/api/auth"
+        if not self.refresh_cookie_path.startswith("/"):
+            raise RuntimeError("ALTHEA_REFRESH_COOKIE_PATH must start with '/'.")
+        self.refresh_cookie_domain = (str(self.refresh_cookie_domain or "").strip() or None)
 
         if os.getenv("ALTHEA_ALLOW_DEV_MODELS") is None:
             # Safe default: allow local bootstrap only in development.
             self.allow_dev_models = bool(self.is_dev)
+        if os.getenv("ALTHEA_ENABLE_PUBLIC_TENANT_BOOTSTRAP") is None:
+            self.enable_public_tenant_bootstrap = False
+        if os.getenv("ALTHEA_ALLOW_REFRESH_TOKEN_IN_BODY") is None:
+            # Safer default: allow body refresh tokens in local development only.
+            self.allow_refresh_token_in_body = bool(self.is_dev)
+        if os.getenv("ALTHEA_EXPOSE_REFRESH_TOKEN_IN_RESPONSE") is None:
+            # Safer default: do not return refresh token to JS in non-dev.
+            self.expose_refresh_token_in_response = bool(self.is_dev)
+        if os.getenv("ALTHEA_REFRESH_COOKIE_SECURE") is None:
+            self.refresh_cookie_secure = bool(self.is_non_dev)
 
         queue_mode = (self.queue_mode or "").lower().strip()
         if queue_mode == "inline":
@@ -270,6 +335,24 @@ class Settings:
             if not (db_url.startswith("postgresql") or db_url.startswith("postgres")):
                 raise RuntimeError("ALTHEA_DATABASE_URL must point to PostgreSQL in non-development environments.")
 
+        if self.is_non_dev:
+            if not self.allowed_origins:
+                raise RuntimeError("ALTHEA_ALLOWED_ORIGINS must define at least one trusted origin in non-development environments.")
+            for origin in self.allowed_origins:
+                normalized = str(origin or "").strip().lower()
+                if not normalized:
+                    continue
+                if normalized == "*" or "localhost" in normalized or normalized.startswith("http://"):
+                    raise RuntimeError(
+                        "ALTHEA_ALLOWED_ORIGINS must not contain wildcard, localhost, or insecure HTTP origins in non-development environments."
+                    )
+            if any(str(host or "").strip() in {"*", "0.0.0.0"} for host in self.allowed_hosts):
+                raise RuntimeError("ALTHEA_ALLOWED_HOSTS must not contain wildcard hosts in non-development environments.")
+            if self.cors_allow_origin_regex and "vercel" in str(self.cors_allow_origin_regex).lower():
+                raise RuntimeError(
+                    "ALTHEA_CORS_ALLOW_ORIGIN_REGEX must not use broad shared-host patterns in non-development environments."
+                )
+
         default_secret = "change-me-in-production"
         if not self.jwt_secret or self.jwt_secret.strip() == default_secret:
             raise RuntimeError("ALTHEA_JWT_SECRET must be securely set")
@@ -279,6 +362,15 @@ class Settings:
         weak_secret_tokens = {"replace-with-strong-secret", "your-secret-key", "your-32-character-secret-key-here-min32chars"}
         if self.is_non_dev and any(token in (self.jwt_secret or "").lower() for token in weak_secret_tokens):
             raise RuntimeError("ALTHEA_JWT_SECRET uses an insecure placeholder value in non-development environment.")
+
+        if self.enable_public_tenant_bootstrap and self.is_non_dev:
+            bootstrap_secret = (self.bootstrap_provisioning_secret or "").strip()
+            if not bootstrap_secret:
+                raise RuntimeError(
+                    "ALTHEA_BOOTSTRAP_PROVISIONING_SECRET must be set when ALTHEA_ENABLE_PUBLIC_TENANT_BOOTSTRAP is enabled."
+                )
+        if not self.tenant_header or not str(self.tenant_header).strip():
+            raise RuntimeError("ALTHEA_TENANT_HEADER must be configured.")
 
         insecure_artifacts = _existing_insecure_artifacts(self.project_root, self.backend_root)
         if insecure_artifacts and self.is_non_dev:
@@ -318,6 +410,12 @@ def get_settings() -> Settings:
             "primary_ingestion_mode": settings.primary_ingestion_mode,
             "alert_jsonl_path": "enabled" if settings.enable_alert_jsonl_ingestion else "disabled",
             "legacy_ingestion_mode": "emergency_override_only",
+            "public_tenant_bootstrap": settings.enable_public_tenant_bootstrap,
+            "refresh_cookie_secure": settings.refresh_cookie_secure,
+            "refresh_cookie_samesite": settings.refresh_cookie_samesite,
+            "allow_refresh_token_in_body": settings.allow_refresh_token_in_body,
+            "cors_allow_origin_regex": bool(settings.cors_allow_origin_regex),
+            "trusted_proxy_headers": settings.trusted_proxy_headers,
         },
     )
     settings.data_dir.mkdir(parents=True, exist_ok=True)

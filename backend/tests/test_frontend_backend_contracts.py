@@ -424,7 +424,10 @@ def client():
     app.state.narrative_service = _FakeNarrativeService()
     app.state.global_pattern_service = SimpleNamespace(get_signals_for_alert=lambda **_: [{"signal_type": "cross_tenant"}])
     app.state.event_bus = SimpleNamespace(publish=lambda **_: None)
-    app.state.metrics = SimpleNamespace(set_gauge=lambda *args, **kwargs: None)
+    app.state.metrics = SimpleNamespace(
+        set_gauge=lambda *args, **kwargs: None,
+        prometheus=lambda: "# test_metrics 1\n",
+    )
     app.state.ops_service = SimpleNamespace(compute_ops_metrics=lambda *_: {"precision_k": 0.0, "alerts_per_case": 0.0, "suppression_rate": 0.0})
     app.state.explain_service = SimpleNamespace(explain_alert=lambda **_: {"model_version": "model-v1"})
     app.state.ai_copilot_service = SimpleNamespace(generate_copilot_summary=lambda **_: {"summary": "copilot"})
@@ -448,6 +451,8 @@ def client():
             "view_all_alerts",
             "view_team_queue",
             "approve_escalations",
+            "manager_approval",
+            "view_system_logs",
         ],
         "tenant_id": "tenant-a",
     }
@@ -461,9 +466,15 @@ def test_health_endpoint_contract_shape(client: TestClient):
     res = client.get("/health")
     assert res.status_code == 200
     payload = res.json()
-    assert payload["status"] in {"healthy", "degraded"}
-    assert "worker_heartbeat" in payload["checks"]
-    assert "feature_store" in payload["checks"]
+    assert payload["status"] == "alive"
+    assert payload["ok"] is True
+
+    internal = client.get("/internal/health")
+    assert internal.status_code == 200
+    internal_payload = internal.json()
+    assert internal_payload["status"] in {"healthy", "degraded"}
+    assert "worker_heartbeat" in internal_payload["checks"]
+    assert "feature_store" in internal_payload["checks"]
 
 
 def test_alert_jsonl_upload_returns_structured_503_when_disabled(client: TestClient):
@@ -586,6 +597,32 @@ def test_upload_returns_413_when_file_exceeds_size_limit(client: TestClient):
     assert res.status_code == 413
     detail = res.json()["detail"]
     assert detail["error"] == "upload_too_large"
+
+
+def test_alert_jsonl_upload_rejects_non_jsonl_extension(client: TestClient, tmp_path: Path):
+    client.app.state.settings.enable_alert_jsonl_ingestion = True
+    client.app.state.settings.data_dir = tmp_path
+    res = client.post(
+        "/api/data/upload-alert-jsonl",
+        files={"file": ("alerts.csv", b'{"alert_id":"A1"}\n', "application/json")},
+    )
+    assert res.status_code == 400
+    assert "jsonl" in str(res.json().get("detail", "")).lower()
+
+
+def test_metrics_endpoint_requires_view_system_logs_permission(client: TestClient):
+    ok = client.get("/metrics")
+    assert ok.status_code == 200
+
+    client.app.dependency_overrides[get_current_user] = lambda: {
+        "user_id": "u1",
+        "id": "u1",
+        "role": "manager",
+        "permissions": ["view_all_alerts"],
+        "tenant_id": "tenant-a",
+    }
+    forbidden = client.get("/metrics")
+    assert forbidden.status_code == 403
 
 
 def test_primary_mode_runtime_switch_allows_fast_rollback(client: TestClient):

@@ -4,6 +4,7 @@ import logging
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 
 from api.routers.alerts_router import router as alerts_router
@@ -27,15 +28,38 @@ def create_app() -> FastAPI:
 
     setup_telemetry(app, app.state.settings)
 
+    allowed_hosts = list(getattr(app.state.settings, "allowed_hosts", []) or [])
+    if allowed_hosts:
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
+
+    cors_kwargs = {
+        "allow_origins": app.state.settings.allowed_origins,
+        "allow_credentials": bool(getattr(app.state.settings, "cors_allow_credentials", True)),
+        "allow_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        "allow_headers": ["Authorization", "Content-Type", "X-Request-ID", "X-Tenant-ID"],
+    }
+    origin_regex = str(getattr(app.state.settings, "cors_allow_origin_regex", "") or "").strip()
+    if origin_regex:
+        cors_kwargs["allow_origin_regex"] = origin_regex
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=app.state.settings.allowed_origins,
-        allow_origin_regex=r"https://.*\.vercel\.app",
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        **cors_kwargs,
     )
     app.middleware("http")(correlation_middleware)
+
+    @app.middleware("http")
+    async def security_headers_middleware(request, call_next):
+        response = await call_next(request)
+        settings = request.app.state.settings
+        if bool(getattr(settings, "security_headers_enabled", True)):
+            response.headers.setdefault("X-Content-Type-Options", "nosniff")
+            response.headers.setdefault("X-Frame-Options", "DENY")
+            response.headers.setdefault("Referrer-Policy", "no-referrer")
+            response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+            response.headers.setdefault("Cache-Control", "no-store")
+            if getattr(settings, "is_non_dev", False):
+                response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        return response
 
     @app.middleware("http")
     async def tenant_context_middleware(request, call_next):
@@ -46,7 +70,7 @@ def create_app() -> FastAPI:
         # Do not let stale access tokens override tenant routing on auth bootstrap endpoints.
         # Frontend login/register flows may still carry old Authorization headers.
         request_path = str(request.url.path or "").lower().rstrip("/")
-        auth_bootstrap_paths = {"/api/auth/login", "/api/auth/register", "/api/auth/refresh"}
+        auth_bootstrap_paths = {"/api/auth/login", "/api/auth/register", "/api/auth/refresh", "/api/auth/logout", "/api/auth/logout-all"}
         if request_path not in auth_bootstrap_paths:
             auth_header = request.headers.get("Authorization", "")
             if auth_header.lower().startswith("bearer "):

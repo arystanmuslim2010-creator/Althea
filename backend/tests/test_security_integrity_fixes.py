@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import inspect
 import re
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,7 +22,9 @@ from api.routers.intelligence_router import router as intelligence_router
 from core.dependencies import build_app_state
 from core.config import Settings
 from core.security import build_access_token
+from core.security import build_refresh_token
 from core.security import get_authenticated_tenant_id
+from core.security import hash_password
 from learning.feedback_collection_service import FeedbackCollectionService
 from models.feature_schema import FeatureSchemaValidator
 from models.inference_service import InferenceService
@@ -259,7 +263,8 @@ def test_phase1_alert_payloads_remain_compatible_when_new_fields_missing(tmp_pat
 
 
 def test_login_rate_limiting_enforces_5_attempts_per_minute() -> None:
-    _LOGIN_RATE_LIMITER.clear("tenant-rate:testclient")
+    _LOGIN_RATE_LIMITER.clear("tenant-rate:testclient:ip")
+    _LOGIN_RATE_LIMITER.clear("tenant-rate:a@example.com:testclient")
     app = FastAPI()
     app.include_router(auth_router)
     app.state.settings = SimpleNamespace(
@@ -278,6 +283,132 @@ def test_login_rate_limiting_enforces_5_attempts_per_minute() -> None:
         assert response.status_code == 401
     blocked = client.post("/api/auth/login", json={"email": "a@example.com", "password": "invalid"})
     assert blocked.status_code == 429
+
+
+def test_login_rejects_disabled_user() -> None:
+    app = FastAPI()
+    app.include_router(auth_router)
+    app.state.settings = SimpleNamespace(
+        default_tenant_id="tenant-disabled",
+        tenant_header="X-Tenant-ID",
+        refresh_token_minutes=60,
+        access_token_minutes=15,
+        jwt_secret="x" * 48,
+        jwt_algorithm="HS256",
+        trusted_proxy_headers=False,
+        expose_refresh_token_in_response=True,
+        refresh_cookie_name="althea_rt",
+        refresh_cookie_path="/api/auth",
+        refresh_cookie_domain=None,
+        refresh_cookie_secure=False,
+        refresh_cookie_samesite="strict",
+    )
+    disabled_user = {
+        "id": "u-disabled",
+        "email": "disabled@example.com",
+        "password_hash": hash_password("Password123!"),
+        "role": "analyst",
+        "team": "default",
+        "is_active": False,
+    }
+    app.state.repository = SimpleNamespace(
+        get_user_by_email=lambda tenant_id, email: dict(disabled_user),
+        append_auth_audit_log=lambda payload: payload,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/auth/login", json={"email": "disabled@example.com", "password": "Password123!"})
+    assert response.status_code == 403
+    assert "disabled" in str(response.json().get("detail", "")).lower()
+
+
+def test_refresh_rejects_disabled_user_and_revokes_session() -> None:
+    app = FastAPI()
+    app.include_router(auth_router)
+    settings = SimpleNamespace(
+        default_tenant_id="tenant-a",
+        tenant_header="X-Tenant-ID",
+        refresh_token_minutes=60,
+        access_token_minutes=15,
+        jwt_secret="x" * 48,
+        jwt_algorithm="HS256",
+        trusted_proxy_headers=False,
+        allow_refresh_token_in_body=True,
+        expose_refresh_token_in_response=True,
+        refresh_cookie_name="althea_rt",
+        refresh_cookie_path="/api/auth",
+        refresh_cookie_domain=None,
+        refresh_cookie_secure=False,
+        refresh_cookie_samesite="strict",
+    )
+    app.state.settings = settings
+    user = {"id": "u1", "role": "analyst", "team": "default"}
+    refresh_token = build_refresh_token(Settings(jwt_secret="x" * 48, app_env="development"), "tenant-a", user, "sid-1")
+    revoked = {"called": False}
+    app.state.repository = SimpleNamespace(
+        get_session=lambda tenant_id, session_id: {
+            "session_id": "sid-1",
+            "tenant_id": "tenant-a",
+            "user_id": "u1",
+            "refresh_token_hash": hashlib.sha256(refresh_token.encode("utf-8")).hexdigest(),
+            "expires_at": datetime.now(timezone.utc) + timedelta(minutes=30),
+            "revoked": False,
+        },
+        get_user_by_id=lambda tenant_id, user_id: {
+            "id": "u1",
+            "email": "u1@example.com",
+            "role": "analyst",
+            "team": "default",
+            "is_active": False,
+        },
+        revoke_session=lambda tenant_id, session_id: revoked.__setitem__("called", True),
+        append_auth_audit_log=lambda payload: payload,
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/auth/refresh", json={"refresh_token": refresh_token})
+    assert response.status_code == 403
+    assert revoked["called"] is True
+
+
+def test_tenant_bootstrap_registration_requires_provisioning_token() -> None:
+    app = FastAPI()
+    app.include_router(auth_router)
+    app.state.settings = SimpleNamespace(
+        default_tenant_id="tenant-a",
+        tenant_header="X-Tenant-ID",
+        refresh_token_minutes=60,
+        access_token_minutes=15,
+        jwt_secret="x" * 48,
+        jwt_algorithm="HS256",
+        trusted_proxy_headers=False,
+        expose_refresh_token_in_response=True,
+        refresh_cookie_name="althea_rt",
+        refresh_cookie_path="/api/auth",
+        refresh_cookie_domain=None,
+        refresh_cookie_secure=False,
+        refresh_cookie_samesite="strict",
+        enable_public_tenant_bootstrap=True,
+        bootstrap_provisioning_secret="super-secret-bootstrap-token",
+        sso_provisioning_secret="sso-secret",
+    )
+    app.state.repository = SimpleNamespace(
+        count_users=lambda tenant_id: 0,
+        get_user_by_email=lambda tenant_id, email: None,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/auth/register",
+        json={
+            "email": "bootstrap@bank.com",
+            "password": "Password123!",
+            "team": "ops",
+            "provision_mode": "TENANT_BOOTSTRAP_USER",
+        },
+    )
+    assert response.status_code == 403
+    assert "bootstrap" in str(response.json().get("detail", "")).lower()
 
 
 class _NoModelRegistry:

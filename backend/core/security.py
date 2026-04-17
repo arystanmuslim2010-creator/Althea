@@ -194,6 +194,18 @@ def decode_token(settings: Settings, token: str) -> dict[str, Any]:
     return _decode_token(token, settings.jwt_secret, settings.jwt_algorithm)
 
 
+def _coerce_utc(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
 def require_role(*roles: str):
     def _dep(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
         normalized = {normalize_role(role) for role in roles}
@@ -249,16 +261,26 @@ def get_current_user(
     settings: Settings = request.app.state.settings
     repository: EnterpriseRepository = request.app.state.repository
     payload = decode_token(settings, credentials.credentials)
-    tenant_id = payload.get("tenant_id") or settings.default_tenant_id
+    if payload.get("type") != "access":
+        raise HTTPException(status_code=401, detail="Invalid access token")
+    tenant_id = str(payload.get("tenant_id") or "").strip()
+    if not tenant_id:
+        raise HTTPException(status_code=401, detail="Missing tenant in token")
     requested_tenant = request.headers.get(settings.tenant_header)
     if requested_tenant and requested_tenant != tenant_id:
         raise HTTPException(status_code=403, detail="Tenant mismatch between token and request header")
-    if payload.get("type") != "access":
-        raise HTTPException(status_code=401, detail="Invalid access token")
     session_id = payload.get("sid")
+    if not str(session_id or "").strip():
+        raise HTTPException(status_code=401, detail="Missing session in token")
     session = repository.get_session(tenant_id, session_id)
     if not session or session.get("revoked"):
         raise HTTPException(status_code=401, detail="Session revoked")
+    if str(session.get("user_id") or "") != str(payload.get("sub") or ""):
+        raise HTTPException(status_code=401, detail="Session/token user mismatch")
+    expires_at = _coerce_utc(session.get("expires_at"))
+    if expires_at and expires_at <= datetime.now(timezone.utc):
+        repository.revoke_session(tenant_id, session_id)
+        raise HTTPException(status_code=401, detail="Session expired")
     user = repository.get_user_by_id(tenant_id, payload.get("sub", ""))
     if not user:
         raise HTTPException(status_code=401, detail="User not found")

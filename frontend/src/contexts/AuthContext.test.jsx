@@ -5,7 +5,6 @@ import { AuthProvider, useAuth } from './AuthContext'
 vi.mock('../services/api', () => {
   const mockApi = {
     getAccessToken: vi.fn(() => null),
-    getRefreshToken: vi.fn(() => null),
     clearTokens: vi.fn(),
     setTokens: vi.fn(),
     refresh: vi.fn(),
@@ -29,7 +28,6 @@ describe('AuthContext', () => {
   beforeEach(async () => {
     const mod = await import('../services/api')
     mod.api.getAccessToken.mockReset()
-    mod.api.getRefreshToken.mockReset()
     mod.api.clearTokens.mockReset()
     mod.api.setTokens.mockReset()
     mod.api.refresh.mockReset()
@@ -40,7 +38,6 @@ describe('AuthContext', () => {
   it('hydrates user from /auth/me when token exists', async () => {
     const mod = await import('../services/api')
     mod.api.getAccessToken.mockReturnValue('token')
-    mod.api.getRefreshToken.mockReturnValue('refresh')
     mod.api.me.mockResolvedValue({ email: 'analyst@bank.com', user_id: 'u1', role: 'analyst' })
 
     render(
