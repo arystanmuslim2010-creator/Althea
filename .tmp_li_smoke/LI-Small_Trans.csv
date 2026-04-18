@@ -1,0 +1,2 @@
+Timestamp,From Bank,Account,To Bank,Account,Amount Received,Receiving Currency,Amount Paid,Payment Currency,Payment Format,Is Laundering
+2022/09/01 00:00,010,SRC1,011,DST1,100.00,US Dollar,100.00,US Dollar,ACH,0

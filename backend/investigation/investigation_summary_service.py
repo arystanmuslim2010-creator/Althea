@@ -61,18 +61,18 @@ class InvestigationSummaryService:
         risk_score = float(payload.get("risk_score", 0.0) or 0.0)
         risk_band = str(payload.get("risk_band") or "").upper()
         if risk_score >= 90:
-            observations.append(f"Critical risk score of {risk_score:.1f} — immediate escalation recommended")
+            observations.append(f"Critical risk score of {risk_score:.1f} — prompt escalation review recommended")
         elif risk_score >= 75:
             observations.append(f"High risk score of {risk_score:.1f} ({risk_band}) — priority investigation required")
 
         # Typology observation
         typology = str(payload.get("typology") or "").lower()
         typology_messages = {
-            "sanctions": "Transaction involves sanctioned entity indicators",
-            "structuring": "Transaction pattern consistent with structuring activity",
-            "high_amount_outlier": "Transaction amount significantly exceeds customer baseline",
-            "cross_border": "Cross-border activity flagged for unusual geographic flow",
-            "flow_through": "Flow-through pattern detected — potential layering activity",
+            "sanctions": "Signals may indicate sanctions-related exposure requiring validation",
+            "structuring": "Transaction pattern may be consistent with structuring activity",
+            "high_amount_outlier": "Transaction amount appears materially above the customer baseline",
+            "cross_border": "Cross-border activity has been flagged for unusual geographic flow",
+            "flow_through": "Flow-through pattern detected — potential layering activity requires review",
         }
         if typology in typology_messages:
             observations.append(typology_messages[typology])

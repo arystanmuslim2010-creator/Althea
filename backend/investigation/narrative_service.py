@@ -21,6 +21,16 @@ class InvestigationNarrativeService:
         return [text] if text else []
 
     @staticmethod
+    def _clean_entity(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        lowered = text.lower()
+        if lowered in {"unknown", "unknown customer", "unknown account", "unknown counterparty", "n/a", "none", "null"}:
+            return ""
+        return text
+
+    @staticmethod
     def _fallback(alert_id: str) -> dict[str, Any]:
         now = datetime.now(timezone.utc).isoformat()
         narrative = (
@@ -82,34 +92,42 @@ class InvestigationNarrativeService:
         rules = self._to_list(payload.get("rules_json"))
         typology = str(payload.get("typology") or "unknown").strip()
         risk_score = payload.get("risk_score")
-        customer = str(payload.get("customer_id") or payload.get("user_id") or "unknown customer").strip()
-        source_account = str(payload.get("account_id") or "unknown account").strip()
-        counterparty = str(
+        customer = self._clean_entity(payload.get("customer_id") or payload.get("user_id"))
+        source_account = self._clean_entity(payload.get("account_id"))
+        counterparty = self._clean_entity(
             payload.get("counterparty_account")
             or payload.get("counterparty_id")
             or payload.get("beneficiary_account")
             or payload.get("beneficiary_id")
-            or "unknown counterparty"
-        ).strip()
+        )
         amount = payload.get("amount")
 
         ai_summary = self._repository.get_ai_summary(tenant_id=tenant_id, entity_type="alert", entity_id=str(alert_id))
         ai_hint = str((ai_summary or {}).get("summary") or "").strip()
 
-        activity_summary = (
-            f"Alert {alert_id} involves customer {customer} using source account {source_account} "
-            f"with counterparty {counterparty}."
-        )
+        entity_parts: list[str] = [f"Alert {alert_id}"]
+        if customer:
+            entity_parts.append(f"involves customer {customer}")
+        if source_account:
+            entity_parts.append(f"linked to source account {source_account}")
+        if counterparty:
+            entity_parts.append(f"with activity involving counterparty {counterparty}")
+
+        activity_summary = " ".join(entity_parts).strip()
+        if activity_summary:
+            activity_summary += "."
+        else:
+            activity_summary = f"Alert {alert_id} has limited entity context available at draft time."
         if amount is not None:
             activity_summary += f" Observed transaction amount: {amount}."
         if typology and typology != "unknown":
-            activity_summary += f" Detected typology: {typology}."
+            activity_summary += f" Potential typology alignment: {typology}."
 
         risk_indicators: list[str] = []
         if risk_score is not None:
             risk_indicators.append(f"Risk score at alert time: {risk_score}.")
         for code in reason_codes[:5]:
-            risk_indicators.append(f"Reason code: {code}.")
+            risk_indicators.append(f"Potential signal: {code}.")
         for country in countries[:3]:
             risk_indicators.append(f"Country exposure: {country}.")
         if rules:
@@ -127,13 +145,13 @@ class InvestigationNarrativeService:
             follow_up.append("Trace each risk reason code to supporting evidence in transaction and rule data.")
 
         narrative_lines = [
-            "Draft narrative for analyst review.",
+            "Preliminary narrative for analyst review.",
             activity_summary,
-            f"Key risk indicators include {', '.join(reason_codes[:3]) if reason_codes else 'available transaction and rule signals'}.",
-            "This draft must be validated and edited by the assigned investigator before case submission.",
+            f"Potential risk indicators include {', '.join(reason_codes[:3]) if reason_codes else 'available transaction and rule signals'}.",
+            "This draft may support escalation assessment but does not determine suspicious activity or any regulatory filing. Investigator validation and compliance approval remain required before case submission or filing decisions.",
         ]
         if ai_hint:
-            narrative_lines.append(f"Supporting AI summary context: {ai_hint}")
+            narrative_lines.append(f"Additional system context: {ai_hint}")
 
         return {
             "alert_id": str(alert_id),

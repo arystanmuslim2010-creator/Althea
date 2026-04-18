@@ -105,10 +105,9 @@ class SARNarrativeGenerator:
             f"classified as {governance_status.upper()} under the {typology} typology "
             f"for the {segment} customer segment. "
             f"The subject account conducted transaction activity{amount_clause}{country_clause} "
-            f"that was inconsistent with the customer's established behavioral profile. "
+            f"that may be inconsistent with the customer's expected behavioral profile based on currently available monitoring data. "
             f"Risk indicators identified include: {drivers_text}. "
-            f"Based on the foregoing, the reporting institution has determined that the "
-            f"described activity warrants filing of a Suspicious Activity Report."
+            "Based on the currently available information, the activity may warrant escalation review and preparation of a Suspicious Activity Report draft, subject to analyst validation and compliance approval."
         )
         return narrative
 
@@ -153,8 +152,7 @@ class SARNarrativeGenerator:
             "risk_indicators": risk_drivers,
             "narrative": narrative,
             "disclaimer": (
-                "This is a system-generated draft. It must be reviewed, verified, "
-                "and approved by a qualified compliance officer before filing."
+                "This is a preliminary system-generated draft for analyst support only. It does not determine that suspicious activity occurred and must be reviewed, verified, and approved by qualified compliance personnel before any filing decision."
             ),
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }

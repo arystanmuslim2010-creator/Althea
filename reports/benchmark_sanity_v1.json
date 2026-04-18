@@ -1,0 +1,1575 @@
+{
+  "summary_path": "C:\\Users\\Users\\OneDrive\\\u0420\u0430\u0431\u043e\u0447\u0438\u0439 \u0441\u0442\u043e\u043b\\Althea\\reports\\benchmark_sanity_v1.json",
+  "report_path": "C:\\Users\\Users\\OneDrive\\\u0420\u0430\u0431\u043e\u0447\u0438\u0439 \u0441\u0442\u043e\u043b\\Althea\\reports\\benchmark_sanity_v1.md",
+  "protocol_path": "C:\\Users\\Users\\OneDrive\\\u0420\u0430\u0431\u043e\u0447\u0438\u0439 \u0441\u0442\u043e\u043b\\Althea\\docs\\benchmarks\\ibm_aml_benchmark_protocol.md",
+  "dataset": {
+    "name": "IBM AML-Data HI-Small synthetic alert benchmark",
+    "primary_grouping": "source_account_24h",
+    "stats": {
+      "total_alerts": 1307771,
+      "positive_alerts": 3878,
+      "negative_alerts": 1303893,
+      "positive_rate": 0.002965350967409432,
+      "average_transactions_per_alert": 3.8832066164489043,
+      "typed_alert_rate": 0.0018030679683216709
+    }
+  },
+  "primary_candidate": {
+    "name": "logistic_regression_raw_signals",
+    "notes": "Primary sanity-check candidate: raw alert signals with chronology-safe history, excluding label-derived rate encodings.",
+    "test_metrics": {
+      "n_alerts": 261555,
+      "n_positive_alerts": 1305,
+      "recall_at_top_10pct": 0.8467432950191571,
+      "precision_at_top_10pct": 0.04224652087475149,
+      "recall_at_top_20pct": 0.9632183908045977,
+      "precision_at_top_20pct": 0.024029362849113955,
+      "pr_auc": 0.19671118963819667,
+      "review_reduction_at_80pct_recall": {
+        "target_recall": 0.8,
+        "alerts_reviewed": 20134,
+        "review_fraction": 0.07697807344535566,
+        "review_reduction": 0.9230219265546443
+      }
+    },
+    "validation_metrics": {
+      "n_alerts": 261554,
+      "n_positive_alerts": 1192,
+      "recall_at_top_10pct": 0.7550335570469798,
+      "precision_at_top_10pct": 0.03440893102920936,
+      "recall_at_top_20pct": 0.9488255033557047,
+      "precision_at_top_20pct": 0.02162069163273499,
+      "pr_auc": 0.19112679713710287,
+      "review_reduction_at_80pct_recall": {
+        "target_recall": 0.8,
+        "alerts_reviewed": 29958,
+        "review_fraction": 0.11453848918387789,
+        "review_reduction": 0.8854615108161221
+      }
+    },
+    "feature_count": 70
+  },
+  "feature_preparation_diagnostics": {
+    "label_rate_encodings": {
+      "source_bank": {
+        "distinct_keys_train": 30470,
+        "global_positive_rate": 0.0017599934748974719
+      },
+      "dominant_destination_bank": {
+        "distinct_keys_train": 15806,
+        "global_positive_rate": 0.0017599934748974719
+      },
+      "dominant_currency": {
+        "distinct_keys_train": 15,
+        "global_positive_rate": 0.0017599934748974719
+      },
+      "dominant_payment_format": {
+        "distinct_keys_train": 7,
+        "global_positive_rate": 0.0017599934748974719
+      }
+    },
+    "pattern_rate_encodings": {
+      "source_bank": {
+        "distinct_keys_train": 30470,
+        "global_pattern_rate": 0.000846224234128835
+      },
+      "dominant_destination_bank": {
+        "distinct_keys_train": 15806,
+        "global_pattern_rate": 0.000846224234128835
+      },
+      "dominant_currency": {
+        "distinct_keys_train": 15,
+        "global_pattern_rate": 0.000846224234128835
+      },
+      "dominant_payment_format": {
+        "distinct_keys_train": 7,
+        "global_pattern_rate": 0.000846224234128835
+      }
+    },
+    "frequency_encodings": {
+      "source_bank": {
+        "distinct_keys_train": 30470,
+        "default_frequency": 1.2744340875434264e-06
+      },
+      "dominant_destination_bank": {
+        "distinct_keys_train": 15806,
+        "default_frequency": 1.2744340875434264e-06
+      },
+      "dominant_currency": {
+        "distinct_keys_train": 15,
+        "default_frequency": 1.2744340875434264e-06
+      },
+      "dominant_payment_format": {
+        "distinct_keys_train": 7,
+        "default_frequency": 1.2744340875434264e-06
+      }
+    },
+    "source_account_seen_train_rate": 1.0
+  },
+  "ablations": [
+    {
+      "name": "full_feature_champion",
+      "recall_at_top_10pct": 0.8467432950191571,
+      "recall_at_top_20pct": 0.9632183908045977,
+      "precision_at_top_10pct": 0.04224652087475149,
+      "precision_at_top_20pct": 0.024029362849113955,
+      "pr_auc": 0.19671118963819667,
+      "review_reduction_at_80pct_recall": 0.9230219265546443,
+      "note": "Unablated primary logistic candidate."
+    },
+    {
+      "name": "ablation_amount_related",
+      "recall_at_top_10pct": 0.8421455938697318,
+      "recall_at_top_20pct": 0.960919540229885,
+      "precision_at_top_10pct": 0.04201712800122343,
+      "precision_at_top_20pct": 0.023972013534438265,
+      "pr_auc": 0.19664081013060755,
+      "review_reduction_at_80pct_recall": 0.9224599032708226,
+      "delta_recall_at_top_10pct": -0.0045977011494253706,
+      "delta_recall_at_top_20pct": -0.0022988505747126853,
+      "delta_precision_at_top_10pct": -0.00022939287352805732,
+      "note": "Removed 10 columns: total_amount, max_amount, mean_amount, min_amount, median_amount, std_amount, amount_range, amount_per_transaction ..."
+    },
+    {
+      "name": "ablation_normalized_amount",
+      "recall_at_top_10pct": 0.8268199233716476,
+      "recall_at_top_20pct": 0.9524904214559387,
+      "precision_at_top_10pct": 0.04125248508946322,
+      "precision_at_top_20pct": 0.023761732713960735,
+      "pr_auc": 0.18368331735519688,
+      "review_reduction_at_80pct_recall": 0.9133031293609375,
+      "delta_recall_at_top_10pct": -0.01992337164750957,
+      "delta_recall_at_top_20pct": -0.01072796934865905,
+      "delta_precision_at_top_10pct": -0.0009940357852882692,
+      "note": "Removed 12 columns: total_amount_usd, max_amount_usd, mean_amount_usd, min_amount_usd, median_amount_usd, std_amount_usd, amount_range_usd, amount_per_transaction_usd ..."
+    },
+    {
+      "name": "ablation_history_chronology",
+      "recall_at_top_10pct": 0.8651340996168583,
+      "recall_at_top_20pct": 0.9555555555555556,
+      "precision_at_top_10pct": 0.04316409236886374,
+      "precision_at_top_20pct": 0.023838198466861655,
+      "pr_auc": 0.27181325760013564,
+      "review_reduction_at_80pct_recall": 0.9353482059222725,
+      "delta_recall_at_top_10pct": 0.01839080459770115,
+      "delta_recall_at_top_20pct": -0.007662835249042099,
+      "delta_precision_at_top_10pct": 0.0009175714941122501,
+      "note": "Removed 11 columns: source_account_hours_since_prev_alert, source_account_prior_alert_count, source_account_prior_total_amount_usd, source_account_prior_avg_amount_usd, source_account_seen_train, source_account_frequency_train, source_bank_hours_since_prev_alert, source_bank_prior_alert_count ..."
+    },
+    {
+      "name": "ablation_counterparty_breadth",
+      "recall_at_top_10pct": 0.7961685823754789,
+      "recall_at_top_20pct": 0.946360153256705,
+      "precision_at_top_10pct": 0.0397231992659428,
+      "precision_at_top_20pct": 0.023608801208158895,
+      "pr_auc": 0.16692095959206882,
+      "review_reduction_at_80pct_recall": 0.898377014394678,
+      "delta_recall_at_top_10pct": -0.05057471264367819,
+      "delta_recall_at_top_20pct": -0.01685823754789273,
+      "delta_precision_at_top_10pct": -0.002523321608808686,
+      "note": "Removed 9 columns: unique_destination_accounts, unique_destination_banks, log_unique_destination_accounts, counterparty_density, repeated_counterparty_ratio, top_counterparty_tx_share, top_counterparty_amount_share, same_bank_ratio ..."
+    },
+    {
+      "name": "ablation_pattern_derived",
+      "skipped": true,
+      "reason": "group_not_present_in_primary_feature_set"
+    },
+    {
+      "name": "ablation_time_cadence",
+      "recall_at_top_10pct": 0.8452107279693487,
+      "recall_at_top_20pct": 0.9448275862068966,
+      "precision_at_top_10pct": 0.04217005658357547,
+      "precision_at_top_20pct": 0.023570568331708435,
+      "pr_auc": 0.34386440181530836,
+      "review_reduction_at_80pct_recall": 0.9223681443673415,
+      "delta_recall_at_top_10pct": -0.0015325670498084198,
+      "delta_recall_at_top_20pct": -0.01839080459770115,
+      "delta_precision_at_top_10pct": -7.64642911760191e-05,
+      "note": "Removed 12 columns: time_span_hours, avg_gap_hours, max_gap_hours, tx_per_hour, created_hour, created_day_of_week, hour_sin, hour_cos ..."
+    },
+    {
+      "name": "ablation_payment_currency_mix",
+      "recall_at_top_10pct": 0.6904214559386973,
+      "recall_at_top_20pct": 0.8061302681992337,
+      "precision_at_top_10pct": 0.03444716317479737,
+      "precision_at_top_20pct": 0.02011049301294183,
+      "pr_auc": 0.10373884609236796,
+      "review_reduction_at_80pct_recall": 0.8048441054462733,
+      "delta_recall_at_top_10pct": -0.15632183908045982,
+      "delta_recall_at_top_20pct": -0.15708812260536398,
+      "delta_precision_at_top_10pct": -0.007799357699954122,
+      "note": "Removed 10 columns: currency_count, has_mixed_currencies, payment_format_count, ach_ratio, wire_ratio, cash_ratio, cheque_ratio, credit_card_ratio ..."
+    }
+  ],
+  "leakage_audit": {
+    "findings": [
+      {
+        "type": "label_leakage_like",
+        "severity": "high",
+        "status": "present_in_non_primary_variant",
+        "finding": "Train-only positive-rate encodings are directly derived from labels and are not acceptable as the primary externally-cited benchmark feature set.",
+        "affected_columns": [
+          "dominant_currency_positive_rate_train",
+          "dominant_destination_bank_positive_rate_train",
+          "dominant_payment_format_positive_rate_train",
+          "source_bank_positive_rate_train"
+        ]
+      },
+      {
+        "type": "label_leakage_like",
+        "severity": "medium",
+        "status": "present_in_non_primary_variant",
+        "finding": "Train-only pattern-rate encodings are derived from pattern annotations that originate from the laundering-attempt file and should be treated as benchmark convenience rather than bank-realistic signal.",
+        "affected_columns": [
+          "dominant_currency_pattern_rate_train",
+          "dominant_destination_bank_pattern_rate_train",
+          "dominant_payment_format_pattern_rate_train",
+          "source_bank_pattern_rate_train"
+        ]
+      },
+      {
+        "type": "future_leakage",
+        "severity": "low",
+        "status": "not_observed_in_code_path",
+        "finding": "Chronology-safe history features are generated via `cumcount`, shifted cumulative totals, and previous timestamps on data sorted by alert `created_at`; this uses only prior rows in the ordered stream, not future alerts.",
+        "affected_columns": [
+          "source_account_prior_alert_count",
+          "source_account_prior_total_amount_usd",
+          "source_account_hours_since_prev_alert",
+          "source_bank_prior_alert_count",
+          "source_bank_prior_total_amount_usd",
+          "source_bank_hours_since_prev_alert"
+        ]
+      },
+      {
+        "type": "benchmark_convenience",
+        "severity": "high",
+        "status": "present_in_construction",
+        "finding": "Alert labels are defined as `1 if any transaction in the grouped window is laundering`. The same grouped window also determines amount, breadth, and cadence features, so the task is structurally easier than real alert adjudication and likely benefits from synthetic grouping convenience.",
+        "affected_columns": [
+          "transaction_count",
+          "unique_destination_accounts",
+          "unique_destination_banks",
+          "total_amount",
+          "total_amount_usd",
+          "time_span_hours"
+        ]
+      },
+      {
+        "type": "tie_order_artifact",
+        "severity": "low",
+        "status": "present_in_construction",
+        "finding": "Many alerts share identical timestamps. Prior-alert history among same-timestamp rows therefore depends on deterministic row ordering rather than true event latency. This is not future leakage, but it is a synthetic artifact.",
+        "affected_columns": [
+          "source_account_prior_alert_count",
+          "source_account_hours_since_prev_alert",
+          "source_bank_prior_alert_count",
+          "source_bank_hours_since_prev_alert"
+        ]
+      }
+    ],
+    "primary_candidate_direct_label_features": [],
+    "primary_candidate_pattern_linked_features": [],
+    "verdict": {
+      "direct_label_leakage_in_primary_candidate": false,
+      "proxy_label_coupling_present": true,
+      "future_leakage_detected_in_primary_candidate": false
+    }
+  },
+  "split_robustness": [
+    {
+      "name": "chronological_60_20_20",
+      "recall_at_top_10pct": 0.8467432950191571,
+      "recall_at_top_20pct": 0.9632183908045977,
+      "precision_at_top_10pct": 0.04224652087475149,
+      "precision_at_top_20pct": 0.024029362849113955,
+      "pr_auc": 0.19671118963819667,
+      "review_reduction_at_80pct_recall": 0.9230219265546443,
+      "note": "Current default split.",
+      "train_alerts": 784662,
+      "validation_alerts": 261554,
+      "test_alerts": 261555,
+      "test_positive_rate": 0.004989390376784997
+    },
+    {
+      "name": "chronological_50_25_25",
+      "recall_at_top_10pct": 0.6986734049273531,
+      "recall_at_top_20pct": 0.8547062539481997,
+      "precision_at_top_10pct": 0.033827802416271605,
+      "precision_at_top_20pct": 0.020691553625227486,
+      "pr_auc": 0.11437862880486374,
+      "review_reduction_at_80pct_recall": 0.8335520258883047,
+      "note": "Larger later holdout; stresses generalization to more future data.",
+      "train_alerts": 653885,
+      "validation_alerts": 326943,
+      "test_alerts": 326943,
+      "test_positive_rate": 0.004841822580694494
+    },
+    {
+      "name": "chronological_70_15_15",
+      "recall_at_top_10pct": 0.9046296296296297,
+      "recall_at_top_20pct": 0.9787037037037037,
+      "precision_at_top_10pct": 0.04980374165264821,
+      "precision_at_top_20pct": 0.026940918591017996,
+      "pr_auc": 0.2854417304367412,
+      "review_reduction_at_80pct_recall": 0.9384347950205438,
+      "note": "Longer training horizon, smaller holdout.",
+      "train_alerts": 915439,
+      "validation_alerts": 196166,
+      "test_alerts": 196166,
+      "test_positive_rate": 0.005505541225288786
+    },
+    {
+      "name": "chronological_60_10_30_later_only",
+      "recall_at_top_10pct": 0.7834394904458599,
+      "recall_at_top_20pct": 0.9368365180467091,
+      "precision_at_top_10pct": 0.03762043125860223,
+      "precision_at_top_20pct": 0.022493532312946846,
+      "pr_auc": 0.17903372052523922,
+      "review_reduction_at_80pct_recall": 0.8927107653721847,
+      "note": "Later-only stress split with final 30% held out for testing.",
+      "train_alerts": 784662,
+      "validation_alerts": 130777,
+      "test_alerts": 392332,
+      "test_positive_rate": 0.0048020554020574415
+    }
+  ],
+  "transfer_results": [
+    {
+      "name": "source_account_24h_to_source_account_6h",
+      "train_grouping": "source_account_24h",
+      "test_grouping": "source_account_6h",
+      "common_feature_count": 70,
+      "metrics": {
+        "n_alerts": 405635,
+        "n_positive_alerts": 1554,
+        "recall_at_top_10pct": 0.767052767052767,
+        "precision_at_top_10pct": 0.029385662163494725,
+        "recall_at_top_20pct": 0.9124839124839125,
+        "precision_at_top_20pct": 0.017478767857803196,
+        "pr_auc": 0.07903587082291183,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 45899,
+          "review_fraction": 0.11315345076238491,
+          "review_reduction": 0.8868465492376151
+        }
+      }
+    },
+    {
+      "name": "source_account_24h_to_source_destination_24h",
+      "train_grouping": "source_account_24h",
+      "test_grouping": "source_destination_24h",
+      "common_feature_count": 70,
+      "metrics": {
+        "n_alerts": 433569,
+        "n_positive_alerts": 1791,
+        "recall_at_top_10pct": 0.14963707426018985,
+        "precision_at_top_10pct": 0.0061812394769010775,
+        "recall_at_top_20pct": 0.5812395309882747,
+        "precision_at_top_20pct": 0.012004981894503771,
+        "pr_auc": 0.009867050850804205,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 114355,
+          "review_fraction": 0.2637527129476508,
+          "review_reduction": 0.7362472870523492
+        }
+      }
+    },
+    {
+      "name": "source_account_6h_to_source_account_24h",
+      "train_grouping": "source_account_6h",
+      "test_grouping": "source_account_24h",
+      "common_feature_count": 70,
+      "metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 1305,
+        "recall_at_top_10pct": 0.8099616858237548,
+        "precision_at_top_10pct": 0.04041137788652699,
+        "recall_at_top_20pct": 0.9555555555555556,
+        "precision_at_top_20pct": 0.023838198466861655,
+        "pr_auc": 0.14063490835223294,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 24486,
+          "review_fraction": 0.09361702127659574,
+          "review_reduction": 0.9063829787234042
+        }
+      }
+    },
+    {
+      "name": "source_destination_24h_to_source_account_24h",
+      "train_grouping": "source_destination_24h",
+      "test_grouping": "source_account_24h",
+      "common_feature_count": 70,
+      "metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 1305,
+        "recall_at_top_10pct": 0.5448275862068965,
+        "precision_at_top_10pct": 0.027183055513075392,
+        "recall_at_top_20pct": 0.8720306513409962,
+        "precision_at_top_20pct": 0.021754506700311597,
+        "pr_auc": 0.04494224690413783,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 42132,
+          "review_fraction": 0.16108275506107703,
+          "review_reduction": 0.838917244938923
+        }
+      }
+    }
+  ],
+  "li_generalization": {
+    "status": "unavailable",
+    "reason": "LI-Small files are not present in the local IBM dataset directory; cross-illicit-ratio transfer could not be run in this repo-only pass."
+  },
+  "randomization": {
+    "metrics": {
+      "n_alerts": 261555,
+      "n_positive_alerts": 1305,
+      "recall_at_top_10pct": 0.18697318007662836,
+      "precision_at_top_10pct": 0.009328643523474537,
+      "recall_at_top_20pct": 0.3049808429118774,
+      "precision_at_top_20pct": 0.0076083424136414906,
+      "pr_auc": 0.005891690731923574,
+      "review_reduction_at_80pct_recall": {
+        "target_recall": 0.8,
+        "alerts_reviewed": 224260,
+        "review_fraction": 0.8574104872780104,
+        "review_reduction": 0.1425895127219896
+      }
+    },
+    "note": "If this stays high, the pipeline is leaking. If it collapses near base-rate behavior, supervision path is behaving sensibly."
+  },
+  "baseline_results": [
+    {
+      "name": "chronological_queue",
+      "kind": "baseline",
+      "notes": "Chronological queue ordered by created_at ascending.",
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 1192,
+        "recall_at_top_10pct": 0.1098993288590604,
+        "precision_at_top_10pct": 0.0050084110720293624,
+        "recall_at_top_20pct": 0.18624161073825504,
+        "precision_at_top_20pct": 0.004243849286001032,
+        "pr_auc": 0.0047015765670009296,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 210274,
+          "review_fraction": 0.8039410599723192,
+          "review_reduction": 0.19605894002768076
+        }
+      },
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 1305,
+        "recall_at_top_10pct": 0.10268199233716475,
+        "precision_at_top_10pct": 0.005123107508793394,
+        "recall_at_top_20pct": 0.15172413793103448,
+        "precision_at_top_20pct": 0.0037850547685955153,
+        "pr_auc": 0.003686556977590507,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 261294,
+          "review_fraction": 0.999002121924643,
+          "review_reduction": 0.000997878075357006
+        }
+      }
+    },
+    {
+      "name": "amount_descending",
+      "kind": "baseline",
+      "notes": "Raw total amount descending.",
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 1192,
+        "recall_at_top_10pct": 0.16023489932885907,
+        "precision_at_top_10pct": 0.007302339807309986,
+        "recall_at_top_20pct": 0.2600671140939597,
+        "precision_at_top_20pct": 0.005926095849821261,
+        "pr_auc": 0.00855467228651444,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 156746,
+          "review_fraction": 0.5992873364582457,
+          "review_reduction": 0.4007126635417543
+        }
+      },
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 1305,
+        "recall_at_top_10pct": 0.20919540229885059,
+        "precision_at_top_10pct": 0.010437375745526839,
+        "recall_at_top_20pct": 0.3931034482758621,
+        "precision_at_top_20pct": 0.009806732809542926,
+        "pr_auc": 0.01076770173694955,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 107950,
+          "review_fraction": 0.412723901282713,
+          "review_reduction": 0.5872760987172869
+        }
+      }
+    },
+    {
+      "name": "amount_usd_descending",
+      "kind": "baseline",
+      "notes": "Static-FX normalized total amount descending.",
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 1192,
+        "recall_at_top_10pct": 0.1098993288590604,
+        "precision_at_top_10pct": 0.0050084110720293624,
+        "recall_at_top_20pct": 0.20302013422818793,
+        "precision_at_top_20pct": 0.00462617805050563,
+        "pr_auc": 0.01400422930114697,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 150766,
+          "review_fraction": 0.5764239889277166,
+          "review_reduction": 0.4235760110722834
+        }
+      },
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 1305,
+        "recall_at_top_10pct": 0.11187739463601533,
+        "precision_at_top_10pct": 0.005581893255849518,
+        "recall_at_top_20pct": 0.43908045977011495,
+        "precision_at_top_20pct": 0.010953719103056718,
+        "pr_auc": 0.013002550003117544,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 97300,
+          "review_fraction": 0.3720058878629734,
+          "review_reduction": 0.6279941121370266
+        }
+      }
+    },
+    {
+      "name": "transaction_count_descending",
+      "kind": "baseline",
+      "notes": "Transaction count descending.",
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 1192,
+        "recall_at_top_10pct": 0.12751677852348994,
+        "precision_at_top_10pct": 0.00581128612937758,
+        "recall_at_top_20pct": 0.17533557046979867,
+        "precision_at_top_20pct": 0.003995335589073044,
+        "pr_auc": 0.03616168027689155,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 232813,
+          "review_fraction": 0.8901144696697432,
+          "review_reduction": 0.10988553033025683
+        }
+      },
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 1305,
+        "recall_at_top_10pct": 0.09348659003831418,
+        "precision_at_top_10pct": 0.004664321761737269,
+        "recall_at_top_20pct": 0.1739463601532567,
+        "precision_at_top_20pct": 0.004339431477127182,
+        "pr_auc": 0.021681984151567277,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 249226,
+          "review_fraction": 0.9528626866242281,
+          "review_reduction": 0.04713731337577187
+        }
+      }
+    },
+    {
+      "name": "distinct_counterparties_descending",
+      "kind": "baseline",
+      "notes": "Distinct destination account count descending.",
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 1192,
+        "recall_at_top_10pct": 0.1912751677852349,
+        "precision_at_top_10pct": 0.00871692919406637,
+        "recall_at_top_20pct": 0.3162751677852349,
+        "precision_at_top_20pct": 0.007206897210911663,
+        "pr_auc": 0.03895038899127748,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 164806,
+          "review_fraction": 0.6301031526950458,
+          "review_reduction": 0.3698968473049542
+        }
+      },
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 1305,
+        "recall_at_top_10pct": 0.19157088122605365,
+        "precision_at_top_10pct": 0.0095580363970026,
+        "recall_at_top_20pct": 0.31340996168582375,
+        "precision_at_top_20pct": 0.00781862323411902,
+        "pr_auc": 0.025724710491668013,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 233416,
+          "review_fraction": 0.8924165089560513,
+          "review_reduction": 0.10758349104394871
+        }
+      }
+    },
+    {
+      "weights": {
+        "amount": 0.5,
+        "transaction_count": 0.2,
+        "counterparties": 0.3
+      },
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 1192,
+        "recall_at_top_10pct": 0.13590604026845637,
+        "precision_at_top_10pct": 0.006193607585257685,
+        "recall_at_top_20pct": 0.20973154362416108,
+        "precision_at_top_20pct": 0.004779109556307469,
+        "pr_auc": 0.0370618369201656,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 190218,
+          "review_fraction": 0.7272609097930064,
+          "review_reduction": 0.2727390902069936
+        }
+      },
+      "validation_score_tuple": [
+        0.13590604026845637,
+        0.20973154362416108,
+        0.006193607585257685,
+        0.2727390902069936
+      ],
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 1305,
+        "recall_at_top_10pct": 0.13256704980842912,
+        "precision_at_top_10pct": 0.006614161186725799,
+        "recall_at_top_20pct": 0.25440613026819925,
+        "precision_at_top_20pct": 0.006346657490776318,
+        "pr_auc": 0.023450846663109363,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 121887,
+          "review_fraction": 0.46600906119171875,
+          "review_reduction": 0.5339909388082813
+        }
+      },
+      "name": "weighted_signal_heuristic",
+      "kind": "heuristic",
+      "notes": "Validation-tuned weighted heuristic over normalized amount, transaction count, and counterparty breadth."
+    }
+  ],
+  "deciles": {
+    "champion": {
+      "label": "champion",
+      "base_positive_rate": 0.004989390376784997,
+      "rows": [
+        {
+          "decile": 1,
+          "alerts": 26155,
+          "positives": 1105,
+          "positive_rate": 0.04224813611164213,
+          "uplift_vs_base_rate": 8.467594820444873
+        },
+        {
+          "decile": 2,
+          "alerts": 26156,
+          "positives": 152,
+          "positive_rate": 0.00581128612937758,
+          "uplift_vs_base_rate": 1.1647286923903089
+        },
+        {
+          "decile": 3,
+          "alerts": 26155,
+          "positives": 36,
+          "positive_rate": 0.001376409864270694,
+          "uplift_vs_base_rate": 0.2758673425665298
+        },
+        {
+          "decile": 4,
+          "alerts": 26156,
+          "positives": 8,
+          "positive_rate": 0.0003058571647040832,
+          "uplift_vs_base_rate": 0.06130151012580574
+        },
+        {
+          "decile": 5,
+          "alerts": 26155,
+          "positives": 2,
+          "positive_rate": 7.646721468170522e-05,
+          "uplift_vs_base_rate": 0.015325963475918322
+        },
+        {
+          "decile": 6,
+          "alerts": 26156,
+          "positives": 0,
+          "positive_rate": 0.0,
+          "uplift_vs_base_rate": 0.0
+        },
+        {
+          "decile": 7,
+          "alerts": 26155,
+          "positives": 1,
+          "positive_rate": 3.823360734085261e-05,
+          "uplift_vs_base_rate": 0.007662981737959161
+        },
+        {
+          "decile": 8,
+          "alerts": 26156,
+          "positives": 0,
+          "positive_rate": 0.0,
+          "uplift_vs_base_rate": 0.0
+        },
+        {
+          "decile": 9,
+          "alerts": 26155,
+          "positives": 1,
+          "positive_rate": 3.823360734085261e-05,
+          "uplift_vs_base_rate": 0.007662981737959161
+        },
+        {
+          "decile": 10,
+          "alerts": 26156,
+          "positives": 0,
+          "positive_rate": 0.0,
+          "uplift_vs_base_rate": 0.0
+        }
+      ],
+      "review_reduction_at_80pct_recall": {
+        "target_recall": 0.8,
+        "alerts_reviewed": 20134,
+        "review_fraction": 0.07697807344535566,
+        "review_reduction": 0.9230219265546443
+      },
+      "review_reduction_at_90pct_recall": {
+        "target_recall": 0.9,
+        "alerts_reviewed": 38897,
+        "review_fraction": 0.1487144195293533,
+        "review_reduction": 0.8512855804706467
+      }
+    },
+    "amount": {
+      "label": "amount_descending",
+      "base_positive_rate": 0.004989390376784997,
+      "rows": [
+        {
+          "decile": 1,
+          "alerts": 26155,
+          "positives": 273,
+          "positive_rate": 0.010437774804052762,
+          "uplift_vs_base_rate": 2.091994014462851
+        },
+        {
+          "decile": 2,
+          "alerts": 26156,
+          "positives": 240,
+          "positive_rate": 0.009175714941122496,
+          "uplift_vs_base_rate": 1.839045303774172
+        },
+        {
+          "decile": 3,
+          "alerts": 26155,
+          "positives": 300,
+          "positive_rate": 0.011470082202255783,
+          "uplift_vs_base_rate": 2.2988945213877483
+        },
+        {
+          "decile": 4,
+          "alerts": 26156,
+          "positives": 204,
+          "positive_rate": 0.007799357699954121,
+          "uplift_vs_base_rate": 1.5631885082080463
+        },
+        {
+          "decile": 5,
+          "alerts": 26155,
+          "positives": 143,
+          "positive_rate": 0.005467405849741923,
+          "uplift_vs_base_rate": 1.0958063885281601
+        },
+        {
+          "decile": 6,
+          "alerts": 26156,
+          "positives": 75,
+          "positive_rate": 0.0028674109191007798,
+          "uplift_vs_base_rate": 0.5747016574294287
+        },
+        {
+          "decile": 7,
+          "alerts": 26155,
+          "positives": 38,
+          "positive_rate": 0.001452877078952399,
+          "uplift_vs_base_rate": 0.2911933060424481
+        },
+        {
+          "decile": 8,
+          "alerts": 26156,
+          "positives": 10,
+          "positive_rate": 0.000382321455880104,
+          "uplift_vs_base_rate": 0.07662688765725717
+        },
+        {
+          "decile": 9,
+          "alerts": 26155,
+          "positives": 10,
+          "positive_rate": 0.0003823360734085261,
+          "uplift_vs_base_rate": 0.07662981737959161
+        },
+        {
+          "decile": 10,
+          "alerts": 26156,
+          "positives": 12,
+          "positive_rate": 0.00045878574705612477,
+          "uplift_vs_base_rate": 0.0919522651887086
+        }
+      ],
+      "review_reduction_at_80pct_recall": {
+        "target_recall": 0.8,
+        "alerts_reviewed": 107950,
+        "review_fraction": 0.412723901282713,
+        "review_reduction": 0.5872760987172869
+      },
+      "review_reduction_at_90pct_recall": {
+        "target_recall": 0.9,
+        "alerts_reviewed": 135177,
+        "review_fraction": 0.5168205539943798,
+        "review_reduction": 0.48317944600562024
+      }
+    }
+  },
+  "sensitivity": {
+    "typed_vs_unknown": [
+      {
+        "group": "typed",
+        "alerts": 950,
+        "positives": 950,
+        "group_positive_rate": 1.0,
+        "reviewed_in_global_top_10pct": 836,
+        "subgroup_recall_in_global_top_10pct": 0.88,
+        "subgroup_precision_in_global_top_10pct": 1.0
+      },
+      {
+        "group": "unknown",
+        "alerts": 260605,
+        "positives": 355,
+        "group_positive_rate": 0.0013622148462232113,
+        "reviewed_in_global_top_10pct": 25320,
+        "subgroup_recall_in_global_top_10pct": 0.7577464788732394,
+        "subgroup_precision_in_global_top_10pct": 0.010624012638230648
+      }
+    ],
+    "typology": [
+      {
+        "group": "BIPARTITE",
+        "alerts": 61,
+        "positives": 61,
+        "group_positive_rate": 1.0,
+        "reviewed_in_global_top_10pct": 51,
+        "subgroup_recall_in_global_top_10pct": 0.8360655737704918,
+        "subgroup_precision_in_global_top_10pct": 1.0
+      },
+      {
+        "group": "CYCLE",
+        "alerts": 97,
+        "positives": 97,
+        "group_positive_rate": 1.0,
+        "reviewed_in_global_top_10pct": 83,
+        "subgroup_recall_in_global_top_10pct": 0.8556701030927835,
+        "subgroup_precision_in_global_top_10pct": 1.0
+      },
+      {
+        "group": "FAN-IN",
+        "alerts": 131,
+        "positives": 131,
+        "group_positive_rate": 1.0,
+        "reviewed_in_global_top_10pct": 118,
+        "subgroup_recall_in_global_top_10pct": 0.9007633587786259,
+        "subgroup_precision_in_global_top_10pct": 1.0
+      },
+      {
+        "group": "FAN-OUT",
+        "alerts": 47,
+        "positives": 47,
+        "group_positive_rate": 1.0,
+        "reviewed_in_global_top_10pct": 47,
+        "subgroup_recall_in_global_top_10pct": 1.0,
+        "subgroup_precision_in_global_top_10pct": 1.0
+      },
+      {
+        "group": "GATHER-SCATTER",
+        "alerts": 233,
+        "positives": 233,
+        "group_positive_rate": 1.0,
+        "reviewed_in_global_top_10pct": 213,
+        "subgroup_recall_in_global_top_10pct": 0.9141630901287554,
+        "subgroup_precision_in_global_top_10pct": 1.0
+      },
+      {
+        "group": "RANDOM",
+        "alerts": 80,
+        "positives": 80,
+        "group_positive_rate": 1.0,
+        "reviewed_in_global_top_10pct": 76,
+        "subgroup_recall_in_global_top_10pct": 0.95,
+        "subgroup_precision_in_global_top_10pct": 1.0
+      },
+      {
+        "group": "SCATTER-GATHER",
+        "alerts": 171,
+        "positives": 171,
+        "group_positive_rate": 1.0,
+        "reviewed_in_global_top_10pct": 149,
+        "subgroup_recall_in_global_top_10pct": 0.8713450292397661,
+        "subgroup_precision_in_global_top_10pct": 1.0
+      },
+      {
+        "group": "STACK",
+        "alerts": 130,
+        "positives": 130,
+        "group_positive_rate": 1.0,
+        "reviewed_in_global_top_10pct": 99,
+        "subgroup_recall_in_global_top_10pct": 0.7615384615384615,
+        "subgroup_precision_in_global_top_10pct": 1.0
+      },
+      {
+        "group": "unknown",
+        "alerts": 260605,
+        "positives": 355,
+        "group_positive_rate": 0.0013622148462232113,
+        "reviewed_in_global_top_10pct": 25320,
+        "subgroup_recall_in_global_top_10pct": 0.7577464788732394,
+        "subgroup_precision_in_global_top_10pct": 0.010624012638230648
+      }
+    ],
+    "alert_size_bucket": [
+      {
+        "group": "1",
+        "alerts": 113645,
+        "positives": 453,
+        "group_positive_rate": 0.003986097056623696,
+        "reviewed_in_global_top_10pct": 19647,
+        "subgroup_recall_in_global_top_10pct": 0.7704194260485652,
+        "subgroup_precision_in_global_top_10pct": 0.017763526238102508
+      },
+      {
+        "group": "2-3",
+        "alerts": 68126,
+        "positives": 548,
+        "group_positive_rate": 0.008043918621378035,
+        "reviewed_in_global_top_10pct": 2714,
+        "subgroup_recall_in_global_top_10pct": 0.9197080291970803,
+        "subgroup_precision_in_global_top_10pct": 0.18570375829034635
+      },
+      {
+        "group": "4-6",
+        "alerts": 50889,
+        "positives": 165,
+        "group_positive_rate": 0.003242350999233626,
+        "reviewed_in_global_top_10pct": 1532,
+        "subgroup_recall_in_global_top_10pct": 0.896969696969697,
+        "subgroup_precision_in_global_top_10pct": 0.09660574412532637
+      },
+      {
+        "group": "7+",
+        "alerts": 28895,
+        "positives": 139,
+        "group_positive_rate": 0.004810520851358366,
+        "reviewed_in_global_top_10pct": 2263,
+        "subgroup_recall_in_global_top_10pct": 0.7482014388489209,
+        "subgroup_precision_in_global_top_10pct": 0.04595669465311533
+      }
+    ],
+    "amount_bucket": [
+      {
+        "group": "q1_low",
+        "alerts": 65389,
+        "positives": 22,
+        "group_positive_rate": 0.00033644802642646316,
+        "reviewed_in_global_top_10pct": 1977,
+        "subgroup_recall_in_global_top_10pct": 0.6818181818181818,
+        "subgroup_precision_in_global_top_10pct": 0.007587253414264037
+      },
+      {
+        "group": "q2_mid_low",
+        "alerts": 65389,
+        "positives": 87,
+        "group_positive_rate": 0.0013304990135955589,
+        "reviewed_in_global_top_10pct": 6299,
+        "subgroup_recall_in_global_top_10pct": 0.7931034482758621,
+        "subgroup_precision_in_global_top_10pct": 0.010954119701539927
+      },
+      {
+        "group": "q3_mid_high",
+        "alerts": 65388,
+        "positives": 400,
+        "group_positive_rate": 0.006117330397014743,
+        "reviewed_in_global_top_10pct": 12191,
+        "subgroup_recall_in_global_top_10pct": 0.8325,
+        "subgroup_precision_in_global_top_10pct": 0.027315232548601426
+      },
+      {
+        "group": "q4_high",
+        "alerts": 65389,
+        "positives": 796,
+        "group_positive_rate": 0.012173301319793849,
+        "reviewed_in_global_top_10pct": 5689,
+        "subgroup_recall_in_global_top_10pct": 0.864321608040201,
+        "subgroup_precision_in_global_top_10pct": 0.12093513798558622
+      }
+    ],
+    "currency_complexity": [
+      {
+        "group": "mixed_currency",
+        "alerts": 6249,
+        "positives": 630,
+        "group_positive_rate": 0.10081613058089295,
+        "reviewed_in_global_top_10pct": 2480,
+        "subgroup_recall_in_global_top_10pct": 0.9523809523809523,
+        "subgroup_precision_in_global_top_10pct": 0.24193548387096775
+      },
+      {
+        "group": "single_currency",
+        "alerts": 255306,
+        "positives": 675,
+        "group_positive_rate": 0.002643886160137247,
+        "reviewed_in_global_top_10pct": 23676,
+        "subgroup_recall_in_global_top_10pct": 0.7481481481481481,
+        "subgroup_precision_in_global_top_10pct": 0.021329616489271837
+      }
+    ],
+    "cross_bank_breadth": [
+      {
+        "group": "1_bank",
+        "alerts": 194034,
+        "positives": 503,
+        "group_positive_rate": 0.0025923291794221633,
+        "reviewed_in_global_top_10pct": 20136,
+        "subgroup_recall_in_global_top_10pct": 0.7654075546719682,
+        "subgroup_precision_in_global_top_10pct": 0.019119984108065157
+      },
+      {
+        "group": "2_3_banks",
+        "alerts": 54969,
+        "positives": 630,
+        "group_positive_rate": 0.011461005293892922,
+        "reviewed_in_global_top_10pct": 3986,
+        "subgroup_recall_in_global_top_10pct": 0.9079365079365079,
+        "subgroup_precision_in_global_top_10pct": 0.1435022579026593
+      },
+      {
+        "group": "4plus_banks",
+        "alerts": 12552,
+        "positives": 172,
+        "group_positive_rate": 0.013702995538559592,
+        "reviewed_in_global_top_10pct": 2034,
+        "subgroup_recall_in_global_top_10pct": 0.8604651162790697,
+        "subgroup_precision_in_global_top_10pct": 0.0727630285152409
+      }
+    ]
+  },
+  "product_realism": {
+    "champion_top_10pct_positive_rate": 0.04224652087475149,
+    "amount_top_10pct_positive_rate": 0.010437375745526839,
+    "champion_top_10pct_positive_rate_uplift": 8.467271086126917,
+    "amount_top_10pct_positive_rate_uplift": 2.0919140330431207,
+    "champion_top_10pct_median_total_amount_usd": 3006.901611328125,
+    "amount_top_10pct_median_total_amount_usd": 438687.90625,
+    "champion_only_samples": [
+      {
+        "alert_id": "IBMHI-1C79E943267A",
+        "label": 1,
+        "total_amount": 81750.2578125,
+        "total_amount_usd": 1635005184.0,
+        "transaction_count": 1728,
+        "unique_destination_accounts": 864,
+        "unique_destination_banks": 49,
+        "time_span_hours": 23.983333587646484,
+        "pattern_assigned": 0,
+        "dominant_payment_format": "bitcoin",
+        "dominant_currency": "Bitcoin",
+        "ranking_reason": "champion_only",
+        "transactions_preview": [
+          {
+            "transaction_id": "ibm-hi-small-tx-4242746",
+            "amount": 0.035783,
+            "currency": "Bitcoin",
+            "channel": "Bitcoin"
+          },
+          {
+            "transaction_id": "ibm-hi-small-tx-4242735",
+            "amount": 0.014146,
+            "currency": "Bitcoin",
+            "channel": "Bitcoin"
+          },
+          {
+            "transaction_id": "ibm-hi-small-tx-4243044",
+            "amount": 0.027685,
+            "currency": "Bitcoin",
+            "channel": "Bitcoin"
+          }
+        ],
+        "top_positive_contributions": [
+          {
+            "feature": "unique_destination_accounts",
+            "raw_value": 864.0,
+            "contribution": 116.31214628339696
+          },
+          {
+            "feature": "log_unique_destination_accounts",
+            "raw_value": 6.762729644775391,
+            "contribution": 85.0545373305538
+          },
+          {
+            "feature": "transaction_count",
+            "raw_value": 1728.0,
+            "contribution": 69.8704188079615
+          },
+          {
+            "feature": "amount_std_to_mean_usd",
+            "raw_value": 17.008188247680664,
+            "contribution": 46.90586336625133
+          },
+          {
+            "feature": "log_total_amount_usd",
+            "raw_value": 21.21491241455078,
+            "contribution": 26.700214252552975
+          }
+        ]
+      },
+      {
+        "alert_id": "IBMHI-A1BE965EB77D",
+        "label": 0,
+        "total_amount": 2029.423095703125,
+        "total_amount_usd": 40588460.0,
+        "transaction_count": 561,
+        "unique_destination_accounts": 292,
+        "unique_destination_banks": 41,
+        "time_span_hours": 23.866666793823242,
+        "pattern_assigned": 0,
+        "dominant_payment_format": "bitcoin",
+        "dominant_currency": "Bitcoin",
+        "ranking_reason": "champion_only",
+        "transactions_preview": [
+          {
+            "transaction_id": "ibm-hi-small-tx-4888367",
+            "amount": 0.309559,
+            "currency": "Bitcoin",
+            "channel": "Bitcoin"
+          },
+          {
+            "transaction_id": "ibm-hi-small-tx-4888417",
+            "amount": 0.2559,
+            "currency": "Bitcoin",
+            "channel": "Bitcoin"
+          },
+          {
+            "transaction_id": "ibm-hi-small-tx-4888424",
+            "amount": 0.530677,
+            "currency": "Bitcoin",
+            "channel": "Bitcoin"
+          }
+        ],
+        "top_positive_contributions": [
+          {
+            "feature": "log_unique_destination_accounts",
+            "raw_value": 5.680172443389893,
+            "contribution": 69.33795511601538
+          },
+          {
+            "feature": "unique_destination_accounts",
+            "raw_value": 292.0,
+            "contribution": 39.149519462018446
+          },
+          {
+            "feature": "amount_std_to_mean_usd",
+            "raw_value": 11.480417251586914,
+            "contribution": 31.10321321563095
+          },
+          {
+            "feature": "transaction_count",
+            "raw_value": 561.0,
+            "contribution": 22.588519461805006
+          },
+          {
+            "feature": "log_total_amount_usd",
+            "raw_value": 17.51899528503418,
+            "contribution": 18.958706076896917
+          }
+        ]
+      },
+      {
+        "alert_id": "IBMHI-51B4423B855E",
+        "label": 1,
+        "total_amount": 36180.328125,
+        "total_amount_usd": 36677.2421875,
+        "transaction_count": 6,
+        "unique_destination_accounts": 5,
+        "unique_destination_banks": 5,
+        "time_span_hours": 20.46666717529297,
+        "pattern_assigned": 1,
+        "dominant_payment_format": "ach",
+        "dominant_currency": "Euro",
+        "ranking_reason": "champion_only",
+        "transactions_preview": [
+          {
+            "transaction_id": "ibm-hi-small-tx-5047693",
+            "amount": 3055.89,
+            "currency": "Euro",
+            "channel": "Cheque"
+          },
+          {
+            "transaction_id": "ibm-hi-small-tx-4102739",
+            "amount": 7971.37,
+            "currency": "Euro",
+            "channel": "ACH"
+          },
+          {
+            "transaction_id": "ibm-hi-small-tx-4102740",
+            "amount": 9340.72,
+            "currency": "US Dollar",
+            "channel": "ACH"
+          }
+        ],
+        "top_positive_contributions": [
+          {
+            "feature": "log_unique_destination_accounts",
+            "raw_value": 1.7917594909667969,
+            "contribution": 12.88590694586897
+          },
+          {
+            "feature": "log_total_amount_usd",
+            "raw_value": 10.509939193725586,
+            "contribution": 4.277458972148917
+          },
+          {
+            "feature": "ach_ratio",
+            "raw_value": 0.8333333134651184,
+            "contribution": 3.114820767187987
+          },
+          {
+            "feature": "source_account_prior_alert_count",
+            "raw_value": 7.0,
+            "contribution": 2.745411171092865
+          },
+          {
+            "feature": "has_mixed_currencies",
+            "raw_value": 1.0,
+            "contribution": 1.7994097606093322
+          }
+        ]
+      },
+      {
+        "alert_id": "IBMHI-127905D8830C",
+        "label": 1,
+        "total_amount": 62767.08984375,
+        "total_amount_usd": 56889.96484375,
+        "transaction_count": 6,
+        "unique_destination_accounts": 5,
+        "unique_destination_banks": 5,
+        "time_span_hours": 15.016666412353516,
+        "pattern_assigned": 1,
+        "dominant_payment_format": "ach",
+        "dominant_currency": "US Dollar",
+        "ranking_reason": "champion_only",
+        "transactions_preview": [
+          {
+            "transaction_id": "ibm-hi-small-tx-2928632",
+            "amount": 5682.83,
+            "currency": "US Dollar",
+            "channel": "ACH"
+          },
+          {
+            "transaction_id": "ibm-hi-small-tx-2928633",
+            "amount": 4849.72,
+            "currency": "Euro",
+            "channel": "ACH"
+          },
+          {
+            "transaction_id": "ibm-hi-small-tx-2928634",
+            "amount": 12813.84,
+            "currency": "US Dollar",
+            "channel": "ACH"
+          }
+        ],
+        "top_positive_contributions": [
+          {
+            "feature": "log_unique_destination_accounts",
+            "raw_value": 1.7917594909667969,
+            "contribution": 12.88590694586897
+          },
+          {
+            "feature": "log_total_amount_usd",
+            "raw_value": 10.948891639709473,
+            "contribution": 5.19689370362487
+          },
+          {
+            "feature": "ach_ratio",
+            "raw_value": 1.0,
+            "contribution": 3.849951761165088
+          },
+          {
+            "feature": "source_account_hours_since_prev_alert",
+            "raw_value": 215.1666717529297,
+            "contribution": 2.9080061041039413
+          },
+          {
+            "feature": "has_mixed_currencies",
+            "raw_value": 1.0,
+            "contribution": 1.7994097606093322
+          }
+        ]
+      },
+      {
+        "alert_id": "IBMHI-1B571160C206",
+        "label": 1,
+        "total_amount": 87661.53125,
+        "total_amount_usd": 89341.125,
+        "transaction_count": 7,
+        "unique_destination_accounts": 6,
+        "unique_destination_banks": 6,
+        "time_span_hours": 22.200000762939453,
+        "pattern_assigned": 1,
+        "dominant_payment_format": "ach",
+        "dominant_currency": "Euro",
+        "ranking_reason": "champion_only",
+        "transactions_preview": [
+          {
+            "transaction_id": "ibm-hi-small-tx-4737283",
+            "amount": 16894.15,
+            "currency": "Euro",
+            "channel": "ACH"
+          },
+          {
+            "transaction_id": "ibm-hi-small-tx-4737284",
+            "amount": 19796.29,
+            "currency": "US Dollar",
+            "channel": "ACH"
+          },
+          {
+            "transaction_id": "ibm-hi-small-tx-4737285",
+            "amount": 11666.56,
+            "currency": "Euro",
+            "channel": "ACH"
+          }
+        ],
+        "top_positive_contributions": [
+          {
+            "feature": "log_unique_destination_accounts",
+            "raw_value": 1.945910096168518,
+            "contribution": 15.123867647821694
+          },
+          {
+            "feature": "log_total_amount_usd",
+            "raw_value": 11.400228500366211,
+            "contribution": 6.142269114111734
+          },
+          {
+            "feature": "ach_ratio",
+            "raw_value": 1.0,
+            "contribution": 3.849951761165088
+          },
+          {
+            "feature": "source_account_hours_since_prev_alert",
+            "raw_value": 210.5,
+            "contribution": 2.840250410440229
+          },
+          {
+            "feature": "has_mixed_currencies",
+            "raw_value": 1.0,
+            "contribution": 1.7994097606093322
+          }
+        ]
+      }
+    ],
+    "amount_only_samples": [
+      {
+        "alert_id": "IBMHI-8BA817ECEBFB",
+        "label": 0,
+        "total_amount": 752503619584.0,
+        "total_amount_usd": 21436352512.0,
+        "transaction_count": 14,
+        "unique_destination_accounts": 6,
+        "unique_destination_banks": 6,
+        "time_span_hours": 18.799999237060547,
+        "pattern_assigned": 0,
+        "dominant_payment_format": "cheque",
+        "dominant_currency": "US Dollar",
+        "ranking_reason": "amount_only",
+        "transactions_preview": [
+          {
+            "transaction_id": "ibm-hi-small-tx-4245046",
+            "amount": 1872.37,
+            "currency": "US Dollar",
+            "channel": "Cheque"
+          },
+          {
+            "transaction_id": "ibm-hi-small-tx-4466475",
+            "amount": 8046315118.16,
+            "currency": "US Dollar",
+            "channel": "ACH"
+          },
+          {
+            "transaction_id": "ibm-hi-small-tx-4466476",
+            "amount": 626035501453.45,
+            "currency": "Ruble",
+            "channel": "Cheque"
+          }
+        ]
+      },
+      {
+        "alert_id": "IBMHI-7B0CCE395E35",
+        "label": 0,
+        "total_amount": 155205697536.0,
+        "total_amount_usd": 4421294080.0,
+        "transaction_count": 6,
+        "unique_destination_accounts": 2,
+        "unique_destination_banks": 2,
+        "time_span_hours": 0.11666666716337204,
+        "pattern_assigned": 0,
+        "dominant_payment_format": "ach",
+        "dominant_currency": "US Dollar",
+        "ranking_reason": "amount_only",
+        "transactions_preview": [
+          {
+            "transaction_id": "ibm-hi-small-tx-4332615",
+            "amount": 70621951.07,
+            "currency": "US Dollar",
+            "channel": "ACH"
+          },
+          {
+            "transaction_id": "ibm-hi-small-tx-4332616",
+            "amount": 5494670281.31,
+            "currency": "Ruble",
+            "channel": "ACH"
+          },
+          {
+            "transaction_id": "ibm-hi-small-tx-4332617",
+            "amount": 96770504.57,
+            "currency": "US Dollar",
+            "channel": "ACH"
+          }
+        ]
+      },
+      {
+        "alert_id": "IBMHI-A56FD846540B",
+        "label": 0,
+        "total_amount": 98767446016.0,
+        "total_amount_usd": 1580279168.0,
+        "transaction_count": 4,
+        "unique_destination_accounts": 3,
+        "unique_destination_banks": 3,
+        "time_span_hours": 22.016666412353516,
+        "pattern_assigned": 0,
+        "dominant_payment_format": "credit_card",
+        "dominant_currency": "Ruble",
+        "ranking_reason": "amount_only",
+        "transactions_preview": [
+          {
+            "transaction_id": "ibm-hi-small-tx-4235850",
+            "amount": 1169.32,
+            "currency": "Ruble",
+            "channel": "Credit Card"
+          },
+          {
+            "transaction_id": "ibm-hi-small-tx-4494143",
+            "amount": 98766398900.99,
+            "currency": "Ruble",
+            "channel": "Cheque"
+          },
+          {
+            "transaction_id": "ibm-hi-small-tx-4826603",
+            "amount": 822389.07,
+            "currency": "Ruble",
+            "channel": "Cheque"
+          }
+        ]
+      },
+      {
+        "alert_id": "IBMHI-D7C6C49EF9E0",
+        "label": 0,
+        "total_amount": 85127208960.0,
+        "total_amount_usd": 1424088576.0,
+        "transaction_count": 8,
+        "unique_destination_accounts": 2,
+        "unique_destination_banks": 2,
+        "time_span_hours": 0.4166666567325592,
+        "pattern_assigned": 0,
+        "dominant_payment_format": "ach",
+        "dominant_currency": "US Dollar",
+        "ranking_reason": "amount_only",
+        "transactions_preview": [
+          {
+            "transaction_id": "ibm-hi-small-tx-4785885",
+            "amount": 14750347.54,
+            "currency": "US Dollar",
+            "channel": "ACH"
+          },
+          {
+            "transaction_id": "ibm-hi-small-tx-4785886",
+            "amount": 1554686631.04,
+            "currency": "Yen",
+            "channel": "ACH"
+          },
+          {
+            "transaction_id": "ibm-hi-small-tx-4785883",
+            "amount": 556724703.33,
+            "currency": "US Dollar",
+            "channel": "ACH"
+          }
+        ]
+      },
+      {
+        "alert_id": "IBMHI-3E311C2AD871",
+        "label": 0,
+        "total_amount": 44731580416.0,
+        "total_amount_usd": 1174577280.0,
+        "transaction_count": 15,
+        "unique_destination_accounts": 4,
+        "unique_destination_banks": 4,
+        "time_span_hours": 8.350000381469727,
+        "pattern_assigned": 0,
+        "dominant_payment_format": "ach",
+        "dominant_currency": "US Dollar",
+        "ranking_reason": "amount_only",
+        "transactions_preview": [
+          {
+            "transaction_id": "ibm-hi-small-tx-4206733",
+            "amount": 154.58,
+            "currency": "US Dollar",
+            "channel": "Cheque"
+          },
+          {
+            "transaction_id": "ibm-hi-small-tx-4206734",
+            "amount": 50.73,
+            "currency": "US Dollar",
+            "channel": "ACH"
+          },
+          {
+            "transaction_id": "ibm-hi-small-tx-4206735",
+            "amount": 11.69,
+            "currency": "US Dollar",
+            "channel": "Wire"
+          }
+        ]
+      }
+    ]
+  },
+  "verdict": {
+    "trustworthiness": "conditionally_trustworthy_under_narrow_synthetic_assumptions",
+    "internal_citation": "allowed_with_full_sanity-report caveats",
+    "external_citation": "not_recommended_without_strong_synthetic-only caveat and no customer-performance claims",
+    "summary_points": [
+      "The primary raw-signal champion remains far above the amount baseline under the default chronological split.",
+      "Shuffled-label control collapses performance and argues against an implementation bug that directly leaks labels through the supervision path.",
+      "There is still benchmark convenience: the proxy label is defined on the same grouped transaction window that also determines the strongest ranking features.",
+      "Pattern-derived exact-match information remains a leakage-like convenience signal and should stay flagged even when its marginal impact is small.",
+      "The primary score is strong enough for internal synthetic benchmarking discussions, but not strong enough to cite externally as evidence of real bank AML ranking performance."
+    ]
+  }
+}

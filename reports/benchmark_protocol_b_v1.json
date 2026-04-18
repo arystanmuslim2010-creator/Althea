@@ -1,0 +1,745 @@
+{
+  "generated_at": "2026-04-18T15:34:26.108159Z",
+  "dataset_name": "IBM AML-Data HI-Small Protocol B",
+  "grouping_variant": "source_account_past24h_future24h",
+  "source_alert_jsonl_path": "C:\\Users\\Users\\OneDrive\\\u0420\u0430\u0431\u043e\u0447\u0438\u0439 \u0441\u0442\u043e\u043b\\Althea\\data\\processed\\ibm_aml_alerts\\hi_small_alerts.jsonl",
+  "feature_csv_path": "C:\\Users\\Users\\OneDrive\\\u0420\u0430\u0431\u043e\u0447\u0438\u0439 \u0441\u0442\u043e\u043b\\Althea\\data\\processed\\ibm_aml_alerts\\benchmark_features\\protocol_b_source_account_24h.features.csv",
+  "extraction_summary": {
+    "flattened_transactions": 5078345,
+    "accounts_processed": 496999,
+    "rows_written": 1307771,
+    "positive_rows": 1333,
+    "negative_rows": 1306438,
+    "reused_existing_feature_csv": false
+  },
+  "dataset_stats": {
+    "total_alerts": 1307771,
+    "positive_alerts": 1333,
+    "negative_alerts": 1306438,
+    "positive_rate": 0.0010192916038052533,
+    "average_transactions_per_alert": 2.45977392066348,
+    "alerts_with_pattern_history": 2115,
+    "pattern_history_rate": 0.0016172556204411934
+  },
+  "split_stats": {
+    "train": {
+      "total_alerts": 784662,
+      "positive_alerts": 574,
+      "negative_alerts": 784088,
+      "positive_rate": 0.0007315251662499267,
+      "average_transactions_per_alert": 1.9626553058624268,
+      "alerts_with_pattern_history": 528,
+      "pattern_history_rate": 0.0006729011982229291
+    },
+    "validation": {
+      "total_alerts": 261554,
+      "positive_alerts": 424,
+      "negative_alerts": 261130,
+      "positive_rate": 0.0016210801593552382,
+      "average_transactions_per_alert": 3.592294454574585,
+      "alerts_with_pattern_history": 665,
+      "pattern_history_rate": 0.0025424960046491357
+    },
+    "test": {
+      "total_alerts": 261555,
+      "positive_alerts": 335,
+      "negative_alerts": 261220,
+      "positive_rate": 0.0012808013610904015,
+      "average_transactions_per_alert": 2.818608045578003,
+      "alerts_with_pattern_history": 922,
+      "pattern_history_rate": 0.003525071208732389
+    }
+  },
+  "baseline_results": [
+    {
+      "name": "chronological_queue",
+      "kind": "baseline",
+      "notes": "Chronological queue ordered by created_at ascending.",
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 424,
+        "recall_at_top_10pct": 0.09198113207547169,
+        "precision_at_top_10pct": 0.0014910536779324055,
+        "recall_at_top_20pct": 0.18396226415094338,
+        "precision_at_top_20pct": 0.0014910821815679303,
+        "pr_auc": 0.001596881930349508,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 210789,
+          "review_fraction": 0.8059100606375739,
+          "review_reduction": 0.19408993936242613
+        }
+      },
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 335,
+        "recall_at_top_10pct": 0.11641791044776119,
+        "precision_at_top_10pct": 0.0014910536779324055,
+        "recall_at_top_20pct": 0.21791044776119403,
+        "precision_at_top_20pct": 0.0013954999904417808,
+        "pr_auc": 0.001182687660963268,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 261135,
+          "review_fraction": 0.9983942191890807,
+          "review_reduction": 0.0016057808109193328
+        }
+      }
+    },
+    {
+      "name": "amount_descending",
+      "kind": "baseline",
+      "notes": "Raw total amount descending.",
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 424,
+        "recall_at_top_10pct": 0.23113207547169812,
+        "precision_at_top_10pct": 0.003746750267625019,
+        "recall_at_top_20pct": 0.37028301886792453,
+        "precision_at_top_20pct": 0.0030012808013610906,
+        "pr_auc": 0.01015210791784247,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 160948,
+          "review_fraction": 0.6153528525658182,
+          "review_reduction": 0.3846471474341818
+        }
+      },
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 335,
+        "recall_at_top_10pct": 0.28059701492537314,
+        "precision_at_top_10pct": 0.0035938216852729773,
+        "recall_at_top_20pct": 0.5402985074626866,
+        "precision_at_top_20pct": 0.0034600753187666073,
+        "pr_auc": 0.007972074011134287,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 115324,
+          "review_fraction": 0.440916824377282,
+          "review_reduction": 0.5590831756227179
+        }
+      }
+    },
+    {
+      "weights": {
+        "amount": 0.45,
+        "transaction_count": 0.3,
+        "counterparties": 0.25
+      },
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 424,
+        "recall_at_top_10pct": 0.294811320754717,
+        "precision_at_top_10pct": 0.0047790181985013,
+        "recall_at_top_20pct": 0.41037735849056606,
+        "precision_at_top_20pct": 0.003326260251189998,
+        "pr_auc": 0.09153440360966908,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 167463,
+          "review_fraction": 0.6402616668068544,
+          "review_reduction": 0.35973833319314563
+        }
+      },
+      "validation_score_tuple": [
+        0.294811320754717,
+        0.41037735849056606,
+        0.0047790181985013,
+        0.35973833319314563
+      ],
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 335,
+        "recall_at_top_10pct": 0.33432835820895523,
+        "precision_at_top_10pct": 0.0042820003058571645,
+        "recall_at_top_20pct": 0.4925373134328358,
+        "precision_at_top_20pct": 0.003154212307162929,
+        "pr_auc": 0.05535406988225473,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 105102,
+          "review_fraction": 0.40183517806962205,
+          "review_reduction": 0.5981648219303779
+        }
+      },
+      "name": "weighted_signal_heuristic",
+      "kind": "heuristic",
+      "notes": "Validation-tuned weighted heuristic over normalized amount, transaction count, and counterparty breadth."
+    }
+  ],
+  "primary_result": {
+    "name": "althea_protocol_b_logistic_regression",
+    "kind": "model",
+    "notes": "Protocol B primary candidate: past-24h observation features only, future-24h labels only, no train-only label encodings, no pattern-derived shortcut features.",
+    "validation_metrics": {
+      "n_alerts": 261554,
+      "n_positive_alerts": 424,
+      "recall_at_top_10pct": 0.3419811320754717,
+      "precision_at_top_10pct": 0.0055436611102615075,
+      "recall_at_top_20pct": 0.4528301886792453,
+      "precision_at_top_20pct": 0.0036703561392441362,
+      "pr_auc": 0.12611707084448515,
+      "review_reduction_at_80pct_recall": {
+        "target_recall": 0.8,
+        "alerts_reviewed": 162585,
+        "review_fraction": 0.6216115983697439,
+        "review_reduction": 0.3783884016302561
+      }
+    },
+    "test_metrics": {
+      "n_alerts": 261555,
+      "n_positive_alerts": 335,
+      "recall_at_top_10pct": 0.5223880597014925,
+      "precision_at_top_10pct": 0.00669062547790182,
+      "recall_at_top_20pct": 0.6298507462686567,
+      "precision_at_top_20pct": 0.004033568465523504,
+      "pr_auc": 0.12890402385368543,
+      "review_reduction_at_80pct_recall": {
+        "target_recall": 0.8,
+        "alerts_reviewed": 123184,
+        "review_fraction": 0.4709678652673434,
+        "review_reduction": 0.5290321347326565
+      }
+    },
+    "top_features": [
+      {
+        "feature": "amount_per_counterparty_usd",
+        "coefficient": -15.257772967765051
+      },
+      {
+        "feature": "log_total_amount_usd",
+        "coefficient": 5.539776874354452
+      },
+      {
+        "feature": "transaction_count",
+        "coefficient": -5.337535044115475
+      },
+      {
+        "feature": "log_max_amount_usd",
+        "coefficient": -4.97682823731492
+      },
+      {
+        "feature": "unique_destination_accounts",
+        "coefficient": 4.933082929500363
+      },
+      {
+        "feature": "amount_per_transaction_usd",
+        "coefficient": 4.267409662418353
+      },
+      {
+        "feature": "mean_amount_usd",
+        "coefficient": 4.267409662418353
+      },
+      {
+        "feature": "min_amount_usd",
+        "coefficient": 3.938149221949229
+      },
+      {
+        "feature": "max_amount_usd",
+        "coefficient": 2.788717325249656
+      },
+      {
+        "feature": "std_amount",
+        "coefficient": -1.8757441610507712
+      },
+      {
+        "feature": "tx_per_hour",
+        "coefficient": 1.5489756860672763
+      },
+      {
+        "feature": "std_amount_usd",
+        "coefficient": 1.050395410207538
+      }
+    ]
+  },
+  "ablations": [
+    {
+      "name": "althea_protocol_b_logistic_regression",
+      "kind": "model",
+      "notes": "Protocol B primary candidate: past-24h observation features only, future-24h labels only, no train-only label encodings, no pattern-derived shortcut features.",
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 424,
+        "recall_at_top_10pct": 0.3419811320754717,
+        "precision_at_top_10pct": 0.0055436611102615075,
+        "recall_at_top_20pct": 0.4528301886792453,
+        "precision_at_top_20pct": 0.0036703561392441362,
+        "pr_auc": 0.12611707084448515,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 162585,
+          "review_fraction": 0.6216115983697439,
+          "review_reduction": 0.3783884016302561
+        }
+      },
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 335,
+        "recall_at_top_10pct": 0.5223880597014925,
+        "precision_at_top_10pct": 0.00669062547790182,
+        "recall_at_top_20pct": 0.6298507462686567,
+        "precision_at_top_20pct": 0.004033568465523504,
+        "pr_auc": 0.12890402385368543,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 123184,
+          "review_fraction": 0.4709678652673434,
+          "review_reduction": 0.5290321347326565
+        }
+      },
+      "top_features": [
+        {
+          "feature": "amount_per_counterparty_usd",
+          "coefficient": -15.257772967765051
+        },
+        {
+          "feature": "log_total_amount_usd",
+          "coefficient": 5.539776874354452
+        },
+        {
+          "feature": "transaction_count",
+          "coefficient": -5.337535044115475
+        },
+        {
+          "feature": "log_max_amount_usd",
+          "coefficient": -4.97682823731492
+        },
+        {
+          "feature": "unique_destination_accounts",
+          "coefficient": 4.933082929500363
+        },
+        {
+          "feature": "amount_per_transaction_usd",
+          "coefficient": 4.267409662418353
+        },
+        {
+          "feature": "mean_amount_usd",
+          "coefficient": 4.267409662418353
+        },
+        {
+          "feature": "min_amount_usd",
+          "coefficient": 3.938149221949229
+        },
+        {
+          "feature": "max_amount_usd",
+          "coefficient": 2.788717325249656
+        },
+        {
+          "feature": "std_amount",
+          "coefficient": -1.8757441610507712
+        },
+        {
+          "feature": "tx_per_hour",
+          "coefficient": 1.5489756860672763
+        },
+        {
+          "feature": "std_amount_usd",
+          "coefficient": 1.050395410207538
+        }
+      ]
+    },
+    {
+      "name": "ablation_amount_features",
+      "kind": "model",
+      "notes": "Removed amount and normalized-amount features.",
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 424,
+        "recall_at_top_10pct": 0.3443396226415094,
+        "precision_at_top_10pct": 0.005581893255849518,
+        "recall_at_top_20pct": 0.45990566037735847,
+        "precision_at_top_20pct": 0.0037277054539198258,
+        "pr_auc": 0.11868553535334425,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 167495,
+          "review_fraction": 0.6403840124792586,
+          "review_reduction": 0.3596159875207414
+        }
+      },
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 335,
+        "recall_at_top_10pct": 0.5253731343283582,
+        "precision_at_top_10pct": 0.0067288576234898305,
+        "recall_at_top_20pct": 0.6238805970149254,
+        "precision_at_top_20pct": 0.003995335589073044,
+        "pr_auc": 0.13252223494900764,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 125559,
+          "review_fraction": 0.4800481734243276,
+          "review_reduction": 0.5199518265756724
+        }
+      },
+      "top_features": [
+        {
+          "feature": "tx_per_hour",
+          "coefficient": 1.3511312896148144
+        },
+        {
+          "feature": "source_account_hours_since_prev_alert",
+          "coefficient": -0.7212318201010471
+        },
+        {
+          "feature": "dow_sin",
+          "coefficient": 0.5695925862408251
+        },
+        {
+          "feature": "transaction_count",
+          "coefficient": -0.513548134266623
+        },
+        {
+          "feature": "log_unique_destination_accounts",
+          "coefficient": 0.4928373982813477
+        },
+        {
+          "feature": "unique_destination_banks",
+          "coefficient": -0.4099692242436214
+        },
+        {
+          "feature": "bitcoin_ratio",
+          "coefficient": -0.3736427624130011
+        },
+        {
+          "feature": "currency_count",
+          "coefficient": 0.32577251197694546
+        },
+        {
+          "feature": "ach_ratio",
+          "coefficient": 0.29026648330694366
+        },
+        {
+          "feature": "has_mixed_currencies",
+          "coefficient": -0.2875849713518155
+        },
+        {
+          "feature": "payment_format_count",
+          "coefficient": -0.23640964562435363
+        },
+        {
+          "feature": "round_amount_ratio",
+          "coefficient": 0.17103109651720363
+        }
+      ],
+      "delta_recall_at_top_10pct": 0.0029850746268657025
+    },
+    {
+      "name": "ablation_history_features",
+      "kind": "model",
+      "notes": "Removed account-history features derived from prior protocol-B anchor windows.",
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 424,
+        "recall_at_top_10pct": 0.35141509433962265,
+        "precision_at_top_10pct": 0.005696589692613549,
+        "recall_at_top_20pct": 0.4811320754716981,
+        "precision_at_top_20pct": 0.0038997533979468943,
+        "pr_auc": 0.1269594692821682,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 154507,
+          "review_fraction": 0.5907269626922165,
+          "review_reduction": 0.4092730373077835
+        }
+      },
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 335,
+        "recall_at_top_10pct": 0.5283582089552239,
+        "precision_at_top_10pct": 0.006767089769077841,
+        "recall_at_top_20pct": 0.6358208955223881,
+        "precision_at_top_20pct": 0.004071801341973964,
+        "pr_auc": 0.1366459005125075,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 116970,
+          "review_fraction": 0.4472099558410277,
+          "review_reduction": 0.5527900441589724
+        }
+      },
+      "top_features": [
+        {
+          "feature": "amount_per_counterparty_usd",
+          "coefficient": -16.596345532734535
+        },
+        {
+          "feature": "log_total_amount_usd",
+          "coefficient": 6.771302111435454
+        },
+        {
+          "feature": "log_max_amount_usd",
+          "coefficient": -6.2001673687546734
+        },
+        {
+          "feature": "transaction_count",
+          "coefficient": -5.235091428529069
+        },
+        {
+          "feature": "unique_destination_accounts",
+          "coefficient": 5.21279706918469
+        },
+        {
+          "feature": "amount_per_transaction_usd",
+          "coefficient": 4.695642366281581
+        },
+        {
+          "feature": "mean_amount_usd",
+          "coefficient": 4.695642366281581
+        },
+        {
+          "feature": "min_amount_usd",
+          "coefficient": 4.14554085846605
+        },
+        {
+          "feature": "std_amount",
+          "coefficient": -2.8085929808010137
+        },
+        {
+          "feature": "max_amount_usd",
+          "coefficient": 2.7456380240821567
+        },
+        {
+          "feature": "total_amount",
+          "coefficient": 1.8513629618640914
+        },
+        {
+          "feature": "tx_per_hour",
+          "coefficient": 1.2631335648485627
+        }
+      ],
+      "delta_recall_at_top_10pct": 0.005970149253731405
+    },
+    {
+      "name": "ablation_payment_currency_mix_features",
+      "kind": "model",
+      "notes": "Removed payment-format, currency-mix, and temporal mix features.",
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 424,
+        "recall_at_top_10pct": 0.30424528301886794,
+        "precision_at_top_10pct": 0.004931946780853342,
+        "recall_at_top_20pct": 0.42452830188679247,
+        "precision_at_top_20pct": 0.0034409588805413777,
+        "pr_auc": 0.0853670197341326,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 169861,
+          "review_fraction": 0.6494299456326418,
+          "review_reduction": 0.3505700543673582
+        }
+      },
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 335,
+        "recall_at_top_10pct": 0.43582089552238806,
+        "precision_at_top_10pct": 0.005581893255849518,
+        "recall_at_top_20pct": 0.5611940298507463,
+        "precision_at_top_20pct": 0.0035938903863432167,
+        "pr_auc": 0.05206482783365069,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 108243,
+          "review_fraction": 0.41384412456271147,
+          "review_reduction": 0.5861558754372885
+        }
+      },
+      "top_features": [
+        {
+          "feature": "amount_per_counterparty_usd",
+          "coefficient": -13.485955482409402
+        },
+        {
+          "feature": "log_total_amount_usd",
+          "coefficient": 6.649372777762281
+        },
+        {
+          "feature": "log_max_amount_usd",
+          "coefficient": -6.383692311025047
+        },
+        {
+          "feature": "transaction_count",
+          "coefficient": -5.4398139027734596
+        },
+        {
+          "feature": "unique_destination_accounts",
+          "coefficient": 4.6618165477790905
+        },
+        {
+          "feature": "min_amount_usd",
+          "coefficient": 4.565165925226969
+        },
+        {
+          "feature": "max_amount_usd",
+          "coefficient": 2.8961899752829665
+        },
+        {
+          "feature": "amount_per_transaction_usd",
+          "coefficient": 2.5264635067590278
+        },
+        {
+          "feature": "mean_amount_usd",
+          "coefficient": 2.5264635067590278
+        },
+        {
+          "feature": "std_amount",
+          "coefficient": -2.0161284519995224
+        },
+        {
+          "feature": "std_amount_usd",
+          "coefficient": 1.553320599886459
+        },
+        {
+          "feature": "tx_per_hour",
+          "coefficient": 1.299491302418436
+        }
+      ],
+      "delta_recall_at_top_10pct": -0.08656716417910443
+    },
+    {
+      "name": "pattern_derived_control",
+      "kind": "model",
+      "notes": "Control run that reintroduces past-window pattern-derived features. Excluded from the primary benchmark because they remain leakage-like shortcuts relative to real bank operations.",
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 424,
+        "recall_at_top_10pct": 0.4080188679245283,
+        "precision_at_top_10pct": 0.006614161186725799,
+        "recall_at_top_20pct": 0.4811320754716981,
+        "precision_at_top_20pct": 0.0038997533979468943,
+        "pr_auc": 0.20699931057504922,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 164774,
+          "review_fraction": 0.6299808070226416,
+          "review_reduction": 0.3700191929773584
+        }
+      },
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 335,
+        "recall_at_top_10pct": 0.5582089552238806,
+        "precision_at_top_10pct": 0.007149411224957944,
+        "recall_at_top_20pct": 0.6238805970149254,
+        "precision_at_top_20pct": 0.003995335589073044,
+        "pr_auc": 0.26872126673887997,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 143703,
+          "review_fraction": 0.5494179044560418,
+          "review_reduction": 0.4505820955439582
+        }
+      },
+      "top_features": [
+        {
+          "feature": "total_amount_usd",
+          "coefficient": -4.0621489146342045
+        },
+        {
+          "feature": "amount_per_counterparty_usd",
+          "coefficient": -4.010049796414583
+        },
+        {
+          "feature": "max_amount_usd",
+          "coefficient": 2.8589278588849796
+        },
+        {
+          "feature": "min_amount_usd",
+          "coefficient": 2.1080086713358632
+        },
+        {
+          "feature": "log_total_amount_usd",
+          "coefficient": 2.0276092221573143
+        },
+        {
+          "feature": "amount_range_usd",
+          "coefficient": 1.9878519452068437
+        },
+        {
+          "feature": "unique_destination_accounts",
+          "coefficient": 1.7484508691478806
+        },
+        {
+          "feature": "tx_per_hour",
+          "coefficient": 1.7474222572488243
+        },
+        {
+          "feature": "std_amount",
+          "coefficient": -1.6963097122728976
+        },
+        {
+          "feature": "log_max_amount_usd",
+          "coefficient": -1.5640003068625383
+        },
+        {
+          "feature": "std_amount_usd",
+          "coefficient": -1.55412025826361
+        },
+        {
+          "feature": "unique_destination_banks",
+          "coefficient": -1.0855888680419323
+        }
+      ],
+      "delta_recall_at_top_10pct_vs_primary": 0.035820895522388096
+    }
+  ],
+  "benchmark_rows": [
+    {
+      "name": "chronological_queue",
+      "kind": "baseline",
+      "recall_at_top_10pct": 0.11641791044776119,
+      "recall_at_top_20pct": 0.21791044776119403,
+      "precision_at_top_10pct": 0.0014910536779324055,
+      "precision_at_top_20pct": 0.0013954999904417808,
+      "review_reduction_at_80pct_recall": 0.0016057808109193328,
+      "pr_auc": 0.001182687660963268,
+      "notes": "Chronological queue ordered by created_at ascending."
+    },
+    {
+      "name": "amount_descending",
+      "kind": "baseline",
+      "recall_at_top_10pct": 0.28059701492537314,
+      "recall_at_top_20pct": 0.5402985074626866,
+      "precision_at_top_10pct": 0.0035938216852729773,
+      "precision_at_top_20pct": 0.0034600753187666073,
+      "review_reduction_at_80pct_recall": 0.5590831756227179,
+      "pr_auc": 0.007972074011134287,
+      "notes": "Raw total amount descending."
+    },
+    {
+      "name": "weighted_signal_heuristic",
+      "kind": "heuristic",
+      "recall_at_top_10pct": 0.33432835820895523,
+      "recall_at_top_20pct": 0.4925373134328358,
+      "precision_at_top_10pct": 0.0042820003058571645,
+      "precision_at_top_20pct": 0.003154212307162929,
+      "review_reduction_at_80pct_recall": 0.5981648219303779,
+      "pr_auc": 0.05535406988225473,
+      "notes": "Validation-tuned weighted heuristic over normalized amount, transaction count, and counterparty breadth."
+    },
+    {
+      "name": "althea_protocol_b_logistic_regression",
+      "kind": "model",
+      "recall_at_top_10pct": 0.5223880597014925,
+      "recall_at_top_20pct": 0.6298507462686567,
+      "precision_at_top_10pct": 0.00669062547790182,
+      "precision_at_top_20pct": 0.004033568465523504,
+      "review_reduction_at_80pct_recall": 0.5290321347326565,
+      "pr_auc": 0.12890402385368543,
+      "notes": "Protocol B primary candidate: past-24h observation features only, future-24h labels only, no train-only label encodings, no pattern-derived shortcut features."
+    }
+  ],
+  "old_reference": {
+    "source": "reports\\benchmark_sanity_v1.json",
+    "recall_at_top_10pct": 0.8467432950191571,
+    "precision_at_top_10pct": 0.04224652087475149,
+    "pr_auc": 0.19671118963819667
+  },
+  "protocol_reduction_claims": {
+    "benchmark_convenience_reduced": true,
+    "leakage_reduced": true,
+    "pattern_shortcuts_removed_from_primary": true,
+    "label_feature_window_decoupled": true
+  }
+}

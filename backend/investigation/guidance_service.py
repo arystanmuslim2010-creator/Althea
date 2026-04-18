@@ -44,9 +44,9 @@ class InvestigationGuidanceService:
     # Risk band → escalation steps
     _RISK_BAND_STEPS: dict[str, list[str]] = {
         "CRITICAL": [
-            "Immediately escalate to compliance manager for urgent review",
-            "Assess whether interim account restriction is warranted",
-            "Prepare SAR draft for filing within regulatory deadline",
+            "Escalate to compliance manager for urgent review",
+            "Assess whether interim account restriction should be considered",
+            "Prepare a SAR/STR draft for compliance review if investigation findings support escalation",
         ],
         "HIGH": [
             "Escalate to senior analyst or team lead if investigation is inconclusive after 24 hours",
@@ -88,7 +88,7 @@ class InvestigationGuidanceService:
 
         steps.append("Run sanctions and PEP screening on customer and all counterparties")
         steps.append("Document findings with supporting evidence in the investigation case")
-        steps.append("Determine SAR candidacy based on investigation findings")
+        steps.append("Determine whether escalation or SAR/STR drafting may be warranted based on documented findings")
         return steps
 
     def generate_steps(
@@ -117,13 +117,11 @@ class InvestigationGuidanceService:
 
         steps = self._base_steps(payload)
 
-        # Add typology-specific steps
-        typology_steps = self._TYPOLOGY_STEPS.get(typology, [])
-        steps = typology_steps + steps  # put specific steps first
-
-        # Add risk-band escalation steps
+        # Put risk-band escalation steps first so urgent analyst actions are not
+        # truncated when the response is capped.
         band_steps = self._RISK_BAND_STEPS.get(risk_band, [])
-        steps = steps + band_steps
+        typology_steps = self._TYPOLOGY_STEPS.get(typology, [])
+        steps = band_steps + typology_steps + steps
 
         # Deduplicate while preserving order
         seen: set[str] = set()
@@ -138,6 +136,6 @@ class InvestigationGuidanceService:
             "risk_score": risk_score,
             "typology": typology or "N/A",
             "risk_band": risk_band or "UNKNOWN",
-            "steps": [{"step": i + 1, "description": s} for i, s in enumerate(unique_steps[:12])],
+            "steps": [{"step": i + 1, "description": s} for i, s in enumerate(unique_steps[:15])],
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }

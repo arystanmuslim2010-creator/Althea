@@ -4,6 +4,7 @@ import { api, isConnectionError } from '../services/api'
 import { normalizeExplanationPayload } from '../services/contracts'
 import { useLanguage } from '../contexts/LanguageContext'
 import { useAuth } from '../contexts/AuthContext'
+import { useAnalystCapacity } from '../contexts/AnalystCapacityContext'
 import { hasPermission } from '../services/permissions'
 
 function _parseJson(val) {
@@ -293,6 +294,7 @@ export function AlertQueue() {
   const navigate = useNavigate()
   const { user } = useAuth()
   const { language, t } = useLanguage()
+  const { capacity } = useAnalystCapacity()
   const ui = ALERT_QUEUE_I18N[language] ?? ALERT_QUEUE_I18N.en
   const tabs = TAB_IDS.map((id) => ({ id, label: ui.tabs[id] ?? id }))
   const [alerts, setAlerts] = useState([])
@@ -334,6 +336,7 @@ export function AlertQueue() {
         segment: filters.segment || 'All',
         search: filters.search,
         response_mode: 'queue',
+        limit: capacity,
       }
       const [alertsRes, metricsRes, runRes] = await Promise.allSettled([
         api.getAlerts(params),
@@ -350,7 +353,7 @@ export function AlertQueue() {
       const runPayload = runRes.status === 'fulfilled' ? (runRes.value || null) : null
 
       setAlerts(alertsPayload.alerts || [])
-      setTotalAlerts(metricsPayload?.total_alerts ?? alertsPayload.total_available ?? alertsPayload.total ?? alertsPayload.alerts?.length ?? 0)
+      setTotalAlerts(alertsPayload.total_available ?? alertsPayload.total ?? metricsPayload?.total_alerts ?? alertsPayload.alerts?.length ?? 0)
       setMetrics(metricsPayload)
       setRunInfo(runPayload)
 
@@ -370,7 +373,10 @@ export function AlertQueue() {
 
   useEffect(() => {
     load()
-  }, [filters.status, filters.minRisk, filters.typology, filters.segment, filters.search])
+  }, [filters.status, filters.minRisk, filters.typology, filters.segment, filters.search, capacity])
+
+  const visibleAlerts = alerts.length
+  const hasMoreMatchingAlerts = totalAlerts > visibleAlerts
 
   const loadDetail = async (id) => {
     setSelected(id)
@@ -580,7 +586,9 @@ export function AlertQueue() {
             )}
           </div>
           <p className="text-xs text-[var(--muted)] my-1">
-            {totalAlerts > 0 ? totalAlerts.toLocaleString() : alerts.length} {ui.alerts}
+            {hasMoreMatchingAlerts
+              ? `${visibleAlerts.toLocaleString()} / ${totalAlerts.toLocaleString()} ${ui.alerts}`
+              : `${Math.max(totalAlerts, visibleAlerts).toLocaleString()} ${ui.alerts}`}
           </p>
           <div className="overflow-x-auto border border-[var(--border)] rounded-lg bg-[var(--surface)] shadow-md">
             <table className="w-full border-collapse">

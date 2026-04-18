@@ -171,6 +171,10 @@ data/model_cache/
 data/object_storage/
 data/dead_letter/
 data/uploads/
+data/processed/ibm_aml_alerts/*.jsonl
+data/processed/ibm_aml_alerts/*.summary.json
+data/processed/ibm_aml_alerts/benchmark_features/*.csv
+data/processed/ibm_aml_alerts/benchmark_features/*.sqlite
 data/data/models/_health/
 data/data/models/datasets/default-bank/public/
 backend/data/*.db

@@ -210,7 +210,7 @@ def get_alerts(
         queue = queue[mask]
     if "risk_score" in queue.columns:
         queue = queue.sort_values("risk_score", ascending=False)
-    safe_limit = max(1, min(int(limit), 200))
+    safe_limit = max(1, min(int(limit), 500))
     safe_offset = max(0, int(offset))
     total_available = int(len(queue))
     page_df = queue.iloc[safe_offset : safe_offset + safe_limit]

@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
 import { api } from '../services/api'
+import { useAnalystCapacity } from '../contexts/AnalystCapacityContext'
 
 export function OpsGovernance() {
   const [ops, setOps] = useState(null)
   const [health, setHealth] = useState(null)
-  const [capacity, setCapacity] = useState(50)
+  const { capacity, setCapacity, maxCapacity } = useAnalystCapacity()
   const [queue, setQueue] = useState([])
   const [slaBreachesApi, setSlaBreachesApi] = useState([])
   const [loading, setLoading] = useState(true)
@@ -74,7 +75,7 @@ export function OpsGovernance() {
           <input
             type="range"
             min={1}
-            max={500}
+            max={maxCapacity}
             value={capacity}
             onChange={(e) => setCapacity(Number(e.target.value))}
             className="flex-1 max-w-[220px] h-1.5 accent-blue-500"

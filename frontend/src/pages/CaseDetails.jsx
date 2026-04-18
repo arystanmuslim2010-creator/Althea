@@ -4,7 +4,13 @@ import { api } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 import { hasPermission } from '../services/permissions'
 
-const BASE_STATUSES = ['open', 'under_review', 'escalated', 'closed']
+const CASE_TRANSITIONS = {
+  open: ['under_review', 'escalated', 'closed'],
+  under_review: ['escalated', 'sar_filed', 'closed'],
+  escalated: ['under_review', 'sar_filed', 'closed'],
+  sar_filed: ['closed'],
+  closed: [],
+}
 
 function normalizeCaseStatus(status) {
   const raw = String(status || '').trim().toLowerCase()
@@ -12,6 +18,14 @@ function normalizeCaseStatus(status) {
   if (raw === 'in_review' || raw === 'investigating') return 'under_review'
   if (raw === 'assigned') return 'open'
   return raw
+}
+
+function labelForStatus(status) {
+  return String(status || '')
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(' ')
 }
 
 export function CaseDetails() {
@@ -23,13 +37,6 @@ export function CaseDetails() {
 
   const canEditCase = hasPermission(user, 'work_cases')
   const canApproveSar = hasPermission(user, 'manager_approval')
-
-  const availableStatuses = useMemo(() => {
-    if (canApproveSar) {
-      return [...BASE_STATUSES, 'sar_filed']
-    }
-    return BASE_STATUSES
-  }, [canApproveSar])
 
   const load = async () => {
     try {
@@ -59,6 +66,23 @@ export function CaseDetails() {
   const timeline = data?.timeline || []
   const currentCase = data?.case || {}
   const displayStatus = normalizeCaseStatus(currentCase.case_status || currentCase.status)
+  const allowedTransitions = useMemo(() => {
+    const candidates = CASE_TRANSITIONS[displayStatus] || []
+    return candidates.filter((nextStatus) => {
+      if (nextStatus === 'sar_filed') return canEditCase && canApproveSar
+      return canEditCase
+    })
+  }, [canApproveSar, canEditCase, displayStatus])
+  const availableStatuses = useMemo(() => {
+    const ordered = [displayStatus, ...allowedTransitions]
+    return Array.from(new Set(ordered))
+  }, [allowedTransitions, displayStatus])
+  const canEscalate = allowedTransitions.includes('escalated')
+  const canMoveToReview = allowedTransitions.includes('under_review')
+  const canApproveSarNow = allowedTransitions.includes('sar_filed')
+  const canClose = allowedTransitions.includes('closed')
+  const selectedStatusAllowed = availableStatuses.includes(status)
+  const statusUpdateDisabled = !canEditCase || !selectedStatusAllowed || status === displayStatus
 
   return (
     <div className="p-6 space-y-4">
@@ -81,12 +105,27 @@ export function CaseDetails() {
         </div>
         <div className="border rounded p-4 bg-white space-y-2">
           <div className="text-xs uppercase text-slate-500">Escalation</div>
-          <p className="text-sm text-slate-600">Use `escalated` to push analyst review to investigator/manager workflow. Manager and admin roles can approve SAR filing.</p>
+          <p className="text-sm text-slate-600">Use escalation controls to move the case through review. SAR filing approval is available only after the case reaches review or escalation and only for manager/admin roles.</p>
           <div className="flex flex-wrap gap-2">
-            <button className="px-3 py-1 border rounded" disabled={!canEditCase} onClick={() => saveStatus('escalated')}>Escalate</button>
-            <button className="px-3 py-1 border rounded" disabled={!canApproveSar} onClick={() => saveStatus('sar_filed')}>Approve SAR</button>
-            <button className="px-3 py-1 border rounded" disabled={!canEditCase} onClick={() => saveStatus('closed')}>Close</button>
+            {canMoveToReview ? (
+              <button className="px-3 py-1 border rounded" disabled={!canEditCase} onClick={() => saveStatus('under_review')}>Move to Review</button>
+            ) : null}
+            {canEscalate ? (
+              <button className="px-3 py-1 border rounded" disabled={!canEditCase} onClick={() => saveStatus('escalated')}>Escalate</button>
+            ) : null}
+            {canApproveSarNow ? (
+              <button className="px-3 py-1 border rounded" disabled={!canEditCase || !canApproveSar} onClick={() => saveStatus('sar_filed')}>Approve SAR</button>
+            ) : null}
+            {canClose ? (
+              <button className="px-3 py-1 border rounded" disabled={!canEditCase} onClick={() => saveStatus('closed')}>Close</button>
+            ) : null}
           </div>
+          {!canApproveSarNow && canApproveSar ? (
+            <p className="text-xs text-slate-500">SAR approval becomes available after the case moves to review or escalation.</p>
+          ) : null}
+          {!allowedTransitions.length ? (
+            <p className="text-xs text-slate-500">No additional workflow transitions are available from the current case status.</p>
+          ) : null}
         </div>
         <div className="border rounded p-4 bg-white space-y-2">
           <div className="text-xs uppercase text-slate-500">Timeline Health</div>
@@ -100,10 +139,11 @@ export function CaseDetails() {
         {canEditCase ? (
           <div className="flex gap-2 items-center flex-wrap">
             <select className="border rounded px-2 py-1" value={status} onChange={(e) => setStatus(e.target.value)}>
-              {availableStatuses.map((s) => <option key={s} value={s}>{s}</option>)}
+              {availableStatuses.map((s) => <option key={s} value={s}>{labelForStatus(s)}</option>)}
             </select>
-            <button className="px-3 py-1 border rounded" onClick={() => saveStatus(status)}>Update status</button>
+            <button className="px-3 py-1 border rounded" disabled={statusUpdateDisabled} onClick={() => saveStatus(status)}>Update status</button>
             {!canApproveSar ? <span className="text-xs text-slate-500">SAR filing requires manager or admin.</span> : null}
+            {canApproveSar && !canApproveSarNow ? <span className="text-xs text-slate-500">Direct SAR filing is not available from {labelForStatus(displayStatus)}.</span> : null}
           </div>
         ) : (
           <p className="text-xs text-slate-500">Your role is read-only for case status updates.</p>

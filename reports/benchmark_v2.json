@@ -1,0 +1,1064 @@
+{
+  "generated_at": "2026-04-18T10:16:54.079647Z",
+  "alert_jsonl_path": "C:\\Users\\Users\\OneDrive\\\u0420\u0430\u0431\u043e\u0447\u0438\u0439 \u0441\u0442\u043e\u043b\\Althea\\data\\processed\\ibm_aml_alerts\\hi_small_alerts.jsonl",
+  "feature_cache_dir": "C:\\Users\\Users\\OneDrive\\\u0420\u0430\u0431\u043e\u0447\u0438\u0439 \u0441\u0442\u043e\u043b\\Althea\\data\\processed\\ibm_aml_alerts\\benchmark_features",
+  "dataset_stats": {
+    "total_alerts": 1307771,
+    "positive_alerts": 3878,
+    "negative_alerts": 1303893,
+    "positive_rate": 0.002965350967409432,
+    "average_transactions_per_alert": 3.8832066164489043,
+    "alerts_with_typology_assigned": 2358,
+    "typology_assignment_rate": 0.0018030679683216709
+  },
+  "default_grouping": {
+    "grouping_variant": "source_account_24h",
+    "feature_csv_path": "C:\\Users\\Users\\OneDrive\\\u0420\u0430\u0431\u043e\u0447\u0438\u0439 \u0441\u0442\u043e\u043b\\Althea\\data\\processed\\ibm_aml_alerts\\benchmark_features\\source_account_24h.features.csv",
+    "split_stats": {
+      "train": {
+        "total_alerts": 784662,
+        "positive_alerts": 1381,
+        "negative_alerts": 783281,
+        "positive_rate": 0.0017599934748974719,
+        "average_transactions_per_alert": 3.4758291244506836,
+        "alerts_with_typology_assigned": 664,
+        "typology_assignment_rate": 0.000846224234128835
+      },
+      "validation": {
+        "total_alerts": 261554,
+        "positive_alerts": 1192,
+        "negative_alerts": 260362,
+        "positive_rate": 0.004557376297055293,
+        "average_transactions_per_alert": 5.611678600311279,
+        "alerts_with_typology_assigned": 744,
+        "typology_assignment_rate": 0.0028445368833969276
+      },
+      "test": {
+        "total_alerts": 261555,
+        "positive_alerts": 1305,
+        "negative_alerts": 260250,
+        "positive_rate": 0.004989390376784997,
+        "average_transactions_per_alert": 3.3768692016601562,
+        "alerts_with_typology_assigned": 950,
+        "typology_assignment_rate": 0.0036321232627936763
+      }
+    },
+    "feature_columns": [
+      "ach_ratio",
+      "amount_per_counterparty_usd",
+      "amount_per_transaction",
+      "amount_per_transaction_usd",
+      "amount_range",
+      "amount_range_usd",
+      "amount_std_to_mean_usd",
+      "avg_gap_hours",
+      "bitcoin_ratio",
+      "cash_ratio",
+      "cheque_ratio",
+      "counterparty_density",
+      "created_day_of_week",
+      "created_hour",
+      "credit_card_ratio",
+      "cross_bank_ratio",
+      "currency_count",
+      "dominant_currency_frequency_train",
+      "dominant_currency_pattern_rate_train",
+      "dominant_currency_positive_rate_train",
+      "dominant_destination_bank_frequency_train",
+      "dominant_destination_bank_pattern_rate_train",
+      "dominant_destination_bank_positive_rate_train",
+      "dominant_payment_format_frequency_train",
+      "dominant_payment_format_pattern_rate_train",
+      "dominant_payment_format_positive_rate_train",
+      "dow_cos",
+      "dow_sin",
+      "has_mixed_currencies",
+      "hour_cos",
+      "hour_sin",
+      "log_max_amount_usd",
+      "log_total_amount",
+      "log_total_amount_usd",
+      "log_transaction_count",
+      "log_unique_destination_accounts",
+      "max_amount",
+      "max_amount_share_usd",
+      "max_amount_usd",
+      "max_gap_hours",
+      "mean_amount",
+      "mean_amount_usd",
+      "median_amount",
+      "median_amount_usd",
+      "min_amount",
+      "min_amount_usd",
+      "night_ratio",
+      "payment_format_count",
+      "reinvestment_ratio",
+      "repeated_counterparty_ratio",
+      "round_amount_ratio",
+      "same_bank_ratio",
+      "source_account_frequency_train",
+      "source_account_hours_since_prev_alert",
+      "source_account_prior_alert_count",
+      "source_account_prior_avg_amount_usd",
+      "source_account_prior_total_amount_usd",
+      "source_account_seen_train",
+      "source_bank_frequency_train",
+      "source_bank_hours_since_prev_alert",
+      "source_bank_pattern_rate_train",
+      "source_bank_positive_rate_train",
+      "source_bank_prior_alert_count",
+      "source_bank_prior_avg_amount_usd",
+      "source_bank_prior_total_amount_usd",
+      "std_amount",
+      "std_amount_usd",
+      "time_span_hours",
+      "top_counterparty_amount_share",
+      "top_counterparty_tx_share",
+      "total_amount",
+      "total_amount_usd",
+      "transaction_count",
+      "tx_per_hour",
+      "unique_destination_accounts",
+      "unique_destination_banks",
+      "weekend_ratio",
+      "wire_ratio"
+    ]
+  },
+  "diagnosis": {
+    "current_althea_model": {
+      "model_version": "model-50fd74dbbda8",
+      "schema_alignment": {
+        "status": "ok",
+        "model_version": "model-50fd74dbbda8",
+        "expected_feature_count": 16,
+        "produced_feature_count": 50,
+        "overlap_feature_count": 9,
+        "imputed_feature_count": 7,
+        "dropped_feature_count": 41,
+        "expected_only_features": [
+          "amount_to_user_mean",
+          "amount_user_z",
+          "num_transactions",
+          "time_gap",
+          "user_amount_mean",
+          "user_amount_std",
+          "user_tx_count"
+        ],
+        "produced_only_features": [
+          "amount_avg_1d",
+          "amount_avg_30d",
+          "amount_avg_7d",
+          "amount_avg_90d",
+          "amount_peer_z",
+          "amount_sum_1d",
+          "amount_sum_30d",
+          "amount_sum_7d",
+          "amount_sum_90d",
+          "amount_vs_peer_percentile",
+          "burstiness",
+          "cross_border_ratio",
+          "days_since_last_alert",
+          "dormant_reactivation",
+          "geo_deviation",
+          "graph_complexity_proxy",
+          "investigation_complexity",
+          "is_cross_border",
+          "is_round_amount",
+          "linked_entity_count",
+          "new_counterparty_ratio",
+          "pass_through_proxy",
+          "prior_alert_count",
+          "prior_escalation_rate",
+          "prior_fp_rate",
+          "prior_sar_rate",
+          "prior_similar_case_time_mean",
+          "prior_similar_case_time_p90",
+          "prior_touch_count",
+          "prior_typology_freq",
+          "recurrence_flag",
+          "round_amount_ratio",
+          "sar_history_flag",
+          "threshold_breach",
+          "txn_count_1d",
+          "txn_count_30d",
+          "txn_count_7d",
+          "txn_count_90d",
+          "typology_novelty",
+          "velocity_delta_7d",
+          "velocity_vs_peer_percentile"
+        ]
+      }
+    },
+    "top_10pct_capture": {
+      "amount_positive_captured": 273,
+      "althea_positive_captured": 39,
+      "overlap_positive_captured": 0,
+      "amount_only_positive_captured": 273
+    },
+    "amount_only_positive_alert_profile": {
+      "count": 273,
+      "median_total_amount_usd": 50051.015625,
+      "median_transaction_count": 3.0,
+      "median_unique_destination_accounts": 2.0,
+      "share_above_positive_median_amount_usd": 0.8681318681318682
+    },
+    "althea_score_distribution": {
+      "positive": {
+        "mean": 57.75848686179478,
+        "p50": 57.75718038796892,
+        "p90": 61.40070515167425,
+        "p99": 63.216518360834705
+      },
+      "negative": {
+        "mean": 59.212552401661554,
+        "p50": 59.54840290446276,
+        "p90": 63.03654593773247,
+        "p99": 63.03654593773248
+      }
+    },
+    "althea_spearman_correlation_with_total_amount_usd": -0.6442130194387646,
+    "diagnosis_summary": [
+      "Current ALTHEA scoring is using a bootstrap demo RandomForest model that was never trained on IBM-derived alerts.",
+      "Feature alignment is weak: 9 shared columns, 7 expected legacy columns imputed, 41 current bundle columns dropped.",
+      "Amount-heavy positives are materially under-captured by the current ALTHEA ranking relative to the simple amount queue.",
+      "The active model therefore behaves like a schema-mismatched fallback, not a benchmark-calibrated alert prioritizer."
+    ],
+    "althea_baseline_status": {
+      "status": "available",
+      "model_version": "model-50fd74dbbda8",
+      "scored_alert_count": 261555
+    }
+  },
+  "baseline_results": [
+    {
+      "name": "chronological_queue",
+      "kind": "baseline",
+      "notes": "Chronological queue ordered by created_at ascending.",
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 1192,
+        "recall_at_top_10pct": 0.1098993288590604,
+        "precision_at_top_10pct": 0.0050084110720293624,
+        "recall_at_top_20pct": 0.18624161073825504,
+        "precision_at_top_20pct": 0.004243849286001032,
+        "pr_auc": 0.0047015765670009296,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 210274,
+          "review_fraction": 0.8039410599723192,
+          "review_reduction": 0.19605894002768076
+        }
+      },
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 1305,
+        "recall_at_top_10pct": 0.10268199233716475,
+        "precision_at_top_10pct": 0.005123107508793394,
+        "recall_at_top_20pct": 0.15172413793103448,
+        "precision_at_top_20pct": 0.0037850547685955153,
+        "pr_auc": 0.003686556977590507,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 261294,
+          "review_fraction": 0.999002121924643,
+          "review_reduction": 0.000997878075357006
+        }
+      }
+    },
+    {
+      "name": "amount_descending",
+      "kind": "baseline",
+      "notes": "Raw total amount descending.",
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 1192,
+        "recall_at_top_10pct": 0.16023489932885907,
+        "precision_at_top_10pct": 0.007302339807309986,
+        "recall_at_top_20pct": 0.2600671140939597,
+        "precision_at_top_20pct": 0.005926095849821261,
+        "pr_auc": 0.00855467228651444,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 156746,
+          "review_fraction": 0.5992873364582457,
+          "review_reduction": 0.4007126635417543
+        }
+      },
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 1305,
+        "recall_at_top_10pct": 0.20919540229885059,
+        "precision_at_top_10pct": 0.010437375745526839,
+        "recall_at_top_20pct": 0.3931034482758621,
+        "precision_at_top_20pct": 0.009806732809542926,
+        "pr_auc": 0.01076770173694955,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 107950,
+          "review_fraction": 0.412723901282713,
+          "review_reduction": 0.5872760987172869
+        }
+      }
+    },
+    {
+      "name": "amount_usd_descending",
+      "kind": "baseline",
+      "notes": "Static-FX normalized total amount descending.",
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 1192,
+        "recall_at_top_10pct": 0.1098993288590604,
+        "precision_at_top_10pct": 0.0050084110720293624,
+        "recall_at_top_20pct": 0.20302013422818793,
+        "precision_at_top_20pct": 0.00462617805050563,
+        "pr_auc": 0.01400422930114697,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 150766,
+          "review_fraction": 0.5764239889277166,
+          "review_reduction": 0.4235760110722834
+        }
+      },
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 1305,
+        "recall_at_top_10pct": 0.11187739463601533,
+        "precision_at_top_10pct": 0.005581893255849518,
+        "recall_at_top_20pct": 0.43908045977011495,
+        "precision_at_top_20pct": 0.010953719103056718,
+        "pr_auc": 0.013002550003117544,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 97300,
+          "review_fraction": 0.3720058878629734,
+          "review_reduction": 0.6279941121370266
+        }
+      }
+    },
+    {
+      "name": "transaction_count_descending",
+      "kind": "baseline",
+      "notes": "Transaction count descending.",
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 1192,
+        "recall_at_top_10pct": 0.12751677852348994,
+        "precision_at_top_10pct": 0.00581128612937758,
+        "recall_at_top_20pct": 0.17533557046979867,
+        "precision_at_top_20pct": 0.003995335589073044,
+        "pr_auc": 0.03616168027689155,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 232813,
+          "review_fraction": 0.8901144696697432,
+          "review_reduction": 0.10988553033025683
+        }
+      },
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 1305,
+        "recall_at_top_10pct": 0.09348659003831418,
+        "precision_at_top_10pct": 0.004664321761737269,
+        "recall_at_top_20pct": 0.1739463601532567,
+        "precision_at_top_20pct": 0.004339431477127182,
+        "pr_auc": 0.021681984151567277,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 249226,
+          "review_fraction": 0.9528626866242281,
+          "review_reduction": 0.04713731337577187
+        }
+      }
+    },
+    {
+      "name": "distinct_counterparties_descending",
+      "kind": "baseline",
+      "notes": "Distinct destination account count descending.",
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 1192,
+        "recall_at_top_10pct": 0.1912751677852349,
+        "precision_at_top_10pct": 0.00871692919406637,
+        "recall_at_top_20pct": 0.3162751677852349,
+        "precision_at_top_20pct": 0.007206897210911663,
+        "pr_auc": 0.03895038899127748,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 164806,
+          "review_fraction": 0.6301031526950458,
+          "review_reduction": 0.3698968473049542
+        }
+      },
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 1305,
+        "recall_at_top_10pct": 0.19157088122605365,
+        "precision_at_top_10pct": 0.0095580363970026,
+        "recall_at_top_20pct": 0.31340996168582375,
+        "precision_at_top_20pct": 0.00781862323411902,
+        "pr_auc": 0.025724710491668013,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 233416,
+          "review_fraction": 0.8924165089560513,
+          "review_reduction": 0.10758349104394871
+        }
+      }
+    },
+    {
+      "weights": {
+        "amount": 0.5,
+        "transaction_count": 0.2,
+        "counterparties": 0.3
+      },
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 1192,
+        "recall_at_top_10pct": 0.13590604026845637,
+        "precision_at_top_10pct": 0.006193607585257685,
+        "recall_at_top_20pct": 0.20973154362416108,
+        "precision_at_top_20pct": 0.004779109556307469,
+        "pr_auc": 0.0370618369201656,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 190218,
+          "review_fraction": 0.7272609097930064,
+          "review_reduction": 0.2727390902069936
+        }
+      },
+      "validation_score_tuple": [
+        0.13590604026845637,
+        0.20973154362416108,
+        0.006193607585257685,
+        0.2727390902069936
+      ],
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 1305,
+        "recall_at_top_10pct": 0.13256704980842912,
+        "precision_at_top_10pct": 0.006614161186725799,
+        "recall_at_top_20pct": 0.25440613026819925,
+        "precision_at_top_20pct": 0.006346657490776318,
+        "pr_auc": 0.023450846663109363,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 121887,
+          "review_fraction": 0.46600906119171875,
+          "review_reduction": 0.5339909388082813
+        }
+      },
+      "name": "weighted_signal_heuristic",
+      "kind": "heuristic",
+      "notes": "Validation-tuned weighted heuristic over normalized amount, transaction count, and counterparty breadth."
+    }
+  ],
+  "model_results": [
+    {
+      "name": "logistic_regression_raw_signals",
+      "kind": "model",
+      "notes": "Standardized logistic regression on direct alert signals plus chronology-safe history features, excluding train-only label/pattern rate encodings.",
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 1192,
+        "recall_at_top_10pct": 0.7550335570469798,
+        "precision_at_top_10pct": 0.03440893102920936,
+        "recall_at_top_20pct": 0.9488255033557047,
+        "precision_at_top_20pct": 0.02162069163273499,
+        "pr_auc": 0.19112679713710287,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 29958,
+          "review_fraction": 0.11453848918387789,
+          "review_reduction": 0.8854615108161221
+        }
+      },
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 1305,
+        "recall_at_top_10pct": 0.8467432950191571,
+        "precision_at_top_10pct": 0.04224652087475149,
+        "recall_at_top_20pct": 0.9632183908045977,
+        "precision_at_top_20pct": 0.024029362849113955,
+        "pr_auc": 0.19671118963819667,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 20134,
+          "review_fraction": 0.07697807344535566,
+          "review_reduction": 0.9230219265546443
+        }
+      },
+      "top_features": [
+        {
+          "feature": "log_total_amount_usd",
+          "coefficient": 6.966630515802982
+        },
+        {
+          "feature": "log_transaction_count",
+          "coefficient": -6.526314771704853
+        },
+        {
+          "feature": "log_max_amount_usd",
+          "coefficient": -5.874693809737429
+        },
+        {
+          "feature": "log_unique_destination_accounts",
+          "coefficient": 5.0219177998287545
+        },
+        {
+          "feature": "source_bank_prior_avg_amount_usd",
+          "coefficient": -4.6988160201805576
+        },
+        {
+          "feature": "std_amount_usd",
+          "coefficient": 4.494209001435377
+        },
+        {
+          "feature": "unique_destination_accounts",
+          "coefficient": 3.6551133143681707
+        },
+        {
+          "feature": "min_amount_usd",
+          "coefficient": 3.604486206015875
+        },
+        {
+          "feature": "max_amount",
+          "coefficient": -2.7899628998499986
+        },
+        {
+          "feature": "amount_range_usd",
+          "coefficient": -2.7857894729458947
+        },
+        {
+          "feature": "amount_range",
+          "coefficient": -2.6480525435909734
+        },
+        {
+          "feature": "tx_per_hour",
+          "coefficient": -2.4916343146592035
+        }
+      ]
+    },
+    {
+      "name": "logistic_regression_full",
+      "kind": "model",
+      "notes": "Standardized logistic regression with balanced class weights and train-only rate encodings.",
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 1192,
+        "recall_at_top_10pct": 0.7374161073825504,
+        "precision_at_top_10pct": 0.03360605597186114,
+        "recall_at_top_20pct": 0.9060402684563759,
+        "precision_at_top_20pct": 0.020645753283248264,
+        "pr_auc": 0.14845944280683465,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 34645,
+          "review_fraction": 0.132458306888826,
+          "review_reduction": 0.867541693111174
+        }
+      },
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 1305,
+        "recall_at_top_10pct": 0.6888888888888889,
+        "precision_at_top_10pct": 0.03437069888362135,
+        "recall_at_top_20pct": 0.8183908045977012,
+        "precision_at_top_20pct": 0.020416356024545508,
+        "pr_auc": 0.12852895601008155,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 46735,
+          "review_fraction": 0.17868134809122363,
+          "review_reduction": 0.8213186519087764
+        }
+      },
+      "top_features": [
+        {
+          "feature": "log_transaction_count",
+          "coefficient": -7.022048516542611
+        },
+        {
+          "feature": "std_amount_usd",
+          "coefficient": 5.954747292197306
+        },
+        {
+          "feature": "log_unique_destination_accounts",
+          "coefficient": 5.628865559842113
+        },
+        {
+          "feature": "log_total_amount_usd",
+          "coefficient": 5.124150726184567
+        },
+        {
+          "feature": "source_bank_prior_avg_amount_usd",
+          "coefficient": -5.113523913731039
+        },
+        {
+          "feature": "dominant_payment_format_pattern_rate_train",
+          "coefficient": -4.553833853190153
+        },
+        {
+          "feature": "min_amount_usd",
+          "coefficient": 4.512916077159217
+        },
+        {
+          "feature": "max_amount",
+          "coefficient": -4.418788668297984
+        },
+        {
+          "feature": "transaction_count",
+          "coefficient": 4.378067731395523
+        },
+        {
+          "feature": "log_max_amount_usd",
+          "coefficient": -4.231971116209077
+        },
+        {
+          "feature": "amount_range",
+          "coefficient": -4.188723685002085
+        },
+        {
+          "feature": "dominant_payment_format_positive_rate_train",
+          "coefficient": 4.143922815312485
+        }
+      ]
+    },
+    {
+      "name": "lightgbm_balanced",
+      "kind": "model",
+      "notes": "LightGBM with balanced positive weighting and moderate regularization.",
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 1192,
+        "recall_at_top_10pct": 0.6023489932885906,
+        "precision_at_top_10pct": 0.027450680532191466,
+        "recall_at_top_20pct": 0.8657718120805369,
+        "precision_at_top_20pct": 0.019728164248437232,
+        "pr_auc": 0.023412425053509142,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 36453,
+          "review_fraction": 0.13937083737966155,
+          "review_reduction": 0.8606291626203384
+        }
+      },
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 1305,
+        "recall_at_top_10pct": 0.4804597701149425,
+        "precision_at_top_10pct": 0.02397155528368252,
+        "recall_at_top_20pct": 0.9272030651340997,
+        "precision_at_top_20pct": 0.02313089025252815,
+        "pr_auc": 0.03650269915754444,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 30918,
+          "review_fraction": 0.11820840740953145,
+          "review_reduction": 0.8817915925904686
+        }
+      },
+      "top_features": [
+        {
+          "feature": "ach_ratio",
+          "importance": 28.0
+        },
+        {
+          "feature": "cheque_ratio",
+          "importance": 28.0
+        },
+        {
+          "feature": "repeated_counterparty_ratio",
+          "importance": 17.0
+        },
+        {
+          "feature": "source_bank_frequency_train",
+          "importance": 16.0
+        },
+        {
+          "feature": "source_bank_prior_alert_count",
+          "importance": 14.0
+        },
+        {
+          "feature": "avg_gap_hours",
+          "importance": 11.0
+        },
+        {
+          "feature": "min_amount_usd",
+          "importance": 10.0
+        },
+        {
+          "feature": "tx_per_hour",
+          "importance": 10.0
+        },
+        {
+          "feature": "counterparty_density",
+          "importance": 9.0
+        },
+        {
+          "feature": "max_gap_hours",
+          "importance": 9.0
+        },
+        {
+          "feature": "source_account_hours_since_prev_alert",
+          "importance": 9.0
+        },
+        {
+          "feature": "amount_per_transaction_usd",
+          "importance": 8.0
+        }
+      ],
+      "scale_pos_weight": 567.1839246922519
+    },
+    {
+      "name": "lightgbm_top_recall",
+      "kind": "model",
+      "notes": "LightGBM biased toward top-of-queue recall with deeper trees and lighter child constraints.",
+      "validation_metrics": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 1192,
+        "recall_at_top_10pct": 0.7332214765100671,
+        "precision_at_top_10pct": 0.03341489524392109,
+        "recall_at_top_20pct": 0.8808724832214765,
+        "precision_at_top_20pct": 0.02007226013649137,
+        "pr_auc": 0.18858359831774563,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 34441,
+          "review_fraction": 0.13167835322724944,
+          "review_reduction": 0.8683216467727506
+        }
+      },
+      "test_metrics": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 1305,
+        "recall_at_top_10pct": 0.7816091954022989,
+        "precision_at_top_10pct": 0.038996788499770604,
+        "recall_at_top_20pct": 0.782375478927203,
+        "precision_at_top_20pct": 0.019517883427959702,
+        "pr_auc": 0.32126270211016217,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 90480,
+          "review_fraction": 0.34593106612375984,
+          "review_reduction": 0.6540689338762402
+        }
+      },
+      "top_features": [
+        {
+          "feature": "median_amount_usd",
+          "importance": 10.0
+        },
+        {
+          "feature": "ach_ratio",
+          "importance": 8.0
+        },
+        {
+          "feature": "max_amount_share_usd",
+          "importance": 7.0
+        },
+        {
+          "feature": "source_account_hours_since_prev_alert",
+          "importance": 7.0
+        },
+        {
+          "feature": "source_account_prior_total_amount_usd",
+          "importance": 7.0
+        },
+        {
+          "feature": "cheque_ratio",
+          "importance": 6.0
+        },
+        {
+          "feature": "max_gap_hours",
+          "importance": 5.0
+        },
+        {
+          "feature": "source_bank_hours_since_prev_alert",
+          "importance": 5.0
+        },
+        {
+          "feature": "top_counterparty_amount_share",
+          "importance": 5.0
+        },
+        {
+          "feature": "tx_per_hour",
+          "importance": 5.0
+        },
+        {
+          "feature": "amount_per_transaction_usd",
+          "importance": 4.0
+        },
+        {
+          "feature": "created_hour",
+          "importance": 4.0
+        }
+      ],
+      "scale_pos_weight": 765.6982983345401
+    }
+  ],
+  "benchmark_table": [
+    {
+      "name": "logistic_regression_raw_signals",
+      "kind": "model",
+      "recall_at_top_10pct": 0.8467432950191571,
+      "recall_at_top_20pct": 0.9632183908045977,
+      "precision_at_top_10pct": 0.04224652087475149,
+      "precision_at_top_20pct": 0.024029362849113955,
+      "review_reduction_at_80pct_recall": 0.9230219265546443,
+      "pr_auc": 0.19671118963819667,
+      "notes": "Standardized logistic regression on direct alert signals plus chronology-safe history features, excluding train-only label/pattern rate encodings."
+    },
+    {
+      "name": "lightgbm_top_recall",
+      "kind": "model",
+      "recall_at_top_10pct": 0.7816091954022989,
+      "recall_at_top_20pct": 0.782375478927203,
+      "precision_at_top_10pct": 0.038996788499770604,
+      "precision_at_top_20pct": 0.019517883427959702,
+      "review_reduction_at_80pct_recall": 0.6540689338762402,
+      "pr_auc": 0.32126270211016217,
+      "notes": "LightGBM biased toward top-of-queue recall with deeper trees and lighter child constraints."
+    },
+    {
+      "name": "logistic_regression_full",
+      "kind": "model",
+      "recall_at_top_10pct": 0.6888888888888889,
+      "recall_at_top_20pct": 0.8183908045977012,
+      "precision_at_top_10pct": 0.03437069888362135,
+      "precision_at_top_20pct": 0.020416356024545508,
+      "review_reduction_at_80pct_recall": 0.8213186519087764,
+      "pr_auc": 0.12852895601008155,
+      "notes": "Standardized logistic regression with balanced class weights and train-only rate encodings."
+    },
+    {
+      "name": "lightgbm_balanced",
+      "kind": "model",
+      "recall_at_top_10pct": 0.4804597701149425,
+      "recall_at_top_20pct": 0.9272030651340997,
+      "precision_at_top_10pct": 0.02397155528368252,
+      "precision_at_top_20pct": 0.02313089025252815,
+      "review_reduction_at_80pct_recall": 0.8817915925904686,
+      "pr_auc": 0.03650269915754444,
+      "notes": "LightGBM with balanced positive weighting and moderate regularization."
+    },
+    {
+      "name": "amount_descending",
+      "kind": "baseline",
+      "recall_at_top_10pct": 0.20919540229885059,
+      "recall_at_top_20pct": 0.3931034482758621,
+      "precision_at_top_10pct": 0.010437375745526839,
+      "precision_at_top_20pct": 0.009806732809542926,
+      "review_reduction_at_80pct_recall": 0.5872760987172869,
+      "pr_auc": 0.01076770173694955,
+      "notes": "Raw total amount descending."
+    },
+    {
+      "name": "distinct_counterparties_descending",
+      "kind": "baseline",
+      "recall_at_top_10pct": 0.19157088122605365,
+      "recall_at_top_20pct": 0.31340996168582375,
+      "precision_at_top_10pct": 0.0095580363970026,
+      "precision_at_top_20pct": 0.00781862323411902,
+      "review_reduction_at_80pct_recall": 0.10758349104394871,
+      "pr_auc": 0.025724710491668013,
+      "notes": "Distinct destination account count descending."
+    },
+    {
+      "name": "weighted_signal_heuristic",
+      "kind": "heuristic",
+      "recall_at_top_10pct": 0.13256704980842912,
+      "recall_at_top_20pct": 0.25440613026819925,
+      "precision_at_top_10pct": 0.006614161186725799,
+      "precision_at_top_20pct": 0.006346657490776318,
+      "review_reduction_at_80pct_recall": 0.5339909388082813,
+      "pr_auc": 0.023450846663109363,
+      "notes": "Validation-tuned weighted heuristic over normalized amount, transaction count, and counterparty breadth."
+    },
+    {
+      "name": "amount_usd_descending",
+      "kind": "baseline",
+      "recall_at_top_10pct": 0.11187739463601533,
+      "recall_at_top_20pct": 0.43908045977011495,
+      "precision_at_top_10pct": 0.005581893255849518,
+      "precision_at_top_20pct": 0.010953719103056718,
+      "review_reduction_at_80pct_recall": 0.6279941121370266,
+      "pr_auc": 0.013002550003117544,
+      "notes": "Static-FX normalized total amount descending."
+    },
+    {
+      "name": "chronological_queue",
+      "kind": "baseline",
+      "recall_at_top_10pct": 0.10268199233716475,
+      "recall_at_top_20pct": 0.15172413793103448,
+      "precision_at_top_10pct": 0.005123107508793394,
+      "precision_at_top_20pct": 0.0037850547685955153,
+      "review_reduction_at_80pct_recall": 0.000997878075357006,
+      "pr_auc": 0.003686556977590507,
+      "notes": "Chronological queue ordered by created_at ascending."
+    },
+    {
+      "name": "transaction_count_descending",
+      "kind": "baseline",
+      "recall_at_top_10pct": 0.09348659003831418,
+      "recall_at_top_20pct": 0.1739463601532567,
+      "precision_at_top_10pct": 0.004664321761737269,
+      "precision_at_top_20pct": 0.004339431477127182,
+      "review_reduction_at_80pct_recall": 0.04713731337577187,
+      "pr_auc": 0.021681984151567277,
+      "notes": "Transaction count descending."
+    }
+  ],
+  "champion": {
+    "name": "logistic_regression_raw_signals",
+    "kind": "model",
+    "notes": "Standardized logistic regression on direct alert signals plus chronology-safe history features, excluding train-only label/pattern rate encodings.",
+    "validation_metrics": {
+      "n_alerts": 261554,
+      "n_positive_alerts": 1192,
+      "recall_at_top_10pct": 0.7550335570469798,
+      "precision_at_top_10pct": 0.03440893102920936,
+      "recall_at_top_20pct": 0.9488255033557047,
+      "precision_at_top_20pct": 0.02162069163273499,
+      "pr_auc": 0.19112679713710287,
+      "review_reduction_at_80pct_recall": {
+        "target_recall": 0.8,
+        "alerts_reviewed": 29958,
+        "review_fraction": 0.11453848918387789,
+        "review_reduction": 0.8854615108161221
+      }
+    },
+    "test_metrics": {
+      "n_alerts": 261555,
+      "n_positive_alerts": 1305,
+      "recall_at_top_10pct": 0.8467432950191571,
+      "precision_at_top_10pct": 0.04224652087475149,
+      "recall_at_top_20pct": 0.9632183908045977,
+      "precision_at_top_20pct": 0.024029362849113955,
+      "pr_auc": 0.19671118963819667,
+      "review_reduction_at_80pct_recall": {
+        "target_recall": 0.8,
+        "alerts_reviewed": 20134,
+        "review_fraction": 0.07697807344535566,
+        "review_reduction": 0.9230219265546443
+      }
+    },
+    "top_features": [
+      {
+        "feature": "log_total_amount_usd",
+        "coefficient": 6.966630515802982
+      },
+      {
+        "feature": "log_transaction_count",
+        "coefficient": -6.526314771704853
+      },
+      {
+        "feature": "log_max_amount_usd",
+        "coefficient": -5.874693809737429
+      },
+      {
+        "feature": "log_unique_destination_accounts",
+        "coefficient": 5.0219177998287545
+      },
+      {
+        "feature": "source_bank_prior_avg_amount_usd",
+        "coefficient": -4.6988160201805576
+      },
+      {
+        "feature": "std_amount_usd",
+        "coefficient": 4.494209001435377
+      },
+      {
+        "feature": "unique_destination_accounts",
+        "coefficient": 3.6551133143681707
+      },
+      {
+        "feature": "min_amount_usd",
+        "coefficient": 3.604486206015875
+      },
+      {
+        "feature": "max_amount",
+        "coefficient": -2.7899628998499986
+      },
+      {
+        "feature": "amount_range_usd",
+        "coefficient": -2.7857894729458947
+      },
+      {
+        "feature": "amount_range",
+        "coefficient": -2.6480525435909734
+      },
+      {
+        "feature": "tx_per_hour",
+        "coefficient": -2.4916343146592035
+      }
+    ]
+  },
+  "grouping_variants": [
+    {
+      "grouping_variant": "source_account_6h",
+      "dataset_stats": {
+        "total_alerts": 2028171,
+        "positive_alerts": 4354,
+        "negative_alerts": 2023817,
+        "positive_rate": 0.002146761786851306,
+        "average_transactions_per_alert": 2.503903763538676,
+        "alerts_with_typology_assigned": 2734,
+        "typology_assignment_rate": 0.0013480125689599152
+      },
+      "baseline_strength": {
+        "amount_descending": 0.2059202059202059,
+        "amount_usd_descending": 0.09137709137709138,
+        "weighted_signal_heuristic": 0.12355212355212356
+      },
+      "champion_candidate_name": "logistic_regression_raw_signals",
+      "champion_test_metrics": {
+        "n_alerts": 405635,
+        "n_positive_alerts": 1554,
+        "recall_at_top_10pct": 0.9575289575289575,
+        "precision_at_top_10pct": 0.03668277290208066,
+        "recall_at_top_20pct": 0.9961389961389961,
+        "precision_at_top_20pct": 0.019081193683976976,
+        "pr_auc": 0.22864253045170885,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 19848,
+          "review_fraction": 0.04893068891984173,
+          "review_reduction": 0.9510693110801582
+        }
+      }
+    },
+    {
+      "grouping_variant": "source_destination_24h",
+      "dataset_stats": {
+        "total_alerts": 2167842,
+        "positive_alerts": 5075,
+        "negative_alerts": 2162767,
+        "positive_rate": 0.00234103776935773,
+        "average_transactions_per_alert": 2.342580778488469,
+        "alerts_with_typology_assigned": 3052,
+        "typology_assignment_rate": 0.0014078516792275452
+      },
+      "baseline_strength": {
+        "amount_descending": 0.11557788944723618,
+        "amount_usd_descending": 0.04355108877721943,
+        "weighted_signal_heuristic": 0.039642657733109994
+      },
+      "champion_candidate_name": "logistic_regression_raw_signals",
+      "champion_test_metrics": {
+        "n_alerts": 433569,
+        "n_positive_alerts": 1791,
+        "recall_at_top_10pct": 0.9011725293132329,
+        "precision_at_top_10pct": 0.037225822819844545,
+        "recall_at_top_20pct": 0.9826912339475153,
+        "precision_at_top_20pct": 0.020296607237585626,
+        "pr_auc": 0.06829161023678876,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "alerts_reviewed": 25247,
+          "review_fraction": 0.05823063918315193,
+          "review_reduction": 0.941769360816848
+        }
+      }
+    }
+  ]
+}

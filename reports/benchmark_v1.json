@@ -1,0 +1,172 @@
+{
+  "dataset_stats": {
+    "total_alerts": 1307771,
+    "positive_alerts": 3878,
+    "negative_alerts": 1303893,
+    "positive_rate": 0.002965350967409432,
+    "average_transactions_per_alert": 3.8832066164489043,
+    "alerts_with_typology_assigned": 2358,
+    "typology_assignment_rate": 0.0018030679683216709
+  },
+  "split_stats": {
+    "train": {
+      "total_alerts": 784662,
+      "positive_alerts": 1381,
+      "negative_alerts": 783281,
+      "positive_rate": 0.0017599934748974719,
+      "average_transactions_per_alert": 3.4758290830956513,
+      "alerts_with_typology_assigned": 664,
+      "typology_assignment_rate": 0.000846224234128835
+    },
+    "validation": {
+      "total_alerts": 261554,
+      "positive_alerts": 1192,
+      "negative_alerts": 260362,
+      "positive_rate": 0.004557376297055293,
+      "average_transactions_per_alert": 5.611678659091431,
+      "alerts_with_typology_assigned": 744,
+      "typology_assignment_rate": 0.0028445368833969276
+    },
+    "test": {
+      "total_alerts": 261555,
+      "positive_alerts": 1305,
+      "negative_alerts": 260250,
+      "positive_rate": 0.004989390376784997,
+      "average_transactions_per_alert": 3.3768691097474717,
+      "alerts_with_typology_assigned": 950,
+      "typology_assignment_rate": 0.0036321232627936763
+    }
+  },
+  "chronology_checks": {
+    "min_created_at": "2022-09-01T00:00:00Z",
+    "max_created_at": "2022-09-18T16:18:00Z",
+    "timespan_days": 17.679166666666667,
+    "unique_calendar_days": [
+      "2022-09-01",
+      "2022-09-02",
+      "2022-09-03",
+      "2022-09-04",
+      "2022-09-05",
+      "2022-09-06",
+      "2022-09-07",
+      "2022-09-08",
+      "2022-09-09",
+      "2022-09-10",
+      "2022-09-11",
+      "2022-09-12",
+      "2022-09-13",
+      "2022-09-14",
+      "2022-09-15",
+      "2022-09-16",
+      "2022-09-17",
+      "2022-09-18"
+    ],
+    "duplicate_created_at_count": 1292951,
+    "warnings": [
+      "Converter observed 2418736 out-of-order transaction rows."
+    ]
+  },
+  "ranking_metrics": {
+    "validation": {
+      "chronological_queue": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 1192,
+        "recall_at_top_10pct": 0.1098993288590604,
+        "precision_at_top_10pct": 0.0050084110720293624,
+        "recall_at_top_20pct": 0.18624161073825504,
+        "precision_at_top_20pct": 0.004243849286001032,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "review_fraction": 0.8039410599723192,
+          "review_reduction": 0.19605894002768076,
+          "alerts_reviewed": 210274
+        }
+      },
+      "amount_descending": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 1192,
+        "recall_at_top_10pct": 0.16023489932885907,
+        "precision_at_top_10pct": 0.007302339807309986,
+        "recall_at_top_20pct": 0.2600671140939597,
+        "precision_at_top_20pct": 0.005926095849821261,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "review_fraction": 0.5992873364582457,
+          "review_reduction": 0.4007126635417543,
+          "alerts_reviewed": 156746
+        }
+      },
+      "althea_score": {
+        "n_alerts": 261554,
+        "n_positive_alerts": 1192,
+        "recall_at_top_10pct": 0.02348993288590604,
+        "precision_at_top_10pct": 0.0010705000764642911,
+        "recall_at_top_20pct": 0.08976510067114093,
+        "precision_at_top_20pct": 0.0020454588900995965,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "review_fraction": 0.8672893551618404,
+          "review_reduction": 0.13271064483815964,
+          "alerts_reviewed": 226843
+        }
+      }
+    },
+    "test": {
+      "chronological_queue": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 1305,
+        "recall_at_top_10pct": 0.10268199233716475,
+        "precision_at_top_10pct": 0.005123107508793394,
+        "recall_at_top_20pct": 0.15172413793103448,
+        "precision_at_top_20pct": 0.0037850547685955153,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "review_fraction": 0.999002121924643,
+          "review_reduction": 0.000997878075357006,
+          "alerts_reviewed": 261294
+        }
+      },
+      "amount_descending": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 1305,
+        "recall_at_top_10pct": 0.20919540229885059,
+        "precision_at_top_10pct": 0.010437375745526839,
+        "recall_at_top_20pct": 0.3931034482758621,
+        "precision_at_top_20pct": 0.009806732809542926,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "review_fraction": 0.412723901282713,
+          "review_reduction": 0.5872760987172869,
+          "alerts_reviewed": 107950
+        }
+      },
+      "althea_score": {
+        "n_alerts": 261555,
+        "n_positive_alerts": 1305,
+        "recall_at_top_10pct": 0.038314176245210725,
+        "precision_at_top_10pct": 0.00191160727940052,
+        "recall_at_top_20pct": 0.08735632183908046,
+        "precision_at_top_20pct": 0.002179273957676206,
+        "review_reduction_at_80pct_recall": {
+          "target_recall": 0.8,
+          "review_fraction": 0.9106880006117261,
+          "review_reduction": 0.08931199938827394,
+          "alerts_reviewed": 238195
+        }
+      }
+    },
+    "althea_score": {
+      "status": "available",
+      "model_version": "model-50fd74dbbda8"
+    }
+  },
+  "althea_baseline_status": {
+    "status": "available",
+    "tenant_id": "default-bank",
+    "model_version": "model-50fd74dbbda8",
+    "scored_alert_count": 523109
+  },
+  "conversion_summary_path": "C:\\Users\\Users\\OneDrive\\\u0420\u0430\u0431\u043e\u0447\u0438\u0439 \u0441\u0442\u043e\u043b\\Althea\\data\\processed\\ibm_aml_alerts\\hi_small_alerts.summary.json",
+  "benchmark_generated_at": "2026-04-18T05:10:33.645400Z",
+  "alert_jsonl_path": "C:\\Users\\Users\\OneDrive\\\u0420\u0430\u0431\u043e\u0447\u0438\u0439 \u0441\u0442\u043e\u043b\\Althea\\data\\processed\\ibm_aml_alerts\\hi_small_alerts.jsonl"
+}
