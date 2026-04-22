@@ -713,6 +713,16 @@ def get_investigation_context(
     except Exception:
         pass
 
+    analyst_enrichment = _safe_get(
+        lambda: request.app.state.analyst_workspace_enrichment_service.generate_sections(
+            tenant_id=tenant_id,
+            alert_id=alert_id,
+            run_id=rid,
+            network_graph=network_graph,
+            case_status=case_status,
+        )
+    ) or {}
+
     elapsed = time.perf_counter() - t0
     logger.info(
         "Investigation context assembled",
@@ -731,6 +741,13 @@ def get_investigation_context(
         "outcome": outcome,
         "case_status": case_status,
         "model_metadata": model_metadata,
+        "customer_profile": analyst_enrichment.get("customer_profile"),
+        "account_profile": analyst_enrichment.get("account_profile"),
+        "behavior_baseline": analyst_enrichment.get("behavior_baseline"),
+        "counterparty_summary": analyst_enrichment.get("counterparty_summary"),
+        "geography_payment_summary": analyst_enrichment.get("geography_payment_summary"),
+        "screening_summary": analyst_enrichment.get("screening_summary"),
+        "data_availability": analyst_enrichment.get("data_availability"),
         "assembled_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
         "assembly_latency_seconds": round(elapsed, 3),
     }

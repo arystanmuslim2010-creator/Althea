@@ -124,6 +124,62 @@ describe('AlertDetails', () => {
           { step: 2, description: 'Validate the source of funds.' },
         ],
       },
+      customer_profile: {
+        customer_label: 'Customer U1',
+        segment: 'retail',
+        risk_tier: 'high',
+        country: 'US',
+        business_purpose: 'Consumer payments',
+        kyc_status: 'current',
+        pep_flag: false,
+        sanctions_flag: false,
+        onboarded_at: '2024-01-01T00:00:00Z',
+        assigned_analyst_label: 'analyst@althea.local',
+      },
+      account_profile: {
+        account_label: 'Retail Checking 1',
+        account_type: 'checking',
+        account_status: 'active',
+        opened_at: '2024-01-01T00:00:00Z',
+        account_age_days: 420,
+      },
+      behavior_baseline: {
+        baseline_avg_amount: 3200,
+        baseline_monthly_outflow: 15000,
+        baseline_tx_count: 12,
+        current_window_outflow: 18531.76,
+        current_window_tx_count: 1,
+        prior_alert_count_30d: 1,
+        prior_alert_count_90d: 2,
+        prior_case_count_90d: 1,
+        deviation_summary: 'Current alert amount is materially above the recent account activity baseline.',
+      },
+      counterparty_summary: {
+        top_counterparties: ['Counterparty Alpha (2 interactions)'],
+        new_counterparty_share: 1,
+        recurring_counterparty_share: 0,
+        counterparty_countries: ['US', 'GB'],
+        counterparty_bank_count: 2,
+      },
+      geography_payment_summary: {
+        is_cross_border: true,
+        countries_involved: ['US', 'GB'],
+        payment_channels: ['wire'],
+        currency_mix: ['USD'],
+      },
+      screening_summary: {
+        sanctions_hits: [],
+        watchlist_hits: [],
+        pep_hits: [],
+        adverse_media_hits: [],
+        screening_checked_at: '2026-01-01T00:00:00Z',
+        screening_status: 'no_hits',
+      },
+      data_availability: {
+        missing_sections: [],
+        coverage_status: 'enriched',
+        freshness_status: 'current',
+      },
       sar_draft: {
         narrative: 'Preliminary draft text for compliance review only.',
         risk_indicators: ['Risk score above threshold'],
@@ -180,11 +236,21 @@ describe('AlertDetails', () => {
     expect(screen.getByText('Case CASE-1 created and ready for investigation.')).not.toBeNull()
     expect(screen.getByText('View Case')).not.toBeNull()
     expect(screen.queryByText('Create Case')).toBeNull()
+    expect(screen.getByText('Customer & Account Profile')).not.toBeNull()
+    expect(screen.getByText('Behavior vs Baseline')).not.toBeNull()
+    expect(screen.getByText('Counterparty & Geography')).not.toBeNull()
+    expect(screen.getByText('Screening & Data Coverage')).not.toBeNull()
     expect(screen.getByText('Recommended Next Steps')).not.toBeNull()
     expect(screen.getByText('Narrative Draft')).not.toBeNull()
     expect(screen.getByText('Preliminary SAR/STR Support Draft')).not.toBeNull()
+    expect(screen.getByText('No screening hits identified')).not.toBeNull()
     expect(screen.queryByText('Some investigation context is temporarily unavailable.')).toBeNull()
     expect(screen.queryByText('"feature_attribution"')).toBeNull()
+
+    const headings = Array.from(document.querySelectorAll('h2')).map((node) => node.textContent)
+    expect(headings.indexOf('Analyst Summary')).toBeLessThan(headings.indexOf('Customer & Account Profile'))
+    expect(headings.indexOf('Customer & Account Profile')).toBeLessThan(headings.indexOf('Behavior vs Baseline'))
+    expect(headings.indexOf('Behavior vs Baseline')).toBeLessThan(headings.indexOf('Recommended Next Steps'))
 
     fireEvent.click(screen.getByText('View raw explanation'))
     expect(screen.getByText((content) => content.includes('feature_attribution'))).not.toBeNull()
@@ -204,6 +270,13 @@ describe('AlertDetails', () => {
       outcome: null,
       case_status: null,
       model_metadata: { model_version: 'model-v1' },
+      customer_profile: {},
+      account_profile: {},
+      behavior_baseline: {},
+      counterparty_summary: {},
+      geography_payment_summary: {},
+      screening_summary: { screening_status: 'unavailable' },
+      data_availability: { missing_sections: ['screening_summary'], coverage_status: 'limited', freshness_status: 'legacy_only' },
     })
     api.getNetworkGraph.mockRejectedValueOnce(new Error('graph failed'))
     api.getNarrativeDraft.mockRejectedValueOnce(new Error('narrative failed'))
@@ -217,6 +290,7 @@ describe('AlertDetails', () => {
     await waitFor(() => expect(screen.getByText('Network Graph')).not.toBeNull())
     await waitFor(() => expect(screen.getByText('Network graph is temporarily unavailable.')).not.toBeNull())
     expect(screen.getByText('Narrative draft is temporarily unavailable.')).not.toBeNull()
+    expect(screen.getByText('Screening data unavailable')).not.toBeNull()
     expect(screen.queryByText('Some investigation context is temporarily unavailable.')).toBeNull()
   })
 

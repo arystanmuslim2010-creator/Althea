@@ -10,6 +10,7 @@ from events.event_bus import EventBus
 from graph.graph_feature_service import GraphFeatureService
 from graph.relationship_graph_service import RelationshipGraphService
 from intelligence.global_pattern_service import GlobalPatternService
+from investigation.analyst_workspace_enrichment_service import AnalystWorkspaceEnrichmentService
 from investigation.guidance_service import InvestigationGuidanceService
 from investigation.investigation_summary_service import InvestigationSummaryService
 from investigation.narrative_service import InvestigationNarrativeService
@@ -495,6 +496,14 @@ def get_global_pattern_service() -> GlobalPatternService:
     return GlobalPatternService(get_repository())
 
 
+@lru_cache(maxsize=1)
+def get_analyst_workspace_enrichment_service() -> AnalystWorkspaceEnrichmentService:
+    return AnalystWorkspaceEnrichmentService(
+        repository=get_repository(),
+        enrichment_repository=get_enrichment_repository(),
+    )
+
+
 def build_app_state() -> dict:
     settings = get_settings()
     repository = get_repository()
@@ -549,6 +558,7 @@ def build_app_state() -> dict:
         "relationship_graph_service": get_relationship_graph_service(),
         "feedback_service": get_feedback_service(),
         "global_pattern_service": get_global_pattern_service(),
+        "analyst_workspace_enrichment_service": get_analyst_workspace_enrichment_service(),
         "investigation_time_service": get_investigation_time_service(),
         "time_scoring_service": get_time_scoring_service(),
         "training_run_service": get_training_run_service(),

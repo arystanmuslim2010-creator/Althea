@@ -39,6 +39,112 @@ function toNumber(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+function toNullableNumber(value) {
+  if (value == null || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function toNullableBoolean(value) {
+  if (value == null || value === '') return null
+  if (typeof value === 'boolean') return value
+  const normalized = String(value).trim().toLowerCase()
+  if (!normalized) return null
+  if (['true', '1', 'yes'].includes(normalized)) return true
+  if (['false', '0', 'no'].includes(normalized)) return false
+  return null
+}
+
+function toStringArray(value) {
+  return toSafeArray(value).map((item) => String(item ?? '')).filter(Boolean)
+}
+
+function normalizeCustomerProfile(payload) {
+  const profile = toSafeObject(payload)
+  return {
+    customer_label: String(profile.customer_label ?? ''),
+    segment: String(profile.segment ?? ''),
+    risk_tier: String(profile.risk_tier ?? ''),
+    country: String(profile.country ?? ''),
+    business_purpose: String(profile.business_purpose ?? ''),
+    kyc_status: String(profile.kyc_status ?? ''),
+    pep_flag: toNullableBoolean(profile.pep_flag),
+    sanctions_flag: toNullableBoolean(profile.sanctions_flag),
+    onboarded_at: profile.onboarded_at ?? null,
+    assigned_analyst_label: String(profile.assigned_analyst_label ?? ''),
+  }
+}
+
+function normalizeAccountProfile(payload) {
+  const profile = toSafeObject(payload)
+  return {
+    account_label: String(profile.account_label ?? ''),
+    account_type: String(profile.account_type ?? ''),
+    account_status: String(profile.account_status ?? ''),
+    opened_at: profile.opened_at ?? null,
+    account_age_days: toNullableNumber(profile.account_age_days),
+  }
+}
+
+function normalizeBehaviorBaseline(payload) {
+  const baseline = toSafeObject(payload)
+  return {
+    baseline_avg_amount: toNullableNumber(baseline.baseline_avg_amount),
+    baseline_monthly_inflow: toNullableNumber(baseline.baseline_monthly_inflow),
+    baseline_monthly_outflow: toNullableNumber(baseline.baseline_monthly_outflow),
+    baseline_tx_count: toNullableNumber(baseline.baseline_tx_count),
+    current_window_inflow: toNullableNumber(baseline.current_window_inflow),
+    current_window_outflow: toNullableNumber(baseline.current_window_outflow),
+    current_window_tx_count: toNullableNumber(baseline.current_window_tx_count),
+    deviation_summary: String(baseline.deviation_summary ?? ''),
+    prior_alert_count_30d: toNullableNumber(baseline.prior_alert_count_30d),
+    prior_alert_count_90d: toNullableNumber(baseline.prior_alert_count_90d),
+    prior_case_count_90d: toNullableNumber(baseline.prior_case_count_90d),
+  }
+}
+
+function normalizeCounterpartySummary(payload) {
+  const summary = toSafeObject(payload)
+  return {
+    top_counterparties: toStringArray(summary.top_counterparties),
+    new_counterparty_share: toNullableNumber(summary.new_counterparty_share),
+    recurring_counterparty_share: toNullableNumber(summary.recurring_counterparty_share),
+    counterparty_countries: toStringArray(summary.counterparty_countries),
+    counterparty_bank_count: toNullableNumber(summary.counterparty_bank_count),
+  }
+}
+
+function normalizeGeographyPaymentSummary(payload) {
+  const summary = toSafeObject(payload)
+  return {
+    is_cross_border: toNullableBoolean(summary.is_cross_border),
+    countries_involved: toStringArray(summary.countries_involved),
+    payment_channels: toStringArray(summary.payment_channels),
+    currency_mix: toStringArray(summary.currency_mix),
+  }
+}
+
+function normalizeScreeningSummary(payload) {
+  const summary = toSafeObject(payload)
+  return {
+    sanctions_hits: toStringArray(summary.sanctions_hits),
+    watchlist_hits: toStringArray(summary.watchlist_hits),
+    pep_hits: toStringArray(summary.pep_hits),
+    adverse_media_hits: toStringArray(summary.adverse_media_hits),
+    screening_checked_at: summary.screening_checked_at ?? null,
+    screening_status: String(summary.screening_status ?? 'unavailable'),
+  }
+}
+
+function normalizeDataAvailability(payload) {
+  const summary = toSafeObject(payload)
+  return {
+    missing_sections: toStringArray(summary.missing_sections),
+    coverage_status: String(summary.coverage_status ?? 'limited'),
+    freshness_status: String(summary.freshness_status ?? 'legacy_only'),
+  }
+}
+
 export function mapCaseStatusForUpdate(status) {
   const raw = String(status || '').trim()
   if (!raw) return undefined
@@ -125,6 +231,13 @@ export function normalizeInvestigationContext(payload) {
     outcome: context.outcome ?? null,
     case_status: context.case_status ?? null,
     model_metadata: toSafeObject(context.model_metadata),
+    customer_profile: normalizeCustomerProfile(context.customer_profile),
+    account_profile: normalizeAccountProfile(context.account_profile),
+    behavior_baseline: normalizeBehaviorBaseline(context.behavior_baseline),
+    counterparty_summary: normalizeCounterpartySummary(context.counterparty_summary),
+    geography_payment_summary: normalizeGeographyPaymentSummary(context.geography_payment_summary),
+    screening_summary: normalizeScreeningSummary(context.screening_summary),
+    data_availability: normalizeDataAvailability(context.data_availability),
     assembled_at: context.assembled_at ?? null,
     assembly_latency_seconds: toNumber(context.assembly_latency_seconds, 0),
   }

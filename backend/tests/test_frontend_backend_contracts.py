@@ -12,6 +12,7 @@ from api.routers.alerts_router import router as alerts_router
 from api.routers.intelligence_router import router as intelligence_router
 from api.routers.investigation_router import router as investigation_router
 from api.routers.pipeline_router import router as pipeline_router
+from investigation.analyst_workspace_enrichment_service import AnalystWorkspaceEnrichmentService
 from core.config import Settings
 from core.security import (
     build_access_token,
@@ -451,6 +452,22 @@ def client():
     app.state.sar_generator = SimpleNamespace(generate_sar_draft=lambda **_: {"narrative": "draft"})
     app.state.narrative_service = _FakeNarrativeService()
     app.state.global_pattern_service = SimpleNamespace(get_signals_for_alert=lambda **_: [{"signal_type": "cross_tenant"}])
+    app.state.analyst_workspace_enrichment_service = AnalystWorkspaceEnrichmentService(
+        repository=app.state.repository,
+        enrichment_repository=SimpleNamespace(
+            get_enrichment_context_snapshot=lambda **_: {
+                "alert_payload": dict(app.state.repository._alert_payload),
+                "entity_ids": ["U1"],
+                "account_events": [],
+                "alert_outcomes": [],
+                "case_actions": [],
+            },
+            list_master_customers=lambda tenant_id: [],
+            list_master_accounts=lambda tenant_id: [],
+            list_master_counterparties=lambda tenant_id: [],
+            list_latest_source_health=lambda tenant_id: [],
+        ),
+    )
     app.state.event_bus = SimpleNamespace(publish=lambda **_: None)
     app.state.metrics = SimpleNamespace(
         set_gauge=lambda *args, **kwargs: None,
@@ -750,6 +767,14 @@ def test_investigation_context_contract_for_ui(client: TestClient):
     assert "network_graph" in payload
     assert "global_signals" in payload
     assert "model_metadata" in payload
+    assert "customer_profile" in payload
+    assert "account_profile" in payload
+    assert "behavior_baseline" in payload
+    assert "counterparty_summary" in payload
+    assert "geography_payment_summary" in payload
+    assert "screening_summary" in payload
+    assert "data_availability" in payload
+    assert payload["screening_summary"]["screening_status"] == "unavailable"
 
 
 def test_network_graph_endpoint_contract_for_normal_alert(client: TestClient):

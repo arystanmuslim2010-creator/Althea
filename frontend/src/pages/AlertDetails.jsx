@@ -105,10 +105,46 @@ function formatHours(value) {
   return `${numeric.toFixed(numeric >= 10 ? 0 : 1)}h`
 }
 
+function formatDays(value) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return 'Not available'
+  return `${numeric.toFixed(0)}d`
+}
+
+function formatCurrency(value) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return 'Not available'
+  return numeric.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
+}
+
+function formatPercent(value) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return 'Not available'
+  return `${(numeric * 100).toFixed(0)}%`
+}
+
+function formatBooleanState(value, labels = ['No', 'Yes']) {
+  if (value == null) return 'Not available'
+  return value ? labels[1] : labels[0]
+}
+
 function formatImpact(value) {
   const numeric = Number(value)
   if (!Number.isFinite(numeric)) return 'Not available'
   return `${numeric >= 0 ? '+' : ''}${numeric.toFixed(3)}`
+}
+
+function looksLikeOpaqueId(value) {
+  const text = cleanText(value)
+  if (!text) return false
+  return /^[0-9a-f]{24,}$/i.test(text) || /^[0-9a-f]{8,}-[0-9a-f-]{12,}$/i.test(text)
+}
+
+function formatAssignmentDisplay(value, fallback = 'Unassigned') {
+  const text = cleanText(value)
+  if (!text) return fallback
+  if (looksLikeOpaqueId(text)) return 'Assigned analyst unavailable'
+  return text
 }
 
 function uniqueTextList(items) {
@@ -196,6 +232,35 @@ function Metric({ label, value }) {
   )
 }
 
+function DetailRow({ label, value }) {
+  if (value == null || value === '' || value === 'Not available') return null
+  if (!hasContent(value)) return null
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-[var(--border)] py-2 last:border-b-0">
+      <div className="text-[0.72rem] font-semibold uppercase tracking-wide text-[var(--muted)]">{label}</div>
+      <div className="text-right text-sm text-[var(--text)]">{value}</div>
+    </div>
+  )
+}
+
+function CompactList({ title, items, emptyLabel }) {
+  const values = uniqueTextList(items)
+  return (
+    <div>
+      <div className="text-[0.72rem] font-semibold uppercase tracking-wide text-[var(--muted)]">{title}</div>
+      {values.length ? (
+        <ul className="mb-0 mt-2 list-disc pl-5 text-sm text-[var(--text)]">
+          {values.map((item) => (
+            <li key={item} className="mt-1">{item}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mb-0 mt-2 text-sm text-[var(--muted)]">{emptyLabel}</p>
+      )}
+    </div>
+  )
+}
+
 function RawJsonDisclosure({ label, payload }) {
   const [open, setOpen] = useState(false)
   if (!hasContent(payload)) return null
@@ -207,7 +272,7 @@ function RawJsonDisclosure({ label, payload }) {
         onClick={() => setOpen((current) => !current)}
       >
         <span>{open ? `Hide ${label.toLowerCase()}` : label}</span>
-        <span className="text-[var(--muted)]">{open ? '−' : '+'}</span>
+        <span className="text-[var(--muted)]">{open ? '-' : '+'}</span>
       </button>
       {open ? (
         <pre className="m-0 overflow-x-auto border-t border-[var(--border)] px-3 py-3 text-xs text-[var(--text)] whitespace-pre-wrap">
@@ -476,12 +541,16 @@ export function AlertDetails() {
   )
 
   const investigationSummary = useMemo(() => toObject(context?.investigation_summary), [context])
+  const customerProfile = useMemo(() => toObject(context?.customer_profile), [context])
+  const accountProfile = useMemo(() => toObject(context?.account_profile), [context])
+  const behaviorBaseline = useMemo(() => toObject(context?.behavior_baseline), [context])
+  const counterpartySummary = useMemo(() => toObject(context?.counterparty_summary), [context])
+  const geographySummary = useMemo(() => toObject(context?.geography_payment_summary), [context])
+  const screeningSummary = useMemo(() => toObject(context?.screening_summary), [context])
+  const dataAvailability = useMemo(() => toObject(context?.data_availability), [context])
   const summaryObservations = useMemo(
-    () => uniqueTextList([
-      ...toArray(investigationSummary.key_observations),
-      ...toArray(narrativeDraft?.sections?.risk_indicators),
-    ]).slice(0, 8),
-    [investigationSummary, narrativeDraft],
+    () => uniqueTextList(toArray(investigationSummary.key_observations)).slice(0, 8),
+    [investigationSummary],
   )
   const recommendedSteps = useMemo(
     () => uniqueTextList([
@@ -502,10 +571,22 @@ export function AlertDetails() {
   const hasCase = Boolean(caseId)
   const riskBand = cleanText(alert?.risk_band || investigationSummary.risk_band)
   const currentAssignment = cleanText(caseInfo?.assigned_to || queueItem?.assigned_to)
+  const assignmentDisplay = useMemo(
+    () => formatAssignmentDisplay(customerProfile.assigned_analyst_label || currentAssignment),
+    [customerProfile, currentAssignment],
+  )
   const typology = cleanText(alert?.typology || investigationSummary.typology)
   const segment = cleanText(alert?.segment || investigationSummary.segment)
-  const summaryCustomer = cleanText(investigationSummary.customer || alert?.customer_name || alert?.user_id)
+  const summaryCustomer = cleanText(
+    customerProfile.customer_label || investigationSummary.customer || alert?.customer_name || alert?.user_id,
+  )
   const workflowStatus = cleanText(queueItem?.status)
+  const coverageStatus = cleanText(dataAvailability.coverage_status)
+  const freshnessStatus = cleanText(dataAvailability.freshness_status)
+  const missingSections = useMemo(
+    () => uniqueTextList(toArray(dataAvailability.missing_sections).map((item) => titleCase(String(item || '').replace(/_/g, ' ')))),
+    [dataAvailability],
+  )
   const caseActionText = useMemo(() => {
     if (hasCase && caseStatus === 'closed') {
       return 'Case is closed. Review the final outcome and supporting notes if follow-up is required.'
@@ -518,6 +599,13 @@ export function AlertDetails() {
     }
     return 'No case exists yet. Create a case to move this alert into the governed investigation workflow.'
   }, [caseStatus, hasCase])
+
+  const screeningStatusLabel = useMemo(() => {
+    const normalized = String(screeningSummary.screening_status || '').toLowerCase()
+    if (normalized === 'hits_found') return 'Screening hits require review'
+    if (normalized === 'no_hits') return 'No screening hits identified'
+    return 'Screening data unavailable'
+  }, [screeningSummary])
 
   const addNote = async () => {
     const text = noteText.trim()
@@ -670,7 +758,7 @@ export function AlertDetails() {
           )}
           {currentAssignment ? (
             <span className="inline-flex items-center rounded-full bg-[var(--surface2)] px-2.5 py-1 text-[0.72rem] font-semibold text-[var(--muted)]">
-              Assigned: {currentAssignment}
+              Assigned: {assignmentDisplay}
             </span>
           ) : null}
         </div>
@@ -694,10 +782,10 @@ export function AlertDetails() {
           <Metric label="Case Status" value={formatStatus(caseStatus, hasCase ? 'Open' : 'No case')} />
           <Metric label="Typology" value={formatDisplayValue(typology)} />
           <Metric label="Segment" value={formatDisplayValue(segment)} />
-          <Metric label="Assignment" value={formatDisplayValue(currentAssignment, 'Unassigned')} />
+          <Metric label="Assignment" value={assignmentDisplay} />
           <Metric label="Workflow Status" value={formatStatus(workflowStatus, 'Open')} />
           <Metric label="Alert Age" value={formatHours(queueItem?.alert_age_hours)} />
-          <Metric label="Model Version" value={formatDisplayValue(modelMetadata.model_version || alert.model_version)} />
+          <Metric label="Customer" value={formatDisplayValue(summaryCustomer)} />
         </div>
       </SectionCard>
 
@@ -736,7 +824,7 @@ export function AlertDetails() {
           <div className="space-y-2 text-sm text-[var(--text)]">
             <div><strong>Case ID:</strong> {hasCase ? caseId : 'No case yet'}</div>
             <div><strong>Case Status:</strong> {formatStatus(caseStatus, hasCase ? 'Open' : 'No case')}</div>
-            <div><strong>Assigned To:</strong> {formatDisplayValue(currentAssignment, 'Unassigned')}</div>
+            <div><strong>Assigned To:</strong> {assignmentDisplay}</div>
             <div><strong>Overdue Review:</strong> {queueItem?.overdue_review ? 'Yes' : 'No'}</div>
           </div>
 
@@ -771,6 +859,130 @@ export function AlertDetails() {
             ) : (
               <p className="mt-2 mb-0 text-xs text-[var(--muted)]">Workflow actions require backend permissions from your current session.</p>
             )}
+          </div>
+        </SectionCard>
+      </div>
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <SectionCard
+          title="Customer & Account Profile"
+          subtitle="Known customer and account context available before deeper technical review."
+        >
+          {hasContent(customerProfile) || hasContent(accountProfile) ? (
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface2)] px-4 py-3">
+                <div className="text-[0.72rem] font-semibold uppercase tracking-wide text-[var(--muted)]">Customer Profile</div>
+                <div className="mt-2">
+                  <DetailRow label="Customer" value={formatDisplayValue(customerProfile.customer_label)} />
+                  <DetailRow label="Segment" value={formatDisplayValue(customerProfile.segment)} />
+                  <DetailRow label="Risk Tier" value={formatStatus(customerProfile.risk_tier)} />
+                  <DetailRow label="Country" value={formatDisplayValue(customerProfile.country)} />
+                  <DetailRow label="Business Purpose" value={formatDisplayValue(customerProfile.business_purpose)} />
+                  <DetailRow label="KYC Status" value={formatStatus(customerProfile.kyc_status)} />
+                  <DetailRow label="PEP Flag" value={formatBooleanState(customerProfile.pep_flag)} />
+                  <DetailRow label="Sanctions Flag" value={formatBooleanState(customerProfile.sanctions_flag)} />
+                  <DetailRow label="Onboarded" value={formatTimestamp(customerProfile.onboarded_at)} />
+                </div>
+              </div>
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface2)] px-4 py-3">
+                <div className="text-[0.72rem] font-semibold uppercase tracking-wide text-[var(--muted)]">Account Profile</div>
+                <div className="mt-2">
+                  <DetailRow label="Account" value={formatDisplayValue(accountProfile.account_label)} />
+                  <DetailRow label="Account Type" value={formatStatus(accountProfile.account_type)} />
+                  <DetailRow label="Status" value={formatStatus(accountProfile.account_status)} />
+                  <DetailRow label="Opened" value={formatTimestamp(accountProfile.opened_at)} />
+                  <DetailRow label="Account Age" value={formatDays(accountProfile.account_age_days)} />
+                </div>
+              </div>
+            </div>
+          ) : (
+            <p className="m-0 text-sm text-[var(--muted)]">Customer and account profile details are not yet available for this alert.</p>
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="Behavior vs Baseline"
+          subtitle="Recent activity compared with known account history and prior investigation workload."
+        >
+          {hasContent(behaviorBaseline) ? (
+            <div className="space-y-4">
+              <p className="m-0 text-sm text-[var(--text)]">
+                {cleanText(behaviorBaseline.deviation_summary) || 'Recent account history is limited; baseline comparison is not yet established.'}
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                <Metric label="Baseline Avg Amount" value={formatCurrency(behaviorBaseline.baseline_avg_amount)} />
+                <Metric label="Current Window Outflow" value={formatCurrency(behaviorBaseline.current_window_outflow)} />
+                <Metric label="Current Window Inflow" value={formatCurrency(behaviorBaseline.current_window_inflow)} />
+                <Metric label="Baseline Tx Count" value={formatDisplayValue(behaviorBaseline.baseline_tx_count)} />
+                <Metric label="Current Window Tx Count" value={formatDisplayValue(behaviorBaseline.current_window_tx_count)} />
+                <Metric label="Prior Alerts 30d" value={formatDisplayValue(behaviorBaseline.prior_alert_count_30d)} />
+                <Metric label="Prior Alerts 90d" value={formatDisplayValue(behaviorBaseline.prior_alert_count_90d)} />
+                <Metric label="Prior Cases 90d" value={formatDisplayValue(behaviorBaseline.prior_case_count_90d)} />
+                <Metric label="Baseline Monthly Outflow" value={formatCurrency(behaviorBaseline.baseline_monthly_outflow)} />
+              </div>
+            </div>
+          ) : (
+            <p className="m-0 text-sm text-[var(--muted)]">Behavioral baseline data is not yet available for this alert.</p>
+          )}
+        </SectionCard>
+      </div>
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <SectionCard
+          title="Counterparty & Geography"
+          subtitle="Observed counterparties, jurisdictions, and payment context available for this alert."
+        >
+          {hasContent(counterpartySummary) || hasContent(geographySummary) ? (
+            <div className="grid gap-4 lg:grid-cols-2">
+              <CompactList
+                title="Top Counterparties"
+                items={counterpartySummary.top_counterparties}
+                emptyLabel="Counterparty details unavailable."
+              />
+              <div className="rounded-lg border border-[var(--border)] bg-[var(--surface2)] px-4 py-3">
+                <div className="text-[0.72rem] font-semibold uppercase tracking-wide text-[var(--muted)]">Context Signals</div>
+                <div className="mt-2">
+                  <DetailRow label="New Counterparty Share" value={formatPercent(counterpartySummary.new_counterparty_share)} />
+                  <DetailRow label="Recurring Counterparty Share" value={formatPercent(counterpartySummary.recurring_counterparty_share)} />
+                  <DetailRow label="Counterparty Bank Count" value={formatDisplayValue(counterpartySummary.counterparty_bank_count)} />
+                  <DetailRow label="Cross-Border" value={formatBooleanState(geographySummary.is_cross_border)} />
+                </div>
+              </div>
+              <CompactList
+                title="Countries Involved"
+                items={geographySummary.countries_involved.length ? geographySummary.countries_involved : counterpartySummary.counterparty_countries}
+                emptyLabel="Jurisdiction details unavailable."
+              />
+              <CompactList
+                title="Payment & Currency Mix"
+                items={[...toArray(geographySummary.payment_channels), ...toArray(geographySummary.currency_mix)]}
+                emptyLabel="Payment channel and currency details unavailable."
+              />
+            </div>
+          ) : (
+            <p className="m-0 text-sm text-[var(--muted)]">Counterparty and geography context is not yet available for this alert.</p>
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="Screening & Data Coverage"
+          subtitle="Screening visibility and enrichment coverage for this investigation workspace."
+        >
+          <div className="space-y-4">
+            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface2)] px-4 py-3">
+              <div className="text-[0.72rem] font-semibold uppercase tracking-wide text-[var(--muted)]">Screening Status</div>
+              <p className="mb-0 mt-2 text-sm text-[var(--text)]">{screeningStatusLabel}</p>
+              <div className="mt-3">
+                <DetailRow label="Screening Checked" value={formatTimestamp(screeningSummary.screening_checked_at)} />
+                <DetailRow label="Coverage Status" value={formatStatus(coverageStatus)} />
+                <DetailRow label="Freshness Status" value={formatStatus(freshnessStatus)} />
+              </div>
+            </div>
+
+            <CompactList title="Sanctions Hits" items={screeningSummary.sanctions_hits} emptyLabel={screeningSummary.screening_status === 'no_hits' ? 'No sanctions hits identified.' : 'Sanctions screening unavailable.'} />
+            <CompactList title="Watchlist Hits" items={screeningSummary.watchlist_hits} emptyLabel={screeningSummary.screening_status === 'no_hits' ? 'No watchlist hits identified.' : 'Watchlist screening unavailable.'} />
+            <CompactList title="PEP Indicators" items={screeningSummary.pep_hits} emptyLabel={screeningSummary.screening_status === 'no_hits' ? 'No PEP indicators identified.' : 'PEP screening unavailable.'} />
+            <CompactList title="Coverage Gaps" items={missingSections} emptyLabel="No known enrichment coverage gaps." />
           </div>
         </SectionCard>
       </div>
@@ -865,11 +1077,11 @@ export function AlertDetails() {
             <div>
               <div className="text-[0.72rem] font-semibold uppercase tracking-wide text-[var(--muted)]">Explanation Summary</div>
               <p className="mb-0 mt-2 text-sm text-[var(--text)]">{explanationHeadline}</p>
-              <p className="mb-0 mt-2 text-xs text-[var(--muted)]">
-                Method: <strong>{formatStatus(normalizedExplanation.explanation_method, 'Unknown')}</strong> · Status: <strong>{formatStatus(normalizedExplanation.explanation_status, 'Unknown')}</strong>
-              </p>
               {(normalizedExplanation.explanation_method === 'shap' || normalizedExplanation.explanation_method === 'tree_shap') ? (
                 <p className="mb-0 mt-2 text-xs text-blue-700 dark:text-blue-300">Model-based explanation available.</p>
+              ) : null}
+              {normalizedExplanation.explanation_method === 'unavailable' ? (
+                <p className="mb-0 mt-2 text-xs text-[var(--muted)]">Detailed model attribution is not available for this alert.</p>
               ) : null}
               {normalizedExplanation.is_fallback ? (
                 <div className="mt-3 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
@@ -920,7 +1132,7 @@ export function AlertDetails() {
                   {ruleSignals.map((rule) => (
                     <li key={`${rule.id}-${rule.description || 'rule'}`} className="mt-1">
                       <strong>{rule.id}</strong>
-                      {rule.description ? ` — ${rule.description}` : ''}
+                      {rule.description ? ` - ${rule.description}` : ''}
                     </li>
                   ))}
                 </ul>
@@ -1048,7 +1260,7 @@ export function AlertDetails() {
                 <div key={note.id} className="rounded-lg border border-[var(--border)] bg-[var(--surface2)] px-4 py-3">
                   <p className="m-0 text-sm text-[var(--text)]">{note.note_text}</p>
                   <p className="mb-0 mt-2 text-xs text-[var(--muted)]">
-                    {formatDisplayValue(note.user_id)} · {formatTimestamp(note.created_at)}
+                    {formatDisplayValue(note.user_id)} | {formatTimestamp(note.created_at)}
                   </p>
                 </div>
               ))}

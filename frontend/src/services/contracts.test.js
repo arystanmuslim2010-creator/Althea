@@ -20,6 +20,10 @@ describe('contracts mappers', () => {
     expect(Array.isArray(normalized.global_signals)).toBe(true)
     expect(typeof normalized.model_metadata).toBe('object')
     expect(typeof normalized.investigation_summary).toBe('object')
+    expect(typeof normalized.customer_profile).toBe('object')
+    expect(Array.isArray(normalized.counterparty_summary.top_counterparties)).toBe(true)
+    expect(normalized.screening_summary.screening_status).toBe('unavailable')
+    expect(Array.isArray(normalized.data_availability.missing_sections)).toBe(true)
   })
 
   it('normalizes network graph with compatibility aliases', () => {
