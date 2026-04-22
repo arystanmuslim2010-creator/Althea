@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from api.routers.alerts_router import router as alerts_router
 from api.routers.auth_router import router as auth_router
+from api.routers.enrichment_router import router as enrichment_router
 from api.routers.intelligence_router import router as intelligence_router
 from api.routers.investigation_router import router as investigation_router
 from api.routers.pipeline_router import router as pipeline_router
@@ -125,6 +126,7 @@ def create_app() -> FastAPI:
         return response
 
     app.include_router(pipeline_router)
+    app.include_router(enrichment_router)
     app.include_router(alerts_router)
     app.include_router(auth_router)
     app.include_router(investigation_router)

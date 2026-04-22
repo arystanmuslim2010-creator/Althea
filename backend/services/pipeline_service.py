@@ -24,6 +24,7 @@ from events.event_bus import EventBus
 from models.inference_service import InferenceService
 from services.alert_ingestion_service import AlertIngestionService, AlertIngestionValidationError
 from services.feature_adapter import AlertFeatureAdapter
+from services.feature_enrichment_service import FeatureEnrichmentService
 from services.feature_service import EnterpriseFeatureService
 from services.governance_service import GovernanceService
 from services.ingestion_service import EnterpriseIngestionService
@@ -50,6 +51,7 @@ class PipelineService:
         inference_service: InferenceService,
         governance_service: GovernanceService,
         model_monitoring_service: ModelMonitoringService,
+        feature_enrichment_service: FeatureEnrichmentService | None = None,
         streaming_orchestrator=None,
         alert_ingestion_service: AlertIngestionService | None = None,
         feature_adapter: AlertFeatureAdapter | None = None,
@@ -64,6 +66,7 @@ class PipelineService:
         self._inference_service = inference_service
         self._governance_service = governance_service
         self._model_monitoring_service = model_monitoring_service
+        self._feature_enrichment_service = feature_enrichment_service
         self._streaming_orchestrator = streaming_orchestrator
         self._alert_ingestion_service = alert_ingestion_service or AlertIngestionService()
         self._feature_adapter = feature_adapter or AlertFeatureAdapter()
@@ -541,7 +544,14 @@ class PipelineService:
         run_source: str | None = None,
     ) -> tuple[str, int, str, list[float]]:
         # Step 1: Feature generation
-        feature_bundle = self._feature_service.generate_features_batch(source_df)
+        enrichment_context = None
+        if self._feature_enrichment_service is not None:
+            enrichment_context = self._feature_enrichment_service.build_context(
+                tenant_id=tenant_id,
+                alerts_df=source_df,
+                run_id=run_id,
+            )
+        feature_bundle = self._feature_service.generate_features_batch(source_df, context=enrichment_context)
         alerts_df = feature_bundle.get("alerts_df", pd.DataFrame()).copy()
         feature_matrix = feature_bundle.get("feature_matrix", pd.DataFrame()).copy()
         if alerts_df.empty or feature_matrix.empty:

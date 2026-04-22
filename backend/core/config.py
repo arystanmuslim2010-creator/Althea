@@ -134,6 +134,7 @@ class Settings:
     allow_dev_models: bool = os.getenv("ALTHEA_ALLOW_DEV_MODELS", "").lower() in {"1", "true", "yes"}
     model_selection_strategy: str = os.getenv("ALTHEA_MODEL_SELECTION", "active_approved")
     rq_queue_name: str = os.getenv("ALTHEA_RQ_QUEUE", "althea-pipeline")
+    enrichment_rq_queue_name: str = os.getenv("ALTHEA_ENRICHMENT_RQ_QUEUE", "althea-enrichment")
     rq_job_timeout_seconds: int = int(os.getenv("ALTHEA_RQ_JOB_TIMEOUT_SECONDS", "900"))
     object_storage_dirname: str = os.getenv("ALTHEA_OBJECT_STORAGE_DIR", "object_storage")
     reports_dirname: str = os.getenv("ALTHEA_REPORTS_DIR", "reports")
@@ -202,6 +203,27 @@ class Settings:
     alert_jsonl_max_upload_rows: int = 1000
     ingestion_max_upload_bytes: int = 10 * 1024 * 1024
     primary_ingestion_mode: str = "alert_jsonl"
+    enrichment_enabled: bool = True
+    enrichment_sources_enabled: List[str] = field(
+        default_factory=lambda: _split_csv(
+            os.getenv("ALTHEA_ENRICHMENT_SOURCES_ENABLED"),
+            ["internal_case", "internal_outcome"],
+        )
+    )
+    enrichment_sync_batch_size: int = int(os.getenv("ALTHEA_ENRICHMENT_SYNC_BATCH_SIZE", "500"))
+    enrichment_health_stale_seconds: int = int(os.getenv("ALTHEA_ENRICHMENT_HEALTH_STALE_SECONDS", "3600"))
+    enrichment_sync_max_retries: int = int(os.getenv("ALTHEA_ENRICHMENT_SYNC_MAX_RETRIES", "2"))
+    enrichment_connector_timeout_seconds: int = int(os.getenv("ALTHEA_ENRICHMENT_CONNECTOR_TIMEOUT_SECONDS", "10"))
+    enrichment_connector_retry_max: int = int(os.getenv("ALTHEA_ENRICHMENT_CONNECTOR_RETRY_MAX", "2"))
+    enrichment_connector_cooldown_seconds: int = int(os.getenv("ALTHEA_ENRICHMENT_CONNECTOR_COOLDOWN_SECONDS", "30"))
+    kyc_base_url: str | None = os.getenv("ALTHEA_KYC_BASE_URL")
+    kyc_token: str | None = os.getenv("ALTHEA_KYC_TOKEN")
+    watchlist_base_url: str | None = os.getenv("ALTHEA_WATCHLIST_BASE_URL")
+    watchlist_token: str | None = os.getenv("ALTHEA_WATCHLIST_TOKEN")
+    device_base_url: str | None = os.getenv("ALTHEA_DEVICE_BASE_URL")
+    device_token: str | None = os.getenv("ALTHEA_DEVICE_TOKEN")
+    channel_base_url: str | None = os.getenv("ALTHEA_CHANNEL_BASE_URL")
+    channel_token: str | None = os.getenv("ALTHEA_CHANNEL_TOKEN")
 
     @property
     def project_root(self) -> Path:
@@ -274,6 +296,40 @@ class Settings:
         self.primary_ingestion_mode = _parse_primary_ingestion_mode_env(
             "ALTHEA_PRIMARY_INGESTION_MODE",
             self.primary_ingestion_mode,
+        )
+        self.enrichment_enabled = _parse_bool_env(
+            "ALTHEA_ENRICHMENT_ENABLED",
+            self.enrichment_enabled,
+        )
+        self.enrichment_sync_batch_size = _parse_int_env(
+            "ALTHEA_ENRICHMENT_SYNC_BATCH_SIZE",
+            self.enrichment_sync_batch_size,
+            min_value=1,
+        )
+        self.enrichment_health_stale_seconds = _parse_int_env(
+            "ALTHEA_ENRICHMENT_HEALTH_STALE_SECONDS",
+            self.enrichment_health_stale_seconds,
+            min_value=1,
+        )
+        self.enrichment_sync_max_retries = _parse_int_env(
+            "ALTHEA_ENRICHMENT_SYNC_MAX_RETRIES",
+            self.enrichment_sync_max_retries,
+            min_value=0,
+        )
+        self.enrichment_connector_timeout_seconds = _parse_int_env(
+            "ALTHEA_ENRICHMENT_CONNECTOR_TIMEOUT_SECONDS",
+            self.enrichment_connector_timeout_seconds,
+            min_value=1,
+        )
+        self.enrichment_connector_retry_max = _parse_int_env(
+            "ALTHEA_ENRICHMENT_CONNECTOR_RETRY_MAX",
+            self.enrichment_connector_retry_max,
+            min_value=0,
+        )
+        self.enrichment_connector_cooldown_seconds = _parse_int_env(
+            "ALTHEA_ENRICHMENT_CONNECTOR_COOLDOWN_SECONDS",
+            self.enrichment_connector_cooldown_seconds,
+            min_value=0,
         )
         self.cors_allow_credentials = _parse_bool_env("ALTHEA_CORS_ALLOW_CREDENTIALS", self.cors_allow_credentials)
         self.trusted_proxy_headers = _parse_bool_env("ALTHEA_TRUST_PROXY_HEADERS", self.trusted_proxy_headers)
@@ -444,6 +500,15 @@ def get_settings() -> Settings:
             "login_rate_limit_window_seconds": settings.login_rate_limit_window_seconds,
             "refresh_rate_limit_max_attempts": settings.refresh_rate_limit_max_attempts,
             "refresh_rate_limit_window_seconds": settings.refresh_rate_limit_window_seconds,
+            "enrichment_enabled": settings.enrichment_enabled,
+            "enrichment_sources_enabled": settings.enrichment_sources_enabled,
+            "enrichment_rq_queue_name": settings.enrichment_rq_queue_name,
+            "enrichment_sync_batch_size": settings.enrichment_sync_batch_size,
+            "enrichment_health_stale_seconds": settings.enrichment_health_stale_seconds,
+            "enrichment_sync_max_retries": settings.enrichment_sync_max_retries,
+            "enrichment_connector_timeout_seconds": settings.enrichment_connector_timeout_seconds,
+            "enrichment_connector_retry_max": settings.enrichment_connector_retry_max,
+            "enrichment_connector_cooldown_seconds": settings.enrichment_connector_cooldown_seconds,
         },
     )
     settings.data_dir.mkdir(parents=True, exist_ok=True)

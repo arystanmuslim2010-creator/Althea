@@ -17,6 +17,8 @@ try:  # pragma: no cover - optional for non-postgres tests
 except Exception:  # pragma: no cover
     postgres_insert = None
 
+from storage.enrichment_models import EnrichmentBase
+
 logger = logging.getLogger("althea.repository")
 SCHEMA_VERSION = "20260405_0010_phase5_post_cutover_hardening"
 
@@ -431,6 +433,7 @@ class EnterpriseRepository:
             self._configure_sqlite_for_concurrency()
         self._session_factory = sessionmaker(bind=self.engine, autoflush=False, expire_on_commit=False, future=True)
         Base.metadata.create_all(self.engine)
+        EnrichmentBase.metadata.create_all(self.engine)
         self._ensure_schema_compatibility()
 
     def _configure_sqlite_for_concurrency(self) -> None:

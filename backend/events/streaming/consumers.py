@@ -58,10 +58,11 @@ class FeatureServiceConsumer(_BaseConsumer):
     topic_in = ALERTS_INGESTED
     topic_out = ALERTS_FEATURES_GENERATED
 
-    def __init__(self, stream, repository, feature_service, online_feature_store=None) -> None:
+    def __init__(self, stream, repository, feature_service, online_feature_store=None, feature_enrichment_service=None) -> None:
         super().__init__(stream, repository)
         self._feature_service = feature_service
         self._online_feature_store = online_feature_store
+        self._feature_enrichment_service = feature_enrichment_service
 
     def process(self, context: ConsumerContext) -> dict[str, Any] | None:
         run_id = str(context.payload.get("run_id") or "")
@@ -74,7 +75,15 @@ class FeatureServiceConsumer(_BaseConsumer):
         if not selected:
             return None
 
-        bundle = self._feature_service.generate_inference_features(pd.DataFrame(selected))
+        selected_frame = pd.DataFrame(selected)
+        context_payload = None
+        if self._feature_enrichment_service is not None:
+            context_payload = self._feature_enrichment_service.build_context(
+                tenant_id=context.tenant_id,
+                alerts_df=selected_frame,
+                run_id=run_id,
+            )
+        bundle = self._feature_service.generate_inference_features(selected_frame, context=context_payload)
         alerts_df = bundle.get("alerts_df", pd.DataFrame())
         feature_matrix = bundle.get("feature_matrix", pd.DataFrame())
         if alerts_df.empty or feature_matrix.empty:

@@ -166,6 +166,18 @@ def _load_alerts_df(request: Request, tenant_id: str, run_id: str) -> pd.DataFra
     return pd.DataFrame(payloads)
 
 
+def _build_feature_enrichment_context(request: Request, tenant_id: str, frame: pd.DataFrame):
+    enrichment_service = getattr(request.app.state, "feature_enrichment_service", None)
+    if enrichment_service is None or frame is None or frame.empty:
+        return None
+    run_id = _active_run_id(request, tenant_id)
+    return enrichment_service.build_context(
+        tenant_id=tenant_id,
+        alerts_df=frame,
+        run_id=run_id,
+    )
+
+
 @router.get("/api/alerts")
 def get_alerts(
     request: Request,
@@ -349,7 +361,10 @@ def internal_ml_predict(
     alert_ids = [str(item) for item in (payload.get("alert_ids") or []) if str(item)]
     frame = pd.DataFrame(payload.get("rows", []))
     if not frame.empty:
-        feature_bundle = request.app.state.feature_service.generate_inference_features(frame)
+        feature_bundle = request.app.state.feature_service.generate_inference_features(
+            frame,
+            context=_build_feature_enrichment_context(request, tenant_id, frame),
+        )
         feature_frame = feature_bundle["feature_matrix"]
     else:
         feature_frame = pd.DataFrame()

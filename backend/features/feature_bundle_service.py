@@ -112,7 +112,9 @@ class FeatureBundleService:
 
         # Optional graph feature enrichment
         graph_features_df = pd.DataFrame()
-        if self._graph_feature_service is not None:
+        if context is not None and getattr(context, "graph_features", None) is not None:
+            graph_features_df = context.graph_features.copy()
+        elif self._graph_feature_service is not None:
             try:
                 graph_features_df = self._graph_feature_service.extract_features_for_batch(out, context)
             except Exception as exc:

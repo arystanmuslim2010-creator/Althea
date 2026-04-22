@@ -209,6 +209,7 @@ def _compute_detailed_health(request: Request) -> dict:
             "heartbeat:worker:pipeline",
             "heartbeat:worker:event",
             "heartbeat:worker:streaming",
+            "heartbeat:worker:enrichment",
             "heartbeat:worker:all_in_one",
         )
         checks["worker_heartbeat"] = any(

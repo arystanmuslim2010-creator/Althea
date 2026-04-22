@@ -197,6 +197,41 @@ _LEGACY_PATH_ACCESS_BLOCKED_TOTAL = Counter(
     "Total blocked attempts to access disabled legacy ingestion paths.",
     ["endpoint", "caller"],
 )
+_ENRICHMENT_SYNC_ATTEMPT_TOTAL = Counter(
+    "enrichment_sync_attempt_total",
+    "Total enrichment sync attempts by source and status.",
+    ["source", "status"],
+)
+_ENRICHMENT_SYNC_DURATION_SECONDS = Histogram(
+    "enrichment_sync_duration_seconds",
+    "Enrichment sync duration in seconds.",
+    ["source"],
+)
+_ENRICHMENT_RECORDS_WRITTEN_TOTAL = Counter(
+    "enrichment_records_written_total",
+    "Total enrichment records written by source.",
+    ["source"],
+)
+_ENRICHMENT_RECORDS_FAILED_TOTAL = Counter(
+    "enrichment_records_failed_total",
+    "Total enrichment records failed by source.",
+    ["source"],
+)
+_ENRICHMENT_SOURCE_FRESHNESS_SECONDS = Gauge(
+    "enrichment_source_freshness_seconds",
+    "Freshness of enrichment source snapshots in seconds.",
+    ["source"],
+)
+_ENRICHMENT_SOURCE_COVERAGE_RATIO = Gauge(
+    "enrichment_source_coverage_ratio",
+    "Coverage ratio of enrichment source over current alert population.",
+    ["source"],
+)
+_ENRICHMENT_CONTEXT_BUILD_TOTAL = Counter(
+    "enrichment_context_build_total",
+    "Count of runtime enrichment context builds by status.",
+    ["status"],
+)
 _INGESTION_RUN_HISTORY: deque[dict[str, Any]] = deque(maxlen=500)
 _INGESTION_RUN_HISTORY_LOCK = Lock()
 _LEGACY_ACCESS_HISTORY: deque[dict[str, Any]] = deque(maxlen=500)
@@ -590,6 +625,33 @@ def get_rollout_metrics_snapshot(window_runs: int = 20, source_system: str | Non
         "last_status": str(last_row.get("status") or "unknown"),
         "last_run_id": str(last_row.get("run_id") or ""),
     }
+
+
+def record_enrichment_sync_attempt(source: str, status: str) -> None:
+    _ENRICHMENT_SYNC_ATTEMPT_TOTAL.labels(source=source or "unknown", status=status or "unknown").inc()
+
+
+def record_enrichment_sync_duration(source: str, duration_seconds: float) -> None:
+    _ENRICHMENT_SYNC_DURATION_SECONDS.labels(source=source or "unknown").observe(max(0.0, float(duration_seconds)))
+
+
+def record_enrichment_records_written(source: str, count: int) -> None:
+    if int(count or 0) > 0:
+        _ENRICHMENT_RECORDS_WRITTEN_TOTAL.labels(source=source or "unknown").inc(int(count))
+
+
+def record_enrichment_records_failed(source: str, count: int) -> None:
+    if int(count or 0) > 0:
+        _ENRICHMENT_RECORDS_FAILED_TOTAL.labels(source=source or "unknown").inc(int(count))
+
+
+def set_enrichment_source_health(source: str, freshness_seconds: float, coverage_ratio: float) -> None:
+    _ENRICHMENT_SOURCE_FRESHNESS_SECONDS.labels(source=source or "unknown").set(max(0.0, float(freshness_seconds)))
+    _ENRICHMENT_SOURCE_COVERAGE_RATIO.labels(source=source or "unknown").set(max(0.0, float(coverage_ratio)))
+
+
+def record_enrichment_context_build(status: str) -> None:
+    _ENRICHMENT_CONTEXT_BUILD_TOTAL.labels(status=status or "unknown").inc()
 
 
 def metrics_response(metrics: MetricsRegistry) -> PlainTextResponse:

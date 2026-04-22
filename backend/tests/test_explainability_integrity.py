@@ -143,6 +143,56 @@ def test_runtime_inference_returns_model_based_explanation_with_context():
     assert recorder.calls[0]["feature_schema_version"] == "v2"
 
 
+def test_runtime_inference_preserves_row_specific_explanations(monkeypatch):
+    frame = pd.DataFrame(
+        {
+            "amount": [125.0, 250000.0],
+            "time_gap": [7200.0, 15.0],
+            "num_transactions": [1.0, 18.0],
+        }
+    )
+    registry = _build_registry(frame)
+    explainability = ExplainabilityService()
+    monkeypatch.setattr(explainability, "_get_shap", lambda: None)
+    service = InferenceService(
+        registry=registry,
+        schema_validator=FeatureSchemaValidator(),
+        explainability_service=explainability,
+    )
+
+    result = service.predict(
+        tenant_id="tenant-row-specific",
+        feature_frame=frame,
+        alert_ids=["A-row-1", "A-row-2"],
+    )
+
+    first, second = result["explanations"]
+    assert first["explanation_method"] == "numeric_fallback"
+    assert second["explanation_method"] == "numeric_fallback"
+    assert first["feature_attribution"] != second["feature_attribution"]
+    assert first["risk_reason_codes"] != second["risk_reason_codes"]
+
+
+def test_row_specific_explanations_merge_into_distinct_alert_payloads(monkeypatch):
+    frame = pd.DataFrame(
+        {
+            "amount": [250.0, 98000.0],
+            "time_gap": [3600.0, 5.0],
+            "num_transactions": [2.0, 21.0],
+        }
+    )
+    service = ExplainabilityService()
+    monkeypatch.setattr(service, "_get_shap", lambda: None)
+
+    first = service.generate_explanation(model=None, feature_frame=frame.iloc[[0]], model_version="v-test")
+    second = service.generate_explanation(model=None, feature_frame=frame.iloc[[1]], model_version="v-test")
+    payload_a = service.merge_into_alert_metadata({"alert_id": "A-1"}, first)
+    payload_b = service.merge_into_alert_metadata({"alert_id": "A-2"}, second)
+
+    assert payload_a["risk_explain_json"] != payload_b["risk_explain_json"]
+    assert payload_a["top_feature_contributions_json"] != payload_b["top_feature_contributions_json"]
+
+
 def test_runtime_inference_fallback_is_explicit_and_warning_present():
     frame = _feature_frame(rows=2)
     registry = _build_registry(frame)

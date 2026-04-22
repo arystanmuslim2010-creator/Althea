@@ -7,6 +7,7 @@ from core.config import Settings, get_settings
 from core.observability import MetricsRegistry
 from ai_copilot.copilot_service import AICopilotService
 from events.event_bus import EventBus
+from graph.graph_feature_service import GraphFeatureService
 from graph.relationship_graph_service import RelationshipGraphService
 from intelligence.global_pattern_service import GlobalPatternService
 from investigation.guidance_service import InvestigationGuidanceService
@@ -24,6 +25,7 @@ from events.streaming.consumers import (
     ModelScoringConsumer,
     StreamingPipelineOrchestrator,
 )
+from features.feature_bundle_service import FeatureBundleService
 from features.feature_materialization import FeatureMaterializationService
 from features.feature_registry import FeatureRegistry
 from features.offline_feature_store import OfflineFeatureStore
@@ -39,6 +41,19 @@ from services.case_service import CaseWorkflowService
 from services.explain_service import ExplainabilityService
 from services.alert_ingestion_service import AlertIngestionService
 from services.feature_adapter import AlertFeatureAdapter
+from services.feature_enrichment_service import FeatureEnrichmentService
+from services.enrichment_repository import EnrichmentRepository
+from services.enrichment_sync_service import EnrichmentSyncService
+from services.enrichment_health_service import EnrichmentHealthService
+from services.master_data_service import MasterDataService
+from services.entity_resolution_service import EntityResolutionService
+from services.enrichment_audit_service import EnrichmentAuditService
+from services.dead_letter_service import DeadLetterService
+from services.schema_drift_service import SchemaDriftService
+from services.enrichment_connectors.kyc_connector import KYCConnector
+from services.enrichment_connectors.watchlist_connector import WatchlistConnector
+from services.enrichment_connectors.device_connector import DeviceConnector
+from services.enrichment_connectors.channel_connector import ChannelConnector
 from services.feature_service import EnterpriseFeatureService
 from services.governance_service import GovernanceService
 from services.ingestion_service import EnterpriseIngestionService
@@ -103,13 +118,116 @@ def get_event_bus() -> EventBus:
 
 
 @lru_cache(maxsize=1)
+def get_graph_feature_service() -> GraphFeatureService:
+    return GraphFeatureService()
+
+
+@lru_cache(maxsize=1)
 def get_feature_schema_validator() -> FeatureSchemaValidator:
     return FeatureSchemaValidator()
 
 
 @lru_cache(maxsize=1)
 def get_feature_service() -> EnterpriseFeatureService:
-    return EnterpriseFeatureService(get_feature_schema_validator())
+    bundle_service = FeatureBundleService(
+        graph_feature_service=get_graph_feature_service(),
+        schema_validator=get_feature_schema_validator(),
+    )
+    return EnterpriseFeatureService(get_feature_schema_validator(), bundle_service=bundle_service)
+
+
+@lru_cache(maxsize=1)
+def get_enrichment_repository() -> EnrichmentRepository:
+    return EnrichmentRepository(get_repository())
+
+
+@lru_cache(maxsize=1)
+def get_enrichment_connectors() -> dict[str, object]:
+    settings = get_settings()
+    return {
+        "kyc": KYCConnector(
+            base_url=settings.kyc_base_url,
+            token=settings.kyc_token,
+            timeout_seconds=settings.enrichment_connector_timeout_seconds,
+            retry_max=settings.enrichment_connector_retry_max,
+            cooldown_seconds=settings.enrichment_connector_cooldown_seconds,
+        ),
+        "watchlist": WatchlistConnector(
+            base_url=settings.watchlist_base_url,
+            token=settings.watchlist_token,
+            timeout_seconds=settings.enrichment_connector_timeout_seconds,
+            retry_max=settings.enrichment_connector_retry_max,
+            cooldown_seconds=settings.enrichment_connector_cooldown_seconds,
+        ),
+        "device": DeviceConnector(
+            base_url=settings.device_base_url,
+            token=settings.device_token,
+            timeout_seconds=settings.enrichment_connector_timeout_seconds,
+            retry_max=settings.enrichment_connector_retry_max,
+            cooldown_seconds=settings.enrichment_connector_cooldown_seconds,
+        ),
+        "channel": ChannelConnector(
+            base_url=settings.channel_base_url,
+            token=settings.channel_token,
+            timeout_seconds=settings.enrichment_connector_timeout_seconds,
+            retry_max=settings.enrichment_connector_retry_max,
+            cooldown_seconds=settings.enrichment_connector_cooldown_seconds,
+        ),
+    }
+
+
+@lru_cache(maxsize=1)
+def get_enrichment_audit_service() -> EnrichmentAuditService:
+    return EnrichmentAuditService(get_enrichment_repository())
+
+
+@lru_cache(maxsize=1)
+def get_dead_letter_service() -> DeadLetterService:
+    return DeadLetterService(get_enrichment_repository())
+
+
+@lru_cache(maxsize=1)
+def get_schema_drift_service() -> SchemaDriftService:
+    return SchemaDriftService(get_enrichment_repository())
+
+
+@lru_cache(maxsize=1)
+def get_master_data_service() -> MasterDataService:
+    return MasterDataService(get_enrichment_repository())
+
+
+@lru_cache(maxsize=1)
+def get_entity_resolution_service() -> EntityResolutionService:
+    return EntityResolutionService(get_enrichment_repository())
+
+
+@lru_cache(maxsize=1)
+def get_enrichment_health_service() -> EnrichmentHealthService:
+    return EnrichmentHealthService(get_enrichment_repository(), get_settings())
+
+
+@lru_cache(maxsize=1)
+def get_enrichment_sync_service() -> EnrichmentSyncService:
+    return EnrichmentSyncService(
+        repository=get_enrichment_repository(),
+        master_data_service=get_master_data_service(),
+        entity_resolution_service=get_entity_resolution_service(),
+        audit_service=get_enrichment_audit_service(),
+        dead_letter_service=get_dead_letter_service(),
+        schema_drift_service=get_schema_drift_service(),
+        health_service=get_enrichment_health_service(),
+        connectors=get_enrichment_connectors(),
+        settings=get_settings(),
+    )
+
+
+@lru_cache(maxsize=1)
+def get_feature_enrichment_service() -> FeatureEnrichmentService:
+    return FeatureEnrichmentService(
+        repository=get_repository(),
+        enrichment_repository=get_enrichment_repository(),
+        graph_feature_service=get_graph_feature_service(),
+    )
 
 
 @lru_cache(maxsize=1)
@@ -274,6 +392,7 @@ def get_pipeline_service() -> PipelineService:
         inference_service=get_inference_service(),
         governance_service=get_governance_service(),
         model_monitoring_service=get_model_monitoring_service(),
+        feature_enrichment_service=get_feature_enrichment_service(),
         streaming_orchestrator=get_streaming_orchestrator(),
         alert_ingestion_service=get_alert_ingestion_service(),
         feature_adapter=get_alert_feature_adapter(),
@@ -309,7 +428,13 @@ def get_streaming_backbone() -> StreamingBackbone:
 def get_streaming_orchestrator() -> StreamingPipelineOrchestrator:
     stream = get_streaming_backbone()
     repository = get_repository()
-    feature_consumer = FeatureServiceConsumer(stream, repository, get_feature_service(), get_online_feature_store())
+    feature_consumer = FeatureServiceConsumer(
+        stream,
+        repository,
+        get_feature_service(),
+        get_online_feature_store(),
+        get_feature_enrichment_service(),
+    )
     scoring_consumer = ModelScoringConsumer(stream, repository, get_inference_service())
     governance_consumer = GovernanceConsumer(stream, repository, get_governance_service())
     case_consumer = CaseCreationConsumer(stream, repository, get_workflow_engine())
@@ -386,6 +511,15 @@ def build_app_state() -> dict:
         "streaming_backbone": get_streaming_backbone(),
         "streaming_orchestrator": get_streaming_orchestrator(),
         "feature_service": get_feature_service(),
+        "feature_enrichment_service": get_feature_enrichment_service(),
+        "enrichment_repository": get_enrichment_repository(),
+        "enrichment_sync_service": get_enrichment_sync_service(),
+        "enrichment_health_service": get_enrichment_health_service(),
+        "master_data_service": get_master_data_service(),
+        "entity_resolution_service": get_entity_resolution_service(),
+        "enrichment_audit_service": get_enrichment_audit_service(),
+        "dead_letter_service": get_dead_letter_service(),
+        "schema_drift_service": get_schema_drift_service(),
         "feature_registry": get_feature_registry(),
         "feature_materialization_service": get_feature_materialization_service(),
         "scoring_service": get_scoring_service(),

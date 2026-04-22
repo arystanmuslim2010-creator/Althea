@@ -675,6 +675,54 @@ def test_metrics_endpoint_requires_view_system_logs_permission(client: TestClien
     assert forbidden.status_code == 403
 
 
+def test_internal_ml_predict_passes_runtime_enrichment_context(client: TestClient):
+    captured: dict[str, object] = {}
+
+    class _CapturingFeatureService:
+        def generate_inference_features(self, frame, context=None):
+            captured["context"] = context
+            return {"feature_matrix": frame[["amount"]].copy()}
+
+    class _StubEnrichmentService:
+        def build_context(self, *, tenant_id: str, alerts_df, run_id: str | None = None):
+            captured["tenant_id"] = tenant_id
+            captured["run_id"] = run_id
+            captured["row_count"] = int(len(alerts_df))
+            return {"kind": "runtime_enrichment"}
+
+    client.app.state.feature_service = _CapturingFeatureService()
+    client.app.state.feature_enrichment_service = _StubEnrichmentService()
+    client.app.state.inference_service = SimpleNamespace(
+        predict=lambda **_: {
+            "model_version": "model-v1",
+            "scores": [55.0],
+            "explanations": [{}],
+            "schema_validation": {"is_valid": True},
+        }
+    )
+
+    res = client.post(
+        "/internal/ml/predict",
+        json={
+            "alert_ids": ["A1"],
+            "rows": [
+                {
+                    "alert_id": "A1",
+                    "user_id": "U1",
+                    "amount": 1500.0,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            ],
+        },
+    )
+
+    assert res.status_code == 200
+    assert captured["context"] == {"kind": "runtime_enrichment"}
+    assert captured["tenant_id"] == "tenant-a"
+    assert captured["run_id"] == "run-1"
+    assert captured["row_count"] == 1
+
+
 def test_primary_mode_runtime_switch_allows_fast_rollback(client: TestClient):
     to_legacy = client.post("/internal/ingestion/primary-mode", json={"mode": "legacy"})
     assert to_legacy.status_code == 200
