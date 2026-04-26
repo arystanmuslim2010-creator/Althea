@@ -40,7 +40,9 @@ function withTimeout(timeoutMs = REQUEST_TIMEOUT_MS) {
 async function parseResponse(res) {
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail || res.statusText)
+    const detail = typeof err.detail === 'string' ? err.detail : err.message
+    const safe = sanitizeErrorMessage(detail || res.statusText)
+    throw new Error(safe)
   }
   if (res.status === 204 || res.headers.get('content-length') === '0') return {}
   const text = await res.text()
@@ -50,6 +52,15 @@ async function parseResponse(res) {
   } catch {
     throw new Error('Backend returned an invalid response.')
   }
+}
+
+function sanitizeErrorMessage(message) {
+  const raw = String(message || '')
+  if (!raw) return 'Request failed.'
+  if (/traceback|stack trace|sqlalchemy|psycopg|sqlite|\/app\/|c:\\|object_storage|artifact|password_hash|secret|token/i.test(raw)) {
+    return 'Request failed. Please try again or contact an administrator.'
+  }
+  return raw
 }
 
 function getAccessToken() {

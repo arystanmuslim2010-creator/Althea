@@ -12,6 +12,7 @@ _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
 _PRIMARY_INGESTION_MODES = {"legacy", "alert_jsonl"}
 _COOKIE_SAMESITE_VALUES = {"lax", "strict", "none"}
+_RUNTIME_MODES = {"demo", "pilot", "production"}
 
 
 def _existing_insecure_artifacts(project_root: Path, backend_root: Path) -> list[str]:
@@ -117,6 +118,7 @@ def _load_env_file(path: Path) -> None:
 class Settings:
     app_name: str = "ALTHEA Enterprise AML API"
     app_env: str = os.getenv("ALTHEA_ENV", "development")
+    runtime_mode: str = os.getenv("ALTHEA_RUNTIME_MODE", "demo")
     backend_root: Path = field(default_factory=lambda: Path(__file__).resolve().parent.parent)
     default_tenant_id: str = os.getenv("ALTHEA_DEFAULT_TENANT_ID", "default-bank")
     tenant_header: str = os.getenv("ALTHEA_TENANT_HEADER", "X-Tenant-ID")
@@ -267,7 +269,23 @@ class Settings:
     def is_non_dev(self) -> bool:
         return not self.is_dev
 
+    def is_demo_mode(self) -> bool:
+        return str(self.runtime_mode or "").lower().strip() == "demo"
+
+    def is_pilot_mode(self) -> bool:
+        return str(self.runtime_mode or "").lower().strip() == "pilot"
+
+    def is_production_mode(self) -> bool:
+        return str(self.runtime_mode or "").lower().strip() == "production"
+
+    def demo_features_enabled(self) -> bool:
+        return self.is_demo_mode()
+
     def validate(self) -> None:
+        self.runtime_mode = str(os.getenv("ALTHEA_RUNTIME_MODE", self.runtime_mode) or "demo").strip().lower()
+        if self.runtime_mode not in _RUNTIME_MODES:
+            allowed = ", ".join(sorted(_RUNTIME_MODES))
+            raise RuntimeError(f"ALTHEA_RUNTIME_MODE must be one of: {allowed}.")
         self.enable_alert_jsonl_ingestion = _parse_bool_env(
             "ALTHEA_ENABLE_ALERT_JSONL_INGESTION", self.enable_alert_jsonl_ingestion
         )
@@ -386,14 +404,17 @@ class Settings:
         if os.getenv("ALTHEA_ALLOW_DEV_MODELS") is None:
             # Safe default: allow local bootstrap only in development.
             self.allow_dev_models = bool(self.is_dev)
+        if self.is_pilot_mode() or self.is_production_mode():
+            self.allow_dev_models = False
         if os.getenv("ALTHEA_ENABLE_PUBLIC_TENANT_BOOTSTRAP") is None:
             self.enable_public_tenant_bootstrap = False
         if os.getenv("ALTHEA_ALLOW_REFRESH_TOKEN_IN_BODY") is None:
             # Safer default: allow body refresh tokens in local development only.
             self.allow_refresh_token_in_body = bool(self.is_dev)
         if os.getenv("ALTHEA_EXPOSE_REFRESH_TOKEN_IN_RESPONSE") is None:
-            # Safer default: do not return refresh token to JS in non-dev.
-            self.expose_refresh_token_in_response = bool(self.is_dev)
+            self.expose_refresh_token_in_response = False
+        # Refresh tokens must never be exposed to browser JavaScript/API response bodies.
+        self.expose_refresh_token_in_response = False
         if os.getenv("ALTHEA_REFRESH_COOKIE_SECURE") is None:
             self.refresh_cookie_secure = bool(self.is_non_dev)
 
@@ -478,8 +499,9 @@ def get_settings() -> Settings:
         settings.jwt_secret = secret_value
     settings.validate()
     logger.info(
-        "Phase 5 ingestion flags",
+            "Phase 5 ingestion flags",
         extra={
+            "runtime_mode": settings.runtime_mode,
             "enable_alert_jsonl_ingestion": settings.enable_alert_jsonl_ingestion,
             "enable_legacy_ingestion": settings.enable_legacy_ingestion,
             "enable_ibm_amlsim_import": settings.enable_ibm_amlsim_import,

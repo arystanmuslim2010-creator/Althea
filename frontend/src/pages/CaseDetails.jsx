@@ -36,7 +36,7 @@ export function CaseDetails() {
   const [error, setError] = useState('')
 
   const canEditCase = hasPermission(user, 'work_cases')
-  const canApproveSar = hasPermission(user, 'manager_approval')
+  const canRecordSarFiling = hasPermission(user, 'manager_approval')
 
   const load = async () => {
     try {
@@ -69,10 +69,10 @@ export function CaseDetails() {
   const allowedTransitions = useMemo(() => {
     const candidates = CASE_TRANSITIONS[displayStatus] || []
     return candidates.filter((nextStatus) => {
-      if (nextStatus === 'sar_filed') return canEditCase && canApproveSar
+      if (nextStatus === 'sar_filed') return canEditCase && canRecordSarFiling
       return canEditCase
     })
-  }, [canApproveSar, canEditCase, displayStatus])
+  }, [canRecordSarFiling, canEditCase, displayStatus])
   const availableStatuses = useMemo(() => {
     const ordered = [displayStatus, ...allowedTransitions]
     return Array.from(new Set(ordered))
@@ -89,7 +89,7 @@ export function CaseDetails() {
       <div className="flex justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-semibold">Case {id}</h1>
-          <p className="text-sm text-slate-500">Escalation, manager approval, and SAR workflow are preserved on this case record.</p>
+          <p className="text-sm text-slate-500">Escalation support and human-reviewed SAR/STR filing records are preserved on this case record.</p>
         </div>
         <Link to="/investigation/dashboard" className="px-3 py-1 border rounded">Back</Link>
       </div>
@@ -105,7 +105,7 @@ export function CaseDetails() {
         </div>
         <div className="border rounded p-4 bg-white space-y-2">
           <div className="text-xs uppercase text-slate-500">Escalation</div>
-          <p className="text-sm text-slate-600">Use escalation controls to move the case through review. SAR filing approval is available only after the case reaches review or escalation and only for manager/admin roles.</p>
+          <p className="text-sm text-slate-600">Use escalation controls to move the case through review. SAR/STR filing can only be recorded after human compliance review by authorized manager/admin roles.</p>
           <div className="flex flex-wrap gap-2">
             {canMoveToReview ? (
               <button className="px-3 py-1 border rounded" disabled={!canEditCase} onClick={() => saveStatus('under_review')}>Move to Review</button>
@@ -114,14 +114,14 @@ export function CaseDetails() {
               <button className="px-3 py-1 border rounded" disabled={!canEditCase} onClick={() => saveStatus('escalated')}>Escalate</button>
             ) : null}
             {canApproveSarNow ? (
-              <button className="px-3 py-1 border rounded" disabled={!canEditCase || !canApproveSar} onClick={() => saveStatus('sar_filed')}>Approve SAR</button>
+              <button className="px-3 py-1 border rounded" disabled={!canEditCase || !canRecordSarFiling} onClick={() => saveStatus('sar_filed')}>Record SAR/STR Filing</button>
             ) : null}
             {canClose ? (
               <button className="px-3 py-1 border rounded" disabled={!canEditCase} onClick={() => saveStatus('closed')}>Close</button>
             ) : null}
           </div>
-          {!canApproveSarNow && canApproveSar ? (
-            <p className="text-xs text-slate-500">SAR approval becomes available after the case moves to review or escalation.</p>
+          {!canApproveSarNow && canRecordSarFiling ? (
+            <p className="text-xs text-slate-500">SAR/STR filing record controls become available after the case moves to review or escalation.</p>
           ) : null}
           {!allowedTransitions.length ? (
             <p className="text-xs text-slate-500">No additional workflow transitions are available from the current case status.</p>
@@ -142,8 +142,8 @@ export function CaseDetails() {
               {availableStatuses.map((s) => <option key={s} value={s}>{labelForStatus(s)}</option>)}
             </select>
             <button className="px-3 py-1 border rounded" disabled={statusUpdateDisabled} onClick={() => saveStatus(status)}>Update status</button>
-            {!canApproveSar ? <span className="text-xs text-slate-500">SAR filing requires manager or admin.</span> : null}
-            {canApproveSar && !canApproveSarNow ? <span className="text-xs text-slate-500">Direct SAR filing is not available from {labelForStatus(displayStatus)}.</span> : null}
+            {!canRecordSarFiling ? <span className="text-xs text-slate-500">Recording SAR/STR filing requires manager or admin human review authority.</span> : null}
+            {canRecordSarFiling && !canApproveSarNow ? <span className="text-xs text-slate-500">SAR/STR filing cannot be recorded from {labelForStatus(displayStatus)}.</span> : null}
           </div>
         ) : (
           <p className="text-xs text-slate-500">Your role is read-only for case status updates.</p>

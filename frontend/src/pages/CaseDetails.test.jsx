@@ -73,7 +73,7 @@ describe('CaseDetails', () => {
     })
   })
 
-  it('does not expose SAR approval from open cases', async () => {
+  it('does not expose SAR/STR filing recording from open cases', async () => {
     render(
       <MemoryRouter>
         <CaseDetails />
@@ -81,14 +81,14 @@ describe('CaseDetails', () => {
     )
 
     await waitFor(() => expect(screen.getByText('Case CASE_00005')).not.toBeNull())
-    expect(screen.queryByText('Approve SAR')).toBeNull()
-    expect(screen.getByText('SAR approval becomes available after the case moves to review or escalation.')).not.toBeNull()
+    expect(screen.queryByText('Record SAR/STR Filing')).toBeNull()
+    expect(screen.getByText('SAR/STR filing record controls become available after the case moves to review or escalation.')).not.toBeNull()
 
     const statusOptions = Array.from(screen.getAllByRole('option')).map((option) => option.textContent)
     expect(statusOptions).toEqual(['Open', 'Under Review', 'Escalated', 'Closed'])
   })
 
-  it('exposes SAR approval only after the case reaches an allowed state', async () => {
+  it('exposes SAR/STR filing recording only after the case reaches an allowed state', async () => {
     mockCaseResponse = {
       ...mockCaseResponse,
       case: {
@@ -105,11 +105,11 @@ describe('CaseDetails', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByText('Approve SAR')).not.toBeNull())
+    await waitFor(() => expect(screen.getByText('Record SAR/STR Filing')).not.toBeNull())
     const statusOptions = Array.from(screen.getAllByRole('option')).map((option) => option.textContent)
     expect(statusOptions).toEqual(['Escalated', 'Under Review', 'Sar Filed', 'Closed'])
 
-    fireEvent.click(screen.getByText('Approve SAR'))
+    fireEvent.click(screen.getByText('Record SAR/STR Filing'))
 
     await waitFor(() => expect(api.updateInvestigationCaseStatus).toHaveBeenCalledWith('CASE_00005', 'sar_filed'))
   })

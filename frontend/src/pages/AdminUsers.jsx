@@ -4,6 +4,11 @@ import { api } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 
 const ROLES = ['analyst', 'investigator', 'manager', 'admin']
+const SAFE_USER_FIELDS = ['id', 'user_id', 'email', 'role', 'roles', 'permissions', 'team', 'is_active', 'created_at', 'last_login_at']
+
+function sanitizeUserRow(user) {
+  return Object.fromEntries(SAFE_USER_FIELDS.filter((key) => key in (user || {})).map((key) => [key, user[key]]))
+}
 
 export function AdminUsers() {
   const { user } = useAuth()
@@ -13,7 +18,7 @@ export function AdminUsers() {
   const load = async () => {
     try {
       const res = await api.getAdminUsers()
-      setUsers(res.users || [])
+      setUsers((res.users || []).map(sanitizeUserRow))
     } catch (err) {
       setError(err.message || 'Failed to load users')
     }

@@ -27,6 +27,7 @@ from core.security import (
     require_permissions,
     verify_password,
 )
+from core.access_control import sanitize_user_dto
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 logger = logging.getLogger("althea.auth")
@@ -163,8 +164,7 @@ def _build_auth_response(
         "access_token": access_token,
         "token_type": "bearer",
     }
-    if bool(getattr(settings, "expose_refresh_token_in_response", False)):
-        body["refresh_token"] = refresh_token
+    # Refresh tokens are delivered only via HttpOnly cookie. Never expose them to JS/API response bodies.
     if user_payload is not None:
         body["user"] = user_payload
     response = JSONResponse(content=body)
@@ -389,11 +389,17 @@ def register_user(
         access_token=access_token,
         refresh_token=refresh_token,
         user_payload={
-            "id": user["id"],
-            "user_id": user["id"],
-            "email": user["email"],
-            "role": normalize_role(user["role"]),
-            "team": user["team"],
+            **sanitize_user_dto(
+                {
+                    "id": user["id"],
+                    "user_id": user["id"],
+                    "email": user["email"],
+                    "role": normalize_role(user["role"]),
+                    "team": user["team"],
+                    "is_active": user.get("is_active", True),
+                    "created_at": user.get("created_at"),
+                }
+            ),
             "roles": repository.list_user_roles(tenant_id=tenant_id, user_id=user["id"]),
             "permissions": repository.get_user_permissions(
                 tenant_id=tenant_id,
@@ -644,6 +650,6 @@ def logout_all(request: Request, user: dict = Depends(get_current_user)):
 
 @router.get("/me")
 def auth_me(user: dict = Depends(get_current_user)):
-    response = JSONResponse(content=user)
+    response = JSONResponse(content=sanitize_user_dto(user))
     response.headers["Cache-Control"] = "no-store"
     return response

@@ -373,7 +373,16 @@ class _FeatureWindow:
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    current = Path(__file__).resolve()
+    for candidate in current.parents:
+        if (candidate / "pytest.ini").exists():
+            return candidate
+        if (candidate / "docs").is_dir() and (candidate / "frontend").is_dir():
+            return candidate
+    for candidate in current.parents:
+        if (candidate / "main.py").exists() and (candidate / "benchmarks").is_dir():
+            return candidate
+    return current.parents[2]
 
 
 def _isoformat_utc(value: datetime) -> str:
@@ -1335,8 +1344,15 @@ def _current_pipeline_schema_diagnosis(alert_jsonl_path: str | Path, sample_size
     if not payloads:
         return {"status": "empty"}
 
-    repository = EnterpriseRepository(f"sqlite:///{(_repo_root() / 'data' / 'althea_enterprise.db').as_posix()}")
-    registry = ModelRegistry(repository=repository, object_storage=ObjectStorage(_repo_root() / "data" / "object_storage"))
+    try:
+        repo_root = _repo_root()
+        database_path = repo_root / "data" / "althea_enterprise.db"
+        database_path.parent.mkdir(parents=True, exist_ok=True)
+        repository = EnterpriseRepository(f"sqlite:///{database_path.as_posix()}")
+        registry = ModelRegistry(repository=repository, object_storage=ObjectStorage(repo_root / "data" / "object_storage"))
+    except Exception:
+        logger.warning("Skipping pipeline schema diagnosis because the local repository store is unavailable.", exc_info=True)
+        return {"status": "unavailable", "reason": "repository_unavailable"}
     model_record = registry.resolve_model(tenant_id="default-bank", strategy="active_approved")
     if not model_record:
         return {"status": "no_model"}

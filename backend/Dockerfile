@@ -13,6 +13,7 @@ COPY backend/requirements.txt /tmp/requirements.txt
 RUN pip install -r /tmp/requirements.txt && pip check && rm /tmp/requirements.txt
 
 COPY --chown=althea:althea backend /app
+COPY pytest.ini /app/pytest.ini
 RUN mkdir -p /app/data /tmp/althea && chown -R althea:althea /app /tmp/althea
 
 USER althea

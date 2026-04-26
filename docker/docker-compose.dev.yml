@@ -34,6 +34,7 @@ services:
     restart: unless-stopped
     environment:
       ALTHEA_ENV: development
+      ALTHEA_RUNTIME_MODE: demo
       ALTHEA_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-althea}:${POSTGRES_PASSWORD:?set_POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-althea}
       ALTHEA_REDIS_URL: redis://redis:6379/0
       ALTHEA_QUEUE_MODE: rq
@@ -83,6 +84,7 @@ services:
     restart: unless-stopped
     environment:
       ALTHEA_ENV: development
+      ALTHEA_RUNTIME_MODE: demo
       ALTHEA_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-althea}:${POSTGRES_PASSWORD:?set_POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-althea}
       ALTHEA_REDIS_URL: redis://redis:6379/0
       ALTHEA_QUEUE_MODE: rq
@@ -115,6 +117,7 @@ services:
     restart: unless-stopped
     environment:
       ALTHEA_ENV: development
+      ALTHEA_RUNTIME_MODE: demo
       ALTHEA_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-althea}:${POSTGRES_PASSWORD:?set_POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-althea}
       ALTHEA_REDIS_URL: redis://redis:6379/0
       ALTHEA_QUEUE_MODE: rq
@@ -147,6 +150,7 @@ services:
     restart: unless-stopped
     environment:
       ALTHEA_ENV: development
+      ALTHEA_RUNTIME_MODE: demo
       ALTHEA_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-althea}:${POSTGRES_PASSWORD:?set_POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-althea}
       ALTHEA_REDIS_URL: redis://redis:6379/0
       ALTHEA_QUEUE_MODE: rq

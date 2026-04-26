@@ -65,11 +65,16 @@ class _FakeRepo:
         }
 
     def list_alert_payloads_by_run(self, tenant_id: str, run_id: str, limit: int = 200000):
-        return [dict(self._alert_payload)]
+        return [
+            dict(self._alert_payload),
+            {**dict(self._alert_payload), "alert_id": "A2", "risk_score": 55.0},
+        ]
 
     def get_alert_payload(self, tenant_id: str, alert_id: str, run_id: str | None = None):
         if alert_id == "A1":
             return dict(self._alert_payload)
+        if alert_id == "A2":
+            return {**dict(self._alert_payload), "alert_id": "A2", "risk_score": 55.0}
         return None
 
     def list_cases(self, tenant_id: str):
@@ -798,12 +803,7 @@ def test_network_graph_endpoint_handles_partial_data(client: TestClient):
 
 def test_network_graph_endpoint_returns_empty_graph_when_missing(client: TestClient):
     res = client.get("/api/alerts/A404/network-graph")
-    assert res.status_code == 200
-    payload = res.json()
-    assert payload["alert_id"] == "A404"
-    assert payload["nodes"] == []
-    assert payload["edges"] == []
-    assert payload["summary"]["node_count"] == 0
+    assert res.status_code == 404
 
 
 def test_narrative_draft_endpoint_contract_for_normal_alert(client: TestClient):
@@ -819,12 +819,7 @@ def test_narrative_draft_endpoint_contract_for_normal_alert(client: TestClient):
 
 def test_narrative_draft_endpoint_minimal_fallback(client: TestClient):
     res = client.get("/api/alerts/A404/narrative-draft")
-    assert res.status_code == 200
-    payload = res.json()
-    assert payload["alert_id"] == "A404"
-    assert payload["title"] == "Investigation Narrative Draft"
-    assert "analyst" in payload["narrative"].lower()
-    assert isinstance(payload["sections"]["recommended_follow_up"], list)
+    assert res.status_code == 404
 
 
 def test_graph_and_narrative_endpoints_respect_authenticated_tenant_context(client: TestClient):

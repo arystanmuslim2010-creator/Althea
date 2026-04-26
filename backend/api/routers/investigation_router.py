@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from core.access_control import filter_visible_alerts, require_alert_access, sanitize_user_dto
 from core.observability import record_integration_error, record_workflow_transition
 from core.security import VALID_ROLES, get_authenticated_tenant_id, get_current_user, normalize_role, require_any_permission, require_permissions
 from workflows.alert_workflow_service import apply_alert_assignment_transition
@@ -320,6 +321,7 @@ def get_time_estimate(
     if not rid:
         info = request.app.state.pipeline_service.get_run_info(tenant_id, _user_scope(request, user))
         rid = info.get("run_id")
+    require_alert_access(request, tenant_id, user, alert_id, rid)
 
     payload: dict = {}
     if rid:
@@ -400,12 +402,13 @@ def get_work_queue(
     alerts_df = _load_alerts_df(request, user["tenant_id"], run_id)
     if alerts_df.empty:
         return {"queue": [], "count": 0}
+    visible_alerts = filter_visible_alerts(request, user["tenant_id"], user, alerts_df.to_dict("records"))
     repo = request.app.state.repository
     cases = repo.list_cases(user["tenant_id"])
     records = []
     now = datetime.now(timezone.utc)
     normalized_view = str(queue_view or "").lower().strip()
-    for record in alerts_df.to_dict("records"):
+    for record in visible_alerts:
         alert_id = str(record.get("alert_id", ""))
         assignment = repo.get_latest_assignment(user["tenant_id"], alert_id)
         case_id = next((case["case_id"] for case in cases if case.get("alert_id") == alert_id), None)
@@ -475,6 +478,7 @@ def assign_alert(
     request: Request,
     user: dict = Depends(require_permissions("reassign_alerts")),
 ):
+    require_alert_access(request, user["tenant_id"], user, alert_id)
     repo = request.app.state.repository
     existing = repo.get_latest_assignment(user["tenant_id"], alert_id) or {}
     previous_assignee = existing.get("assigned_to")
@@ -514,6 +518,7 @@ def update_alert_status(
     request: Request,
     user: dict = Depends(require_permissions("change_alert_status")),
 ):
+    require_alert_access(request, user["tenant_id"], user, alert_id)
     status = normalize_assignment_status(payload.status)
     if not status:
         raise HTTPException(status_code=400, detail="Invalid status")
@@ -559,6 +564,7 @@ def bulk_assign_alerts(
         raise HTTPException(status_code=400, detail="alert_ids is required")
     updated = 0
     for alert_id in alert_ids:
+        require_alert_access(request, user["tenant_id"], user, alert_id)
         assign_alert(
             alert_id=alert_id,
             payload=AssignAlertRequest(assigned_to=payload.assigned_to),
@@ -583,6 +589,7 @@ def bulk_update_alert_status(
         raise HTTPException(status_code=400, detail="Invalid status")
     updated = 0
     for alert_id in alert_ids:
+        require_alert_access(request, user["tenant_id"], user, alert_id)
         update_alert_status(
             alert_id=alert_id,
             payload=AlertStatusRequest(status=status),
@@ -600,6 +607,7 @@ def add_alert_note(
     request: Request,
     user: dict = Depends(require_permissions("add_investigation_notes")),
 ):
+    require_alert_access(request, user["tenant_id"], user, alert_id)
     note = request.app.state.repository.create_alert_note(
         {
             "id": uuid.uuid4().hex,
@@ -620,6 +628,7 @@ def get_alert_notes(
     request: Request,
     user: dict = Depends(require_any_permission("view_assigned_alerts", "view_all_alerts")),
 ):
+    require_alert_access(request, user["tenant_id"], user, alert_id)
     return {"alert_id": alert_id, "notes": request.app.state.repository.list_alert_notes(user["tenant_id"], alert_id)}
 
 
@@ -629,6 +638,7 @@ def create_investigation_case(
     request: Request,
     user: dict = Depends(require_permissions("work_cases")),
 ):
+    require_alert_access(request, user["tenant_id"], user, payload.alert_id)
     repo = request.app.state.repository
     existing = [
         case
@@ -670,7 +680,7 @@ def update_investigation_case_status(
     if not new_status or new_status not in CASE_STATUSES:
         raise HTTPException(status_code=400, detail="Invalid case status")
     if new_status == "sar_filed" and user["role"] not in {"manager", "admin"}:
-        raise HTTPException(status_code=403, detail="Only manager/admin can approve SAR cases")
+        raise HTTPException(status_code=403, detail="Only manager/admin can record SAR/STR filing after human compliance review")
     repo = request.app.state.repository
     case = _require_case_access(user, repo.get_case(user["tenant_id"], case_id))
     old_status = str(case.get("status") or "").lower().strip() or "open"
@@ -733,7 +743,7 @@ def update_investigation_case_status(
 
 @router.get("/admin/users")
 def admin_list_users(request: Request, user: dict = Depends(require_permissions("manage_users"))):
-    return {"users": request.app.state.repository.list_users(user["tenant_id"])}
+    return {"users": [sanitize_user_dto(item) for item in request.app.state.repository.list_users(user["tenant_id"])]}
 
 
 @router.post("/admin/users/{user_id}/role")
@@ -835,6 +845,8 @@ def create_case(
     payload: CreateCaseRequest,
     user: dict = Depends(require_permissions("work_cases")),
 ):
+    for alert_id in payload.alert_ids:
+        require_alert_access(request, user["tenant_id"], user, str(alert_id))
     case = _create_case_record(request, user, payload.alert_ids)
     return {
         "case_id": case["case_id"],
@@ -882,7 +894,7 @@ def update_case(
     if payload.assigned_to is not None and "reassign_alerts" not in permissions and normalize_role(user.get("role")) != "admin":
         raise HTTPException(status_code=403, detail="Forbidden")
     if normalized_status == "sar_filed" and normalize_role(user.get("role")) not in {"manager", "admin"}:
-        raise HTTPException(status_code=403, detail="Only manager/admin can approve SAR cases")
+        raise HTTPException(status_code=403, detail="Only manager/admin can record SAR/STR filing after human compliance review")
     ok, message, case = request.app.state.case_service.update_case(
         tenant_id=tenant_id,
         user_scope=_user_scope(request, user),
@@ -966,8 +978,8 @@ def escalate_workflow_case(case_id: str, request: Request, user: dict = Depends(
             case_id=case_id,
             actor=user["user_id"],
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Resource not found")
     return result
 
 
@@ -986,8 +998,8 @@ def transition_workflow_case_state(
             actor=user["user_id"],
             reason=payload.reason or "manual_transition",
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid request")
     _log_event(
         request,
         user["tenant_id"],

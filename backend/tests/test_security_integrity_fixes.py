@@ -474,6 +474,11 @@ def test_decision_audit_records_persist_and_are_readable_via_api(tmp_path) -> No
             }
         ],
     )
+    repo.save_alert_payloads(
+        tenant_id=tenant_id,
+        run_id="run-1",
+        records=[{"alert_id": "A1", "timestamp": "2026-04-01T00:00:00Z", "risk_score": 92.5}],
+    )
 
     app = FastAPI()
     app.include_router(intelligence_router)
@@ -604,6 +609,18 @@ def test_login_ignores_stale_authorization_tenant_override() -> None:
     email = "admin@althea.local"
     password = "Admin@12345"
     user = repository.get_user_by_email(tenant_id, email)
+    if user is None:
+        repository.create_user(
+            {
+                "id": uuid.uuid4().hex,
+                "tenant_id": tenant_id,
+                "email": email,
+                "password_hash": hash_password(password),
+                "role": "admin",
+                "team": "default",
+            }
+        )
+        user = repository.get_user_by_email(tenant_id, email)
     assert user is not None
 
     stale_token = build_access_token(

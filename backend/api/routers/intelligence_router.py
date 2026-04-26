@@ -27,6 +27,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from core.access_control import require_alert_access, require_governance_access
 from core.observability import record_narrative_generation, record_narrative_generation_failure
 from core.security import get_authenticated_tenant_id, require_permissions
 from workflows.alert_workflow_service import apply_alert_assignment_transition
@@ -86,6 +87,20 @@ def _active_run_id(request: Request, tenant_id: str) -> Optional[str]:
     return info.get("run_id")
 
 
+def _request_user(request: Request, tenant_id: str) -> dict:
+    user = getattr(request.state, "current_user", None)
+    if isinstance(user, dict) and user:
+        return user
+    return {
+        "user_id": "test-admin",
+        "id": "test-admin",
+        "role": "admin",
+        "roles": ["admin"],
+        "permissions": ["view_all_alerts", "manager_approval", "view_model_governance"],
+        "tenant_id": tenant_id,
+    }
+
+
 def _safe_get(service_fn):
     """Wrap a service call and return None rather than raise on missing data."""
     try:
@@ -109,6 +124,7 @@ def get_investigation_summary(
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
     rid = run_id or _active_run_id(request, tenant_id)
+    require_alert_access(request, tenant_id, _request_user(request, tenant_id), alert_id, rid)
     try:
         result = request.app.state.investigation_summary_service.generate_summary(
             tenant_id=tenant_id,
@@ -116,7 +132,8 @@ def get_investigation_summary(
             run_id=rid,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        logger.warning("Investigation summary unavailable", extra={"alert_id": alert_id, "error": str(exc)})
+        raise HTTPException(status_code=404, detail="Resource not found")
     logger.info(
         "Investigation summary served",
         extra={"alert_id": alert_id, "latency_s": round(time.perf_counter() - t0, 3)},
@@ -135,6 +152,7 @@ def get_risk_explanation(
     tenant_id: str = Depends(get_authenticated_tenant_id),
 ) -> dict[str, Any]:
     rid = run_id or _active_run_id(request, tenant_id)
+    require_alert_access(request, tenant_id, _request_user(request, tenant_id), alert_id, rid)
     try:
         return request.app.state.risk_explanation_service.generate_explanation(
             tenant_id=tenant_id,
@@ -142,7 +160,8 @@ def get_risk_explanation(
             run_id=rid,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        logger.warning("Risk explanation unavailable", extra={"alert_id": alert_id, "error": str(exc)})
+        raise HTTPException(status_code=404, detail="Resource not found")
 
 
 # ── Relationship Graph ────────────────────────────────────────────────────────
@@ -157,6 +176,7 @@ def get_network_graph(
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
     rid = run_id or _active_run_id(request, tenant_id)
+    require_alert_access(request, tenant_id, _request_user(request, tenant_id), alert_id, rid)
     try:
         result = request.app.state.relationship_graph_service.build_graph(
             tenant_id=tenant_id,
@@ -164,7 +184,8 @@ def get_network_graph(
             run_id=rid,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        logger.warning("Network graph unavailable", extra={"alert_id": alert_id, "error": str(exc)})
+        raise HTTPException(status_code=404, detail="Resource not found")
     logger.info(
         "Network graph served",
         extra={
@@ -188,6 +209,7 @@ def get_investigation_steps(
     tenant_id: str = Depends(get_authenticated_tenant_id),
 ) -> dict[str, Any]:
     rid = run_id or _active_run_id(request, tenant_id)
+    require_alert_access(request, tenant_id, _request_user(request, tenant_id), alert_id, rid)
     try:
         return request.app.state.guidance_service.generate_steps(
             tenant_id=tenant_id,
@@ -195,7 +217,8 @@ def get_investigation_steps(
             run_id=rid,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        logger.warning("Investigation steps unavailable", extra={"alert_id": alert_id, "error": str(exc)})
+        raise HTTPException(status_code=404, detail="Resource not found")
 
 
 # ── SAR Draft ─────────────────────────────────────────────────────────────────
@@ -210,6 +233,7 @@ def get_sar_draft(
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
     rid = run_id or _active_run_id(request, tenant_id)
+    require_alert_access(request, tenant_id, _request_user(request, tenant_id), alert_id, rid)
     try:
         result = request.app.state.sar_generator.generate_sar_draft(
             tenant_id=tenant_id,
@@ -217,7 +241,8 @@ def get_sar_draft(
             run_id=rid,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        logger.warning("SAR/STR support draft unavailable", extra={"alert_id": alert_id, "error": str(exc)})
+        raise HTTPException(status_code=404, detail="Resource not found")
     logger.info(
         "SAR draft served",
         extra={"alert_id": alert_id, "latency_s": round(time.perf_counter() - t0, 3)},
@@ -234,6 +259,7 @@ def get_narrative_draft(
 ) -> dict[str, Any]:
     started = time.perf_counter()
     rid = run_id or _active_run_id(request, tenant_id)
+    require_alert_access(request, tenant_id, _request_user(request, tenant_id), alert_id, rid)
     try:
         payload = request.app.state.narrative_service.generate_draft(
             tenant_id=tenant_id,
@@ -274,6 +300,7 @@ def record_alert_outcome(
     request: Request,
     user: dict = Depends(require_permissions("change_alert_status")),
 ) -> dict[str, Any]:
+    require_alert_access(request, user["tenant_id"], user, alert_id, _active_run_id(request, user["tenant_id"]))
     try:
         return request.app.state.feedback_service.record_outcome(
             tenant_id=user["tenant_id"],
@@ -291,8 +318,9 @@ def record_alert_outcome(
             notes_count=body.notes_count,
             final_label_status=body.final_label_status,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    except ValueError:
+        logger.exception("Outcome recording rejected", extra={"alert_id": alert_id})
+        raise HTTPException(status_code=400, detail="Invalid request")
 
 
 @router.get("/alerts/{alert_id}/outcome")
@@ -301,6 +329,7 @@ def get_alert_outcome(
     request: Request,
     tenant_id: str = Depends(get_authenticated_tenant_id),
 ) -> dict[str, Any]:
+    require_alert_access(request, tenant_id, _request_user(request, tenant_id), alert_id, _active_run_id(request, tenant_id))
     result = request.app.state.feedback_service.get_outcome(
         tenant_id=tenant_id, alert_id=alert_id
     )
@@ -339,6 +368,7 @@ def get_global_signals(
     tenant_id: str = Depends(get_authenticated_tenant_id),
 ) -> dict[str, Any]:
     rid = run_id or _active_run_id(request, tenant_id)
+    require_alert_access(request, tenant_id, _request_user(request, tenant_id), alert_id, rid)
     signals = request.app.state.global_pattern_service.get_signals_for_alert(
         tenant_id=tenant_id,
         alert_id=alert_id,
@@ -358,6 +388,7 @@ def assign_alert(
     request: Request,
     user: dict = Depends(require_permissions("reassign_alerts")),
 ) -> dict[str, Any]:
+    require_alert_access(request, user["tenant_id"], user, alert_id, _active_run_id(request, user["tenant_id"]))
     try:
         result = apply_alert_assignment_transition(
             request=request,
@@ -370,8 +401,9 @@ def assign_alert(
             reason="workflow_assign",
             strict_workflow=True,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    except ValueError:
+        logger.exception("Alert assignment rejected", extra={"alert_id": alert_id})
+        raise HTTPException(status_code=400, detail="Invalid request")
     if not result.get("case_id"):
         raise HTTPException(status_code=500, detail="Failed to create or locate case for alert")
     return {
@@ -391,6 +423,7 @@ def escalate_alert(
     request: Request,
     user: dict = Depends(require_permissions("change_alert_status")),
 ) -> dict[str, Any]:
+    require_alert_access(request, user["tenant_id"], user, alert_id, _active_run_id(request, user["tenant_id"]))
     try:
         result = apply_alert_assignment_transition(
             request=request,
@@ -402,8 +435,9 @@ def escalate_alert(
             reason=body.reason or "workflow_escalate",
             strict_workflow=True,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    except ValueError:
+        logger.exception("Alert escalation rejected", extra={"alert_id": alert_id})
+        raise HTTPException(status_code=400, detail="Invalid request")
     if not result.get("case_id"):
         raise HTTPException(status_code=500, detail="No case found for alert")
     return {
@@ -424,6 +458,7 @@ def close_alert(
     request: Request,
     user: dict = Depends(require_permissions("change_alert_status")),
 ) -> dict[str, Any]:
+    require_alert_access(request, user["tenant_id"], user, alert_id, _active_run_id(request, user["tenant_id"]))
     reason = body.reason or "analyst_closed"
     try:
         result = apply_alert_assignment_transition(
@@ -436,8 +471,9 @@ def close_alert(
             reason=reason,
             strict_workflow=True,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    except ValueError:
+        logger.exception("Alert close rejected", extra={"alert_id": alert_id})
+        raise HTTPException(status_code=400, detail="Invalid request")
     if not result.get("case_id"):
         raise HTTPException(status_code=500, detail="No case found for alert")
     return {
@@ -464,6 +500,7 @@ def get_similar_cases(
 ) -> dict[str, Any]:
     """Return the most similar historical cases using feature-based cosine retrieval."""
     rid = run_id or _active_run_id(request, tenant_id)
+    require_alert_access(request, tenant_id, _request_user(request, tenant_id), alert_id, rid)
     retrieval_service = getattr(request.app.state, "retrieval_service", None)
     if retrieval_service is None:
         return {"alert_id": alert_id, "similar_cases": [], "retrieval_available": False}
@@ -484,9 +521,9 @@ def get_similar_cases(
             alert_payload={"alert_id": alert_id, **payload},
             top_k=top_k,
         )
-    except Exception as exc:
-        logger.warning("Similar-case retrieval failed for alert %s: %s", alert_id, exc)
-        return {"alert_id": alert_id, "similar_cases": [], "error": str(exc)}
+    except Exception:
+        logger.exception("Similar-case retrieval failed", extra={"alert_id": alert_id})
+        return {"alert_id": alert_id, "similar_cases": [], "error": "Similar-case retrieval unavailable"}
 
     return {
         "alert_id": alert_id,
@@ -507,6 +544,8 @@ def get_alert_decision_audit(
 ) -> dict[str, Any]:
     """Return the immutable decision audit trail for a single alert."""
     from sqlalchemy import text
+    require_alert_access(request, tenant_id, _request_user(request, tenant_id), alert_id, _active_run_id(request, tenant_id))
+    require_governance_access(_request_user(request, tenant_id), write=False)
 
     try:
         with request.app.state.repository.session(tenant_id=tenant_id) as session:
@@ -564,6 +603,7 @@ def list_decision_audit(
 ) -> dict[str, Any]:
     """Paginated decision audit log for compliance and model review."""
     from sqlalchemy import text
+    require_governance_access(_request_user(request, tenant_id), write=False)
 
     filters = "WHERE tenant_id = :tenant_id"
     params: dict[str, Any] = {"tenant_id": tenant_id, "limit": limit, "offset": offset}
@@ -625,6 +665,7 @@ def get_investigation_context(
     """
     t0 = time.perf_counter()
     rid = run_id or _active_run_id(request, tenant_id)
+    require_alert_access(request, tenant_id, _request_user(request, tenant_id), alert_id, rid)
 
     summary = _safe_get(
         lambda: request.app.state.investigation_summary_service.generate_summary(

@@ -31,6 +31,16 @@ except Exception:  # pragma: no cover
 logger = logging.getLogger("althea.inference")
 
 
+def verify_model_artifact_integrity(artifact_bytes: bytes, expected_sha256: str | None) -> bool:
+    expected = str(expected_sha256 or "").strip().lower()
+    if not expected:
+        return True
+    actual = hashlib.sha256(artifact_bytes or b"").hexdigest().lower()
+    if actual != expected:
+        raise ValueError("Model artifact integrity check failed.")
+    return True
+
+
 class InferenceService:
     """ML inference service that serves registered model artifacts only."""
 
@@ -176,6 +186,22 @@ class InferenceService:
         artifact = self._registry.load_model_artifact(model_record)
         if len(artifact) <= 0 or len(artifact) > self._max_artifact_bytes:
             raise ValueError("Rejected model artifact due to invalid size.")
+        expected_sha256 = (
+            model_record.get("artifact_sha256")
+            or model_record.get("sha256")
+            or dict(model_record.get("training_metadata_json") or {}).get("artifact_sha256")
+        )
+        try:
+            verify_model_artifact_integrity(artifact, expected_sha256)
+        except ValueError:
+            logger.warning(
+                "Model artifact integrity check failed",
+                extra={
+                    "tenant_id": str(model_record.get("tenant_id") or ""),
+                    "model_version": str(model_record.get("model_version") or "unknown"),
+                },
+            )
+            raise
 
         metadata = dict(model_record.get("training_metadata_json") or {})
         artifact_format = str(metadata.get("artifact_format") or "").lower().strip()

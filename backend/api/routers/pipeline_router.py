@@ -10,6 +10,11 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Upl
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from core.access_control import (
+    require_governance_access,
+    sanitize_model_monitoring_dto,
+    sanitize_training_run_dto,
+)
 from core.observability import (
     metrics_response,
     record_feature_retrieval,
@@ -18,7 +23,7 @@ from core.observability import (
     record_legacy_ingestion_usage,
     record_integration_error,
 )
-from core.security import get_authenticated_tenant_id, require_permissions, require_role
+from core.security import get_authenticated_tenant_id, get_current_user, require_permissions, require_role
 from services.alert_ingestion_service import AlertIngestionValidationError
 from services.ingestion_service import IngestionError
 
@@ -82,9 +87,22 @@ def _is_debug_env(request: Request) -> bool:
 
 
 def _error_detail(request: Request, exc: Exception, fallback: str = "Internal server error") -> str:
-    if _is_debug_env(request):
+    settings = request.app.state.settings
+    if _is_debug_env(request) and str(getattr(settings, "runtime_mode", "demo") or "demo").lower() == "demo":
         return str(exc)
     return fallback
+
+
+def _demo_features_enabled(request: Request) -> bool:
+    settings = request.app.state.settings
+    if hasattr(settings, "demo_features_enabled"):
+        return bool(settings.demo_features_enabled())
+    return str(getattr(settings, "runtime_mode", "demo") or "demo").lower() == "demo"
+
+
+def _require_demo_features(request: Request) -> None:
+    if not _demo_features_enabled(request):
+        raise HTTPException(status_code=403, detail="Demo functionality is disabled in this runtime mode")
 
 
 def _max_upload_bytes(request: Request) -> int:
@@ -323,6 +341,7 @@ def generate_synthetic(
     tenant_id: str = Depends(get_authenticated_tenant_id),
     _: dict = Depends(require_permissions("manager_approval")),
 ):
+    _require_demo_features(request)
     return request.app.state.ingestion_service.generate_synthetic(tenant_id=tenant_id, user_scope=_user_scope(request), n_rows=n_rows)
 
 
@@ -387,7 +406,8 @@ async def upload_csv(
             )
         record_ingestion_path_used(ingestion_path="legacy", primary_mode=primary_mode, status="failed", alerts_ingested=0)
         record_legacy_ingestion_usage(endpoint="upload_csv", status="failed")
-        raise HTTPException(status_code=400, detail=str(exc))
+        logger.warning("Legacy CSV ingestion rejected", extra={"error": str(exc)})
+        raise HTTPException(status_code=400, detail="Invalid request")
     except HTTPException:
         record_legacy_ingestion_usage(endpoint="upload_csv", status="failed")
         raise
@@ -406,6 +426,7 @@ def generate_bank_csv(
     _: dict = Depends(require_permissions("manager_approval")),
 ):
     try:
+        _require_demo_features(request)
         out = request.app.state.ingestion_service.generate_bank_alerts_csv(n_rows=max(1, min(n_rows, 10000)), seed=seed)
         out_path = request.app.state.settings.data_dir / f"bank_alerts_{len(out)}.csv"
         out.to_csv(out_path, index=False, encoding="utf-8")
@@ -481,7 +502,8 @@ async def upload_bank_csv(
             )
         record_ingestion_path_used(ingestion_path="legacy", primary_mode=primary_mode, status="failed", alerts_ingested=0)
         record_legacy_ingestion_usage(endpoint="upload_bank_csv", status="failed")
-        raise HTTPException(status_code=400, detail=str(exc))
+        logger.warning("Legacy bank CSV ingestion rejected", extra={"error": str(exc)})
+        raise HTTPException(status_code=400, detail="Invalid request")
     except HTTPException:
         record_legacy_ingestion_usage(endpoint="upload_bank_csv", status="failed")
         raise
@@ -594,7 +616,8 @@ async def upload_alert_jsonl(
         )
     except ValueError as exc:
         record_ingestion_path_used(ingestion_path="alert_jsonl", primary_mode=primary_mode, status="failed", alerts_ingested=0)
-        raise HTTPException(status_code=400, detail=str(exc))
+        logger.warning("Alert JSONL ingestion rejected", extra={"error": str(exc)})
+        raise HTTPException(status_code=400, detail="Invalid request")
     except RuntimeError as exc:
         if str(exc) == "alert_jsonl_ingestion_disabled":
             record_ingestion_path_used(ingestion_path="alert_jsonl", primary_mode=primary_mode, status="disabled", alerts_ingested=0)
@@ -664,7 +687,8 @@ def run_pipeline(
             initiated_by=initiated_by,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        logger.warning("Pipeline run rejected", extra={"error": str(exc)})
+        raise HTTPException(status_code=400, detail="Invalid request")
     except Exception as exc:
         raise HTTPException(status_code=500, detail=_error_detail(request, exc))
 
@@ -755,7 +779,12 @@ def rescore_alerts(
 
 
 @router.get("/api/features/registry")
-def list_feature_registry(request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
+def list_feature_registry(
+    request: Request,
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+    user: dict = Depends(get_current_user),
+):
+    require_governance_access(user, write=False)
     started = time.perf_counter()
     features = request.app.state.feature_registry.list_features(tenant_id)
     record_feature_retrieval("feature_registry", time.perf_counter() - started)
@@ -767,8 +796,9 @@ def submit_model_governance_approval(
     payload: GovernanceApprovalRequest,
     request: Request,
     tenant_id: str = Depends(get_authenticated_tenant_id),
-    user: dict = Depends(require_permissions("manager_approval")),
+    user: dict = Depends(get_current_user),
 ):
+    require_governance_access(user, write=True)
     actor = str(user.get("user_id") or "system")
     result = request.app.state.model_governance_lifecycle.submit_approval(
         tenant_id=tenant_id,
@@ -782,13 +812,23 @@ def submit_model_governance_approval(
 
 
 @router.get("/api/model-governance/monitoring/{model_version}")
-def get_model_governance_monitoring(model_version: str, request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
+def get_model_governance_monitoring(
+    model_version: str,
+    request: Request,
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+    user: dict = Depends(get_current_user),
+):
+    require_governance_access(user, write=False)
+    full = str(user.get("role") or "").lower() in {"admin", "governance"} or "manage_model_governance" in set(user.get("permissions") or [])
     return {
-        "items": request.app.state.model_governance_lifecycle.list_monitoring(
-            tenant_id=tenant_id,
-            model_version=model_version,
-            limit=200,
-        )
+        "items": [
+            sanitize_model_monitoring_dto(item, full=full)
+            for item in request.app.state.model_governance_lifecycle.list_monitoring(
+                tenant_id=tenant_id,
+                model_version=model_version,
+                limit=200,
+            )
+        ]
     }
 
 
@@ -814,9 +854,10 @@ def trigger_training_run(
     payload: TrainingTriggerRequest,
     request: Request,
     tenant_id: str = Depends(get_authenticated_tenant_id),
-    user: dict = Depends(require_permissions("manager_approval")),
+    user: dict = Depends(get_current_user),
 ) -> dict:
     """Manually trigger a supervised training run for the tenant's models."""
+    require_governance_access(user, write=True)
     training_service = getattr(request.app.state, "training_run_service", None)
     if training_service is None:
         raise HTTPException(status_code=503, detail="Training service not configured")
@@ -825,8 +866,9 @@ def trigger_training_run(
             tenant_id=tenant_id,
             initiated_by=str(user.get("user_id") or "system"),
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    except ValueError:
+        logger.exception("Training run rejected")
+        raise HTTPException(status_code=400, detail="Invalid training request")
     except Exception as exc:
         raise HTTPException(status_code=500, detail=_error_detail(request, exc))
     return result
@@ -837,10 +879,13 @@ def list_training_runs(
     request: Request,
     limit: int = 50,
     tenant_id: str = Depends(get_authenticated_tenant_id),
+    user: dict = Depends(get_current_user),
 ) -> dict:
     """List recent training runs from the training_runs table."""
     from sqlalchemy import text
 
+    require_governance_access(user, write=False)
+    full = str(user.get("role") or "").lower() in {"admin", "governance"} or "manage_model_governance" in set(user.get("permissions") or [])
     limit = max(1, min(int(limit), 200))
     try:
         with request.app.state.repository.session(tenant_id=tenant_id) as session:
@@ -861,8 +906,9 @@ def list_training_runs(
                 ),
                 {"tenant_id": tenant_id, "limit": limit},
             ).fetchall()
-    except Exception as exc:
-        return {"training_runs": [], "error": "training_runs table unavailable: " + str(exc)}
+    except Exception:
+        logger.exception("training_runs table unavailable")
+        return {"training_runs": [], "error": "training_runs unavailable"}
 
     runs = [
         {
@@ -886,7 +932,7 @@ def list_training_runs(
         }
         for r in rows
     ]
-    return {"training_runs": runs, "total": len(runs)}
+    return {"training_runs": [sanitize_training_run_dto(run, full=full) for run in runs], "total": len(runs)}
 
 
 @router.get("/api/ml/training-runs/{run_id}")
@@ -894,6 +940,7 @@ def get_training_run(
     run_id: str,
     request: Request,
     tenant_id: str = Depends(get_authenticated_tenant_id),
+    user: dict = Depends(get_current_user),
 ) -> dict:
     """Fetch the full record for a single training run including metadata_json."""
     from sqlalchemy import text
@@ -918,13 +965,14 @@ def get_training_run(
                 ),
                 {"tenant_id": tenant_id, "run_id": run_id},
             ).fetchone()
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="training_runs table unavailable: " + str(exc))
+    except Exception:
+        logger.exception("training_runs table unavailable")
+        raise HTTPException(status_code=503, detail="training_runs unavailable")
 
     if not row:
         raise HTTPException(status_code=404, detail="Training run not found")
 
-    return {
+    return sanitize_training_run_dto({
         "id": str(row[0]),
         "training_run_id": row[1],
         "snapshot_id": row[2],
@@ -944,7 +992,7 @@ def get_training_run(
         "error_message": row[16],
         "started_at": str(row[17]) if row[17] else None,
         "completed_at": str(row[18]) if row[18] else None,
-    }
+    }, full=full)
 
 
 @router.post("/api/ml/retraining/evaluate")
@@ -952,7 +1000,7 @@ def evaluate_retraining(
     payload: RetrainingEvaluateRequest,
     request: Request,
     tenant_id: str = Depends(get_authenticated_tenant_id),
-    user: dict = Depends(require_permissions("manager_approval")),
+    user: dict = Depends(get_current_user),
 ) -> dict:
     """Evaluate retraining triggers and optionally launch a training run.
 
@@ -983,9 +1031,11 @@ def evaluate_retraining(
             force=payload.force,
             initiated_by=str(user.get("user_id") or "system"),
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    except ValueError:
+        logger.exception("Retraining evaluation rejected")
+        raise HTTPException(status_code=400, detail="Invalid request")
     except Exception as exc:
+        logger.exception("Retraining evaluation failed")
         raise HTTPException(status_code=500, detail=_error_detail(request, exc))
 
     return result
@@ -997,6 +1047,7 @@ def get_performance_report(
     model_version: str | None = None,
     lookback_days: int = 90,
     tenant_id: str = Depends(get_authenticated_tenant_id),
+    user: dict = Depends(get_current_user),
 ) -> dict:
     """Return PR-AUC, precision@k, capture rate and breakdown by typology."""
     monitoring_service = getattr(request.app.state, "model_monitoring_service", None)
@@ -1015,6 +1066,7 @@ def get_calibration_report(
     model_version: str | None = None,
     lookback_days: int = 90,
     tenant_id: str = Depends(get_authenticated_tenant_id),
+    user: dict = Depends(get_current_user),
 ) -> dict:
     """Return ECE, reliability diagram, and calibration drift."""
     monitoring_service = getattr(request.app.state, "model_monitoring_service", None)
@@ -1033,8 +1085,9 @@ def get_business_report(
     model_version: str | None = None,
     lookback_days: int = 90,
     tenant_id: str = Depends(get_authenticated_tenant_id),
+    user: dict = Depends(get_current_user),
 ) -> dict:
-    """Return queue compression, analyst hours saved, SAR capture rate, and typology breakdown."""
+    """Return queue compression, analyst hours, human-recorded SAR/STR capture rate, and typology breakdown."""
     monitoring_service = getattr(request.app.state, "model_monitoring_service", None)
     if monitoring_service is None:
         raise HTTPException(status_code=503, detail="Monitoring service not configured")
@@ -1043,3 +1096,9 @@ def get_business_report(
         model_version=model_version,
         lookback_days=lookback_days,
     )
+    require_governance_access(user, write=False)
+    full = str(user.get("role") or "").lower() in {"admin", "governance"} or "manage_model_governance" in set(user.get("permissions") or [])
+    require_governance_access(user, write=True)
+    require_governance_access(user, write=False)
+    require_governance_access(user, write=False)
+    require_governance_access(user, write=False)

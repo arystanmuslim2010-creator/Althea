@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react'
 import { api } from '../services/api'
 import { useAnalystCapacity } from '../contexts/AnalystCapacityContext'
+import { useAuth } from '../contexts/AuthContext'
+import { hasAnyPermission } from '../services/permissions'
 
 export function OpsGovernance() {
+  const { user } = useAuth()
   const [ops, setOps] = useState(null)
   const [health, setHealth] = useState(null)
   const { capacity, setCapacity, maxCapacity } = useAnalystCapacity()
@@ -10,8 +13,13 @@ export function OpsGovernance() {
   const [slaBreachesApi, setSlaBreachesApi] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const canViewGovernance = hasAnyPermission(user, ['view_all_alerts', 'view_dashboards', 'manager_approval', 'view_model_governance'])
 
   useEffect(() => {
+    if (!canViewGovernance) {
+      setLoading(false)
+      return
+    }
     setError(null)
     Promise.all([
       api.getOpsMetrics(capacity),
@@ -33,7 +41,7 @@ export function OpsGovernance() {
         setError(e?.message || 'Failed to load metrics')
       })
       .finally(() => setLoading(false))
-  }, [capacity])
+  }, [capacity, canViewGovernance])
 
   const now = Date.now()
   const openQueue = queue.filter((item) => item.status !== 'closed')
@@ -59,6 +67,15 @@ export function OpsGovernance() {
     .sort((a, b) => b.total - a.total)
 
   if (loading) return <div className="max-w-[1200px] mx-auto"><div className="py-10 text-center text-[var(--muted)] text-[0.9375rem]">Loading...</div></div>
+  if (!canViewGovernance) {
+    return (
+      <div className="max-w-[1200px] mx-auto">
+        <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5 text-sm text-[var(--muted)]">
+          Operations and governance views require manager or governance permissions.
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="max-w-[1200px] mx-auto">

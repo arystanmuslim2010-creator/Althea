@@ -115,7 +115,8 @@ def create_app() -> FastAPI:
         safe_detail = "Internal server error"
         try:
             settings = request.app.state.settings
-            if getattr(settings, "is_dev", False):
+            runtime_mode = str(getattr(settings, "runtime_mode", "demo") or "demo").lower()
+            if getattr(settings, "is_dev", False) and runtime_mode == "demo":
                 safe_detail = str(exc) or safe_detail
         except Exception:
             pass

@@ -88,7 +88,7 @@ class AICopilotService:
             steps.append("Escalate to manager for priority review under high-risk policy.")
         if any("device" in item.lower() for item in risk_drivers):
             steps.append("Perform device-link analysis for mule account indicators.")
-        steps.append("Document findings and determine SAR candidacy.")
+        steps.append("Document findings and determine whether human-reviewed escalation support is warranted.")
         return steps
 
     def _sar_draft(self, payload: dict[str, Any], risk_drivers: list[str]) -> str:
@@ -100,7 +100,7 @@ class AICopilotService:
         return (
             f"Alert {alert_id} for {customer} was escalated due to a risk score of {score:.1f}. "
             f"Transaction activity{f' totaling {amount}' if amount is not None else ''} showed unusual patterns "
-            f"driven by {drivers}. Analyst review indicates potential suspicious activity requiring SAR consideration."
+            f"driven by {drivers}. This draft supports analyst review only; any SAR/STR filing decision must be made by authorized compliance staff."
         )
 
     def generate_copilot_summary(self, tenant_id: str, alert_id: str, run_id: str | None = None) -> dict[str, Any]:

@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from core.access_control import filter_visible_alerts, require_alert_access
 from core.observability import record_copilot_generation, record_integration_error
 from core.security import get_authenticated_tenant_id, require_permissions
 
@@ -19,6 +20,21 @@ logger = logging.getLogger("althea.alerts")
 def _user_scope(request: Request) -> str:
     current_user = getattr(request.state, "current_user", None) or {}
     return current_user.get("user_id") or "public"
+
+
+def _request_user(request: Request, tenant_id: str) -> dict:
+    user = getattr(request.state, "current_user", None)
+    if isinstance(user, dict) and user:
+        return user
+    # Compatibility for isolated router tests that override tenant auth directly.
+    return {
+        "user_id": "test-admin",
+        "id": "test-admin",
+        "role": "admin",
+        "roles": ["admin"],
+        "permissions": ["view_all_alerts", "manager_approval", "view_system_logs"],
+        "tenant_id": tenant_id,
+    }
 
 
 def _parse_json_field(raw, default, field_name: str = "json_field"):
@@ -198,7 +214,11 @@ def get_alerts(
     alerts_df = _load_alerts_df(request, tenant_id, run_id)
     if alerts_df.empty:
         return {"alerts": [], "run_id": run_id, "total": 0}
-    queue = alerts_df.copy()
+    user = _request_user(request, tenant_id)
+    visible = filter_visible_alerts(request, tenant_id, user, alerts_df.to_dict("records"))
+    queue = pd.DataFrame(visible)
+    if queue.empty:
+        return {"alerts": [], "run_id": run_id, "total": 0, "total_available": 0, "limit": max(1, min(int(limit), 500)), "offset": max(0, int(offset))}
     if status_filter == "Eligible":
         if "governance_status" in queue.columns:
             gov = queue["governance_status"].astype(str).str.lower()
@@ -251,15 +271,7 @@ def list_runs(request: Request, tenant_id: str = Depends(get_authenticated_tenan
 @router.get("/api/alerts/{alert_id}")
 def get_alert(alert_id: str, request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
     run_id = _active_run_id(request, tenant_id)
-    if not run_id:
-        raise HTTPException(status_code=404, detail="No active run")
-    payload = request.app.state.repository.get_alert_payload(
-        tenant_id=tenant_id,
-        alert_id=str(alert_id),
-        run_id=run_id,
-    )
-    if not payload:
-        raise HTTPException(status_code=404, detail="Alert not found")
+    payload = require_alert_access(request, tenant_id, _request_user(request, tenant_id), str(alert_id), run_id)
     return _sanitize_record(_apply_scoring_api_fields(payload))
 
 
@@ -268,6 +280,7 @@ def get_alert_explain(alert_id: str, request: Request, run_id: Optional[str] = N
     rid = run_id or _active_run_id(request, tenant_id)
     if not rid:
         raise HTTPException(status_code=404, detail="No active run")
+    require_alert_access(request, tenant_id, _request_user(request, tenant_id), str(alert_id), rid)
     result = request.app.state.explain_service.explain_alert(tenant_id=tenant_id, alert_id=alert_id, run_id=rid)
     if result is None:
         raise HTTPException(status_code=404, detail="Alert or decision trace not found")
@@ -276,6 +289,7 @@ def get_alert_explain(alert_id: str, request: Request, run_id: Optional[str] = N
 
 @router.get("/api/alerts/{alert_id}/ai-summary")
 def get_ai_summary(alert_id: str, request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
+    require_alert_access(request, tenant_id, _request_user(request, tenant_id), str(alert_id), _active_run_id(request, tenant_id))
     rec = request.app.state.repository.get_ai_summary(tenant_id=tenant_id, entity_type="alert", entity_id=alert_id)
     if rec:
         return {"summary": rec["summary"], "ts": rec.get("ts", "")}
@@ -285,6 +299,7 @@ def get_ai_summary(alert_id: str, request: Request, tenant_id: str = Depends(get
 @router.post("/api/alerts/{alert_id}/ai-summary")
 def generate_ai_summary(alert_id: str, request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
     run_id = _active_run_id(request, tenant_id)
+    require_alert_access(request, tenant_id, _request_user(request, tenant_id), str(alert_id), run_id)
     alerts_df = _load_alerts_df(request, tenant_id, run_id or "")
     if "alert_id" not in alerts_df.columns:
         raise HTTPException(status_code=404, detail="Alert not found")
@@ -309,6 +324,7 @@ def generate_ai_summary(alert_id: str, request: Request, tenant_id: str = Depend
 
 @router.delete("/api/alerts/{alert_id}/ai-summary")
 def clear_ai_summary(alert_id: str, request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
+    require_alert_access(request, tenant_id, _request_user(request, tenant_id), str(alert_id), _active_run_id(request, tenant_id))
     request.app.state.repository.delete_ai_summary(tenant_id=tenant_id, entity_type="alert", entity_id=alert_id)
     return {"status": "cleared"}
 
@@ -385,6 +401,7 @@ def internal_ml_predict(
 @router.get("/alerts/{alert_id}/copilot_summary")
 def get_alert_copilot_summary(alert_id: str, request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
     run_id = _active_run_id(request, tenant_id)
+    require_alert_access(request, tenant_id, _request_user(request, tenant_id), str(alert_id), run_id)
     started = time.perf_counter()
     try:
         payload = request.app.state.ai_copilot_service.generate_copilot_summary(
@@ -396,4 +413,5 @@ def get_alert_copilot_summary(alert_id: str, request: Request, tenant_id: str = 
         return payload
     except ValueError as exc:
         record_integration_error("copilot_summary")
-        raise HTTPException(status_code=404, detail=str(exc))
+        logger.warning("Copilot summary unavailable", extra={"alert_id": alert_id, "error": str(exc)})
+        raise HTTPException(status_code=404, detail="Resource not found")

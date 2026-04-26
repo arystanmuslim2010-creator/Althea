@@ -78,7 +78,7 @@ function formatDecision(value) {
     true_positive: 'True Positive',
     false_positive: 'False Positive',
     escalated: 'Escalated',
-    sar_filed: 'SAR Filed',
+    sar_filed: 'SAR/STR Filing Recorded',
     benign_activity: 'Benign Activity',
     confirmed_suspicious: 'Confirmed Suspicious Activity',
   }
@@ -1045,7 +1045,7 @@ export function AlertDetails() {
         >
           <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-[var(--text)]">
             {cleanText(sarDraft.disclaimer) ||
-              'This preliminary draft is for analyst support only. It does not determine that suspicious activity occurred or that a SAR/STR will be filed. Any filing decision remains subject to investigator validation and compliance approval.'}
+              'ALTHEA provides investigation support only. Final SAR/STR filing decisions must be made by authorized compliance staff.'}
           </div>
           {cleanText(sarDraft.narrative) ? (
             <div className="mt-4 rounded-lg border border-[var(--border)] bg-[var(--surface2)] px-4 py-3">
@@ -1220,7 +1220,7 @@ export function AlertDetails() {
                 <button type="button" className="rounded-md border border-[var(--border)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60" onClick={() => saveOutcome('true_positive')} disabled={actionBusy}>Record True Positive</button>
                 <button type="button" className="rounded-md border border-[var(--border)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60" onClick={() => saveOutcome('false_positive')} disabled={actionBusy}>Record False Positive</button>
                 <button type="button" className="rounded-md border border-[var(--border)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60" onClick={() => saveOutcome('escalated')} disabled={actionBusy}>Record Escalated</button>
-                <button type="button" className="rounded-md border border-[var(--border)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60" onClick={() => saveOutcome('sar_filed')} disabled={actionBusy}>Record SAR Filed</button>
+                <button type="button" className="rounded-md border border-[var(--border)] px-3 py-2 text-sm text-[var(--text)] disabled:opacity-60" onClick={() => saveOutcome('sar_filed')} disabled={actionBusy}>Record Human-Reviewed SAR/STR Filing</button>
               </div>
               <textarea
                 className="mt-4 min-h-[88px] w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--text)]"

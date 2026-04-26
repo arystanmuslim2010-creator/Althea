@@ -164,8 +164,8 @@ def get_master_data_entity(
 ):
     try:
         return request.app.state.master_data_service.get_entity(tenant_id=tenant_id, entity_type=entity_type, entity_id=entity_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid request")
 
 
 @router.get("/internal/master-data/aliases/{source_name}/{external_id}")
