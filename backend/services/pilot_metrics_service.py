@@ -119,3 +119,95 @@ def explanation_usefulness_summary(records, score_field="explanation_usefulness_
     if not values:
         return {"explanation_usefulness_average": None, "sample_count": 0}
     return {"explanation_usefulness_average": sum(values) / len(values), "sample_count": len(values)}
+
+
+class PilotMetricsService:
+    def __init__(self, repository=None, evaluation_service=None) -> None:
+        self._repository = repository
+        self._evaluation_service = evaluation_service
+
+    @staticmethod
+    def _safe_float(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return default
+
+    @staticmethod
+    def _band(value: Any) -> str:
+        return str(value or "").strip().lower()
+
+    def summarize_records(self, records: list[dict[str, Any]], evaluation: dict[str, Any] | None = None) -> dict[str, Any]:
+        rows = _rows(records)
+        total_alerts = len(rows)
+        high_count = sum(1 for row in rows if self._band(row.get("risk_band")) == "high")
+        medium_count = sum(1 for row in rows if self._band(row.get("risk_band")) == "medium")
+        low_count = sum(1 for row in rows if self._band(row.get("risk_band")) == "low")
+        average_risk_score = round(
+            sum(self._safe_float(row.get("risk_score")) for row in rows) / float(total_alerts),
+            4,
+        ) if total_alerts else 0.0
+        alerts_with_explanations = sum(
+            1
+            for row in rows
+            if row.get("risk_explain_json") or row.get("ml_signals_json") or row.get("top_feature_contributions_json")
+        )
+        ingestion_warnings = sum(
+            len((row.get("ingestion_metadata_json") or {}).get("warnings") or [])
+            if isinstance(row.get("ingestion_metadata_json"), dict) else 0
+            for row in rows
+        )
+        processing_time_ms = None
+        if rows:
+            observed = [self._safe_float(row.get("processing_time_per_alert_ms"), default=-1.0) for row in rows]
+            observed = [value for value in observed if value >= 0.0]
+            if observed:
+                processing_time_ms = int(round(sum(observed) / float(len(observed))))
+
+        evaluation_summary = None
+        evaluation_available = bool(evaluation and evaluation.get("evaluation_valid"))
+        if evaluation_available:
+            metrics = evaluation.get("althea_metrics") or {}
+            evaluation_summary = (
+                f"SAR capture: {round((metrics.get('sar_capture_at_top_10_pct') or 0.0) * 100)}% at top 10%, "
+                f"{round((metrics.get('sar_capture_at_top_20_pct') or 0.0) * 100)}% at top 20%, "
+                f"{round((metrics.get('sar_capture_at_top_30_pct') or 0.0) * 100)}% at top 30%. "
+                f"Estimated workload reduction at target recall: "
+                f"{round((metrics.get('workload_reduction_at_target_recall') or 0.0) * 100)}%. "
+                f"Lift over baseline: {evaluation.get('lift_over_best_baseline') or 0.0:.2f}x."
+            )
+        elif evaluation and evaluation.get("warning"):
+            evaluation_summary = "Evaluation labels unavailable or not suitable for ranking validation."
+
+        return {
+            "total_alerts_ingested": total_alerts,
+            "high_priority_alerts": high_count,
+            "medium_priority_alerts": medium_count,
+            "low_priority_alerts": low_count,
+            "average_risk_score": average_risk_score,
+            "processing_time_ms": processing_time_ms,
+            "alerts_with_explanations": alerts_with_explanations,
+            "ingestion_warnings": ingestion_warnings,
+            "evaluation_available": evaluation_available,
+            "evaluation_summary": evaluation_summary,
+            "evaluation": evaluation if evaluation_available else None,
+            "warning": None if evaluation_available or evaluation_summary else "Evaluation labels unavailable or not suitable for ranking validation.",
+        }
+
+    def summarize_run(
+        self,
+        *,
+        tenant_id: str,
+        run_id: str,
+        dataset_name: str | None = None,
+    ) -> dict[str, Any]:
+        if self._repository is None:
+            raise ValueError("Pilot metrics repository is not configured")
+        rows = self._repository.list_alert_payloads_by_run(tenant_id=tenant_id, run_id=run_id, limit=500000)
+        evaluation = None
+        if self._evaluation_service is not None:
+            evaluation = self._evaluation_service.evaluate_records(
+                dataset_name=dataset_name or str(run_id),
+                records=rows,
+            )
+        return self.summarize_records(rows, evaluation=evaluation)

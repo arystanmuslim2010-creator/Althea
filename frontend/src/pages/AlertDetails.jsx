@@ -511,29 +511,37 @@ export function AlertDetails() {
   const explanationView = useMemo(() => toObject(explain?.human_interpretation_view), [explain])
   const explanationHeadline = useMemo(
     () => (
+      cleanText(context?.why_prioritized?.summary_text) ||
+      cleanText(context?.detail_view?.why_prioritized?.summary_text) ||
       cleanText(explanationView.headline) ||
       cleanText(explain?.summary_text) ||
       cleanText(explain?.human_interpretation?.summary_text) ||
       'Model and rule signals suggest this alert requires analyst review.'
     ),
-    [explain, explanationView],
+    [context, explain, explanationView],
   )
   const explanationReasons = useMemo(
     () => uniqueTextList([
+      ...toArray(context?.why_prioritized?.key_risk_drivers),
+      ...toArray(context?.detail_view?.why_prioritized?.key_risk_drivers),
       ...toArray(explanationView.reasons),
+      ...toArray(explain?.key_risk_drivers),
       ...toArray(explain?.key_reasons),
+      ...toArray(explain?.human_interpretation?.key_risk_drivers),
       ...toArray(explain?.human_interpretation?.key_reasons),
       ...toArray(normalizedExplanation.risk_reason_codes).map((code) => `Reason code: ${code}`),
     ]).slice(0, 6),
-    [explain, explanationView, normalizedExplanation],
+    [context, explain, explanationView, normalizedExplanation],
   )
   const explanationPatterns = useMemo(
     () => uniqueTextList([
+      ...toArray(context?.why_prioritized?.aml_patterns),
+      ...toArray(context?.detail_view?.why_prioritized?.aml_patterns),
       ...toArray(explanationView.patterns),
       ...toArray(explain?.aml_patterns),
       ...toArray(explain?.human_interpretation?.aml_patterns),
     ]).slice(0, 4),
-    [explain, explanationView],
+    [context, explain, explanationView],
   )
   const fallbackExplanationMessage = useMemo(() => {
     if (!normalizedExplanation.is_fallback) return ''
@@ -577,8 +585,11 @@ export function AlertDetails() {
   )
   const recommendedSteps = useMemo(
     () => uniqueTextList([
+      ...toArray(context?.why_prioritized?.analyst_next_steps),
+      ...toArray(context?.detail_view?.why_prioritized?.analyst_next_steps),
       ...toArray(context?.investigation_steps?.steps).map((step) => normalizeStep(step)),
       ...toArray(narrativeDraft?.sections?.recommended_follow_up),
+      ...toArray(explain?.analyst_next_steps),
       ...toArray(explain?.analyst_focus_points),
     ]).slice(0, 10),
     [context, explain, narrativeDraft],
@@ -600,7 +611,7 @@ export function AlertDetails() {
   const caseId = cleanText(caseInfo?.case_id || queueItem?.case_id)
   const caseStatus = cleanText(caseInfo?.status || queueItem?.case_status || null)
   const hasCase = Boolean(caseId)
-  const riskBand = cleanText(alert?.risk_band || investigationSummary.risk_band)
+  const riskBand = cleanText(alert?.risk_band || context?.detail_view?.risk?.risk_band || investigationSummary.risk_band)
   const currentAssignment = cleanText(caseInfo?.assigned_to || queueItem?.assigned_to)
   const assignmentDisplay = useMemo(
     () => formatAssignmentDisplay(customerProfile.assigned_analyst_label || currentAssignment),

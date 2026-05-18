@@ -299,6 +299,7 @@ export function AlertQueue() {
   const tabs = TAB_IDS.map((id) => ({ id, label: ui.tabs[id] ?? id }))
   const [alerts, setAlerts] = useState([])
   const [metrics, setMetrics] = useState(null)
+  const [pilotSummary, setPilotSummary] = useState(null)
   const [runInfo, setRunInfo] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -338,10 +339,11 @@ export function AlertQueue() {
         response_mode: 'queue',
         limit: capacity,
       }
-      const [alertsRes, metricsRes, runRes] = await Promise.allSettled([
+      const [alertsRes, metricsRes, runRes, pilotRes] = await Promise.allSettled([
         api.getAlerts(params),
         api.getQueueMetrics(),
         api.getRunInfo(),
+        api.getPilotSummary(),
       ])
 
       if (alertsRes.status !== 'fulfilled') {
@@ -356,6 +358,7 @@ export function AlertQueue() {
       setTotalAlerts(alertsPayload.total_available ?? alertsPayload.total ?? metricsPayload?.total_alerts ?? alertsPayload.alerts?.length ?? 0)
       setMetrics(metricsPayload)
       setRunInfo(runPayload)
+      setPilotSummary(pilotRes.status === 'fulfilled' ? (pilotRes.value || null) : null)
 
       if (metricsRes.status === 'rejected' || runRes.status === 'rejected') {
         setWarning('Some dashboard metrics are temporarily unavailable.')
@@ -364,6 +367,7 @@ export function AlertQueue() {
       setError(e.message)
       setAlerts([])
       setMetrics(null)
+      setPilotSummary(null)
       setRunInfo(null)
       setWarning(null)
     } finally {
@@ -595,12 +599,11 @@ export function AlertQueue() {
               <thead>
                 <tr>
                   <th className="w-10 text-center py-2 px-3 text-left text-xs font-semibold text-[var(--muted)] uppercase tracking-wider bg-[var(--surface2)]" />
-                  <th className="py-2 px-3 text-left text-[0.7rem] font-semibold text-[var(--muted)] uppercase tracking-wider bg-[var(--surface2)]">risk_band</th>
-                  <th className="py-2 px-3 text-left text-[0.7rem] font-semibold text-[var(--muted)] uppercase tracking-wider bg-[var(--surface2)]">risk_score</th>
-                  <th className="py-2 px-3 text-left text-[0.7rem] font-semibold text-[var(--muted)] uppercase tracking-wider bg-[var(--surface2)]">user_id</th>
-                  <th className="py-2 px-3 text-left text-[0.7rem] font-semibold text-[var(--muted)] uppercase tracking-wider bg-[var(--surface2)]">segment</th>
-                  <th className="py-2 px-3 text-left text-[0.7rem] font-semibold text-[var(--muted)] uppercase tracking-wider bg-[var(--surface2)]">typology</th>
-                  <th className="py-2 px-3 text-left text-[0.7rem] font-semibold text-[var(--muted)] uppercase tracking-wider bg-[var(--surface2)]">governance</th>
+                  <th className="py-2 px-3 text-left text-[0.7rem] font-semibold text-[var(--muted)] uppercase tracking-wider bg-[var(--surface2)]">rank</th>
+                  <th className="py-2 px-3 text-left text-[0.7rem] font-semibold text-[var(--muted)] uppercase tracking-wider bg-[var(--surface2)]">alert</th>
+                  <th className="py-2 px-3 text-left text-[0.7rem] font-semibold text-[var(--muted)] uppercase tracking-wider bg-[var(--surface2)]">reason</th>
+                  <th className="py-2 px-3 text-left text-[0.7rem] font-semibold text-[var(--muted)] uppercase tracking-wider bg-[var(--surface2)]">risk</th>
+                  <th className="py-2 px-3 text-left text-[0.7rem] font-semibold text-[var(--muted)] uppercase tracking-wider bg-[var(--surface2)]">workflow</th>
                 </tr>
               </thead>
               <tbody>
@@ -629,16 +632,24 @@ export function AlertQueue() {
                         }}
                       />
                     </td>
+                    <td className="py-2 px-3 text-[0.8125rem]">{a.priority_rank ?? '-'}</td>
                     <td className="py-2 px-3 text-[0.8125rem]">
-                      <span className={badgeClass(a.risk_band)}>{a.risk_band || '-'}</span>
+                      <div className="font-medium text-[var(--text)]">{a.alert_id || '-'}</div>
+                      <div className="text-[0.72rem] text-[var(--muted)]">{a.user_id || a.account_id || '-'}</div>
                     </td>
-                    <td className="py-2 px-3 text-[0.8125rem]">{a.risk_score != null ? Number(a.risk_score).toFixed(4) : '-'}</td>
-                    <td className="py-2 px-3 text-[0.8125rem]">{a.user_id || '-'}</td>
-                    <td className="py-2 px-3 text-[0.8125rem]">{a.segment || '-'}</td>
-                    <td className="py-2 px-3 text-[0.8125rem]">{a.typology || '-'}</td>
                     <td className="py-2 px-3 text-[0.8125rem]">
-                      <span className={govBadgeClass(a.governance_status)}>
-                        {(a.governance_status || '').toLowerCase()}
+                      <div className="text-[var(--text)]">{a.short_reason || 'Prioritized for analyst review.'}</div>
+                      <div className="mt-1 text-[0.72rem] text-[var(--muted)]">{a.typology || a.segment || '-'}</div>
+                    </td>
+                    <td className="py-2 px-3 text-[0.8125rem]">
+                      <div className="flex flex-col gap-1">
+                        <span className={badgeClass(a.risk_band)}>{a.risk_band || '-'}</span>
+                        <span className="text-[0.72rem] text-[var(--muted)]">{a.risk_score != null ? Number(a.risk_score).toFixed(1) : '-'}</span>
+                      </div>
+                    </td>
+                    <td className="py-2 px-3 text-[0.8125rem]">
+                      <span className={govBadgeClass(a.governance_status || a.status)}>
+                        {((a.governance_status || a.status) || '').toLowerCase()}
                       </span>
                     </td>
                   </tr>
@@ -685,7 +696,10 @@ export function AlertQueue() {
                       <div className="flex flex-col gap-0.5"><span className="text-[0.65rem] text-[var(--muted)] uppercase">RISK SCORE</span><span className="font-semibold text-[0.9375rem]">{alertDetail.risk_score != null ? Number(alertDetail.risk_score).toFixed(1) : '-'}</span></div>
                       <div className="flex flex-col gap-0.5"><span className="text-[0.65rem] text-[var(--muted)] uppercase">RISK PROB</span><span className="font-semibold text-[0.9375rem]">{alertDetail.risk_prob != null ? Number(alertDetail.risk_prob).toFixed(3) : '-'}</span></div>
                       <div className="flex flex-col gap-0.5"><span className="text-[0.65rem] text-[var(--muted)] uppercase">AGE / SLA</span><span className="font-semibold text-[0.9375rem]">{alertDetail.sla_hours != null ? `${Number(alertDetail.sla_hours).toFixed(1)} h` : '—'}</span></div>
-                      <div className="flex flex-col gap-0.5"><span className="text-[0.65rem] text-[var(--muted)] uppercase">RANK</span><span className="font-semibold text-[0.9375rem]">{alertDetail.risk_score_rank ?? alertDetail.queue_rank ?? '—'}</span></div>
+                      <div className="flex flex-col gap-0.5"><span className="text-[0.65rem] text-[var(--muted)] uppercase">RANK</span><span className="font-semibold text-[0.9375rem]">{alertDetail.priority_rank ?? alertDetail.risk_score_rank ?? alertDetail.queue_rank ?? '—'}</span></div>
+                    </div>
+                    <div className="rounded-md border border-blue-500/20 bg-blue-500/5 p-3 text-[0.8125rem] text-[var(--text)]">
+                      {alertDetail.investigation_summary || alertDetail.short_reason || 'Prioritized for analyst review.'}
                     </div>
                     <div className="[&>p]:m-0.5 [&>p]:text-sm [&>p]:text-[var(--text)]">
                       <p>Segment: {alertDetail.segment ?? '-'}</p>
@@ -882,6 +896,17 @@ export function AlertQueue() {
                 <div className="flex flex-col gap-0.5"><span className="text-[0.7rem] text-[var(--muted)] uppercase">Suppressed</span><span className="font-semibold text-[0.9375rem]">{metrics.suppressed?.toLocaleString() ?? 0}</span></div>
                 <div className="flex flex-col gap-0.5"><span className="text-[0.7rem] text-[var(--muted)] uppercase">High Risk</span><span className="font-semibold text-[0.9375rem]">{metrics.high_risk?.toLocaleString() ?? 0}</span></div>
               </div>
+            </div>
+          )}
+          {pilotSummary && (
+            <div className="mt-4 p-4 rounded-md bg-blue-500/5 border border-blue-500/20">
+              <h4 className="m-0 mb-2 text-sm font-semibold">Pilot Value Summary</h4>
+              <div className="flex flex-wrap gap-5">
+                <div className="flex flex-col gap-0.5"><span className="text-[0.7rem] text-[var(--muted)] uppercase">High Priority</span><span className="font-semibold text-[0.9375rem]">{pilotSummary.high_priority_alerts?.toLocaleString?.() ?? '-'}</span></div>
+                <div className="flex flex-col gap-0.5"><span className="text-[0.7rem] text-[var(--muted)] uppercase">Avg Risk</span><span className="font-semibold text-[0.9375rem]">{pilotSummary.average_risk_score != null ? Number(pilotSummary.average_risk_score).toFixed(1) : '-'}</span></div>
+                <div className="flex flex-col gap-0.5"><span className="text-[0.7rem] text-[var(--muted)] uppercase">Explanations</span><span className="font-semibold text-[0.9375rem]">{pilotSummary.alerts_with_explanations?.toLocaleString?.() ?? '-'}</span></div>
+              </div>
+              <p className="mb-0 mt-3 text-sm text-[var(--text)]">{pilotSummary.evaluation_summary || 'Evaluation labels unavailable or not suitable for ranking validation.'}</p>
             </div>
           )}
         </div>

@@ -113,6 +113,42 @@ def _safe_get(service_fn):
         return None
 
 
+def _parse_json_like(value: Any, default: Any) -> Any:
+    if value is None:
+        return default
+    if isinstance(value, (dict, list)):
+        return value
+    return default
+
+
+def _normalize_entities(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    entities = payload.get("entities_json") or payload.get("accounts_json") or []
+    if not isinstance(entities, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for item in entities:
+        if not isinstance(item, dict):
+            continue
+        normalized.append(
+            {
+                "entity_id": item.get("entity_id") or item.get("account_id") or item.get("id"),
+                "entity_type": item.get("entity_type") or item.get("type") or "account",
+                "label": item.get("label") or item.get("account_label") or item.get("name"),
+                "account_id": item.get("account_id") or item.get("entity_id") or item.get("id"),
+            }
+        )
+    return normalized
+
+
+def _sorted_transactions(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    transactions = payload.get("transactions_json") or payload.get("transactions") or []
+    if not isinstance(transactions, list):
+        return []
+    filtered = [item for item in transactions if isinstance(item, dict)]
+    filtered.sort(key=lambda item: str(item.get("timestamp") or item.get("created_at") or ""))
+    return filtered
+
+
 # ── Investigation Summary ─────────────────────────────────────────────────────
 
 
@@ -706,6 +742,11 @@ def get_investigation_context(
             tenant_id=tenant_id, alert_id=alert_id, run_id=rid
         )
     )
+    explain_view = _safe_get(
+        lambda: request.app.state.explain_service.explain_alert(
+            tenant_id=tenant_id, alert_id=alert_id, run_id=rid or ""
+        )
+    )
     risk_explanation = _safe_get(
         lambda: request.app.state.risk_explanation_service.generate_explanation(
             tenant_id=tenant_id, alert_id=alert_id, run_id=rid
@@ -743,6 +784,7 @@ def get_investigation_context(
     )
 
     model_metadata = {}
+    payload: dict[str, Any] = {}
     try:
         payloads = request.app.state.repository.list_alert_payloads_by_run(
             tenant_id=tenant_id, run_id=rid or "", limit=500000
@@ -804,10 +846,35 @@ def get_investigation_context(
         extra={"alert_id": alert_id, "latency_s": round(elapsed, 3)},
     )
 
+    human = {}
+    if isinstance(explain_view, dict):
+        human = explain_view.get("human_interpretation") or explain_view.get("human_explanation") or {}
+    why_prioritized = {
+        "summary_text": (human or {}).get("summary_text")
+        or (summary or {}).get("key_observations", ["This alert warrants review."])[0],
+        "key_risk_drivers": list((human or {}).get("key_risk_drivers") or (human or {}).get("key_reasons") or []),
+        "aml_patterns": list((human or {}).get("aml_patterns") or []),
+        "analyst_next_steps": list((human or {}).get("analyst_next_steps") or (human or {}).get("analyst_focus_points") or []),
+    }
+    transactions = _sorted_transactions(payload)
+    timeline = sorted(
+        transactions + ([item for item in (outcome or {}).get("timeline", []) if isinstance(item, dict)] if isinstance(outcome, dict) else []),
+        key=lambda item: str(item.get("timestamp") or item.get("created_at") or ""),
+    )
+    workflow = {
+        "status": ((case_status or {}).get("status") or payload.get("status") or "open"),
+        "assigned_to": (case_status or {}).get("assigned_to"),
+        "available_actions": ["assign", "start_review", "escalate", "close", "add_note"],
+    }
+    investigation_summary_text = why_prioritized["summary_text"]
+
     return {
         "alert_id": alert_id,
         "investigation_summary": summary,
+        "investigation_summary_text": investigation_summary_text,
+        "why_prioritized": why_prioritized,
         "risk_explanation": risk_explanation,
+        "human_explanation": explain_view,
         "network_graph": network_graph,
         "investigation_steps": investigation_steps,
         "sar_draft": sar_draft,
@@ -823,6 +890,28 @@ def get_investigation_context(
         "geography_payment_summary": analyst_enrichment.get("geography_payment_summary"),
         "screening_summary": analyst_enrichment.get("screening_summary"),
         "data_availability": analyst_enrichment.get("data_availability"),
+        "detail_view": {
+            "alert_id": alert_id,
+            "risk": {
+                "risk_score": payload.get("risk_score"),
+                "risk_band": payload.get("risk_band"),
+                "priority_rank": payload.get("priority_rank"),
+                "score_method": payload.get("score_method"),
+                "score_version": payload.get("score_version") or payload.get("model_version"),
+            },
+            "investigation_summary": investigation_summary_text,
+            "why_prioritized": why_prioritized,
+            "entities": _normalize_entities(payload),
+            "transactions": transactions,
+            "timeline": timeline,
+            "workflow": workflow,
+            "audit_activity": [],
+            "technical_details": {
+                "raw_alert_payload": payload,
+                "explanation": explain_view,
+                "risk_explanation": risk_explanation,
+            },
+        },
         "assembled_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
         "assembly_latency_seconds": round(elapsed, 3),
     }

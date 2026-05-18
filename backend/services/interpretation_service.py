@@ -20,13 +20,14 @@ class InterpretationService:
     """
 
     SUPPORTED_PATTERNS: set[str] = {
-        "Structuring",
-        "Layering",
-        "Velocity spike",
+        "Possible structuring",
+        "Potential layering",
+        "Rapid fund movement",
         "Fan-in",
         "Fan-out",
-        "Baseline deviation",
-        "High-value anomaly",
+        "Counterparty concentration risk",
+        "Activity differs from expected account behavior",
+        "Circular fund movement",
     }
 
     def _safe_float(self, value: Any, default: float = 0.0) -> float:
@@ -87,9 +88,9 @@ class InterpretationService:
         magnitude = self._feature_magnitude(contributions, "time_gap")
         if (0 <= time_gap <= 900) or (magnitude >= 0.12):
             return _Signal(
-                reason="Rapid transaction burst in a short period is consistent with unusual velocity and warrants review.",
-                pattern="Velocity spike",
-                focus_point="Check whether transactions accelerated abruptly compared with expected account cadence.",
+                reason="Rapid outgoing movement after funds were received may indicate unusual velocity and warrants review.",
+                pattern="Rapid fund movement",
+                focus_point="Review whether funds moved onward quickly after receipt and whether that fits the expected account profile.",
                 score=max(0.70, min(0.98, 0.70 + magnitude)),
             )
         return None
@@ -103,9 +104,9 @@ class InterpretationService:
         )
         if amount >= 10000 or amount_log >= 9.0 or magnitude >= 0.14:
             return _Signal(
-                reason="Transaction value is materially elevated and may indicate a high-value movement anomaly.",
-                pattern="High-value anomaly",
-                focus_point="Validate source-of-funds and whether the transaction size matches expected customer behavior.",
+                reason="Transaction value is materially elevated and may indicate activity outside expected customer behavior.",
+                pattern="Activity differs from expected account behavior",
+                focus_point="Validate source of funds and whether the transfer size matches the customer profile.",
                 score=max(0.66, min(0.95, 0.66 + magnitude)),
             )
         return None
@@ -121,8 +122,8 @@ class InterpretationService:
         if ratio >= 1.8 or abs(z_like) >= 2.0 or magnitude >= 0.12:
             return _Signal(
                 reason="Current transaction activity deviates from expected baseline behavior for this account.",
-                pattern="Baseline deviation",
-                focus_point="Compare recent activity against historical baseline and documented customer profile.",
+                pattern="Activity differs from expected account behavior",
+                focus_point="Compare the activity against the customer's expected profile and historical baseline.",
                 score=max(0.67, min(0.95, 0.67 + magnitude)),
             )
         return None
@@ -133,8 +134,8 @@ class InterpretationService:
         magnitude = self._feature_magnitude(contributions, "user_amount_std")
         if (tx_count >= 6 and std_amount > 0) or magnitude >= 0.14:
             return _Signal(
-                reason="Irregular transaction amount distribution may indicate structuring and warrants review.",
-                pattern="Structuring",
+                reason="Repeated smaller-value transactions may indicate possible structuring and warrant review.",
+                pattern="Possible structuring",
                 focus_point="Assess whether amounts appear intentionally fragmented across multiple transfers.",
                 score=max(0.68, min(0.96, 0.68 + magnitude)),
             )
@@ -155,10 +156,10 @@ class InterpretationService:
             signals.append(
                 _Signal(
                     reason=(
-                        "Funds may be concentrated across a narrow set of counterparties, "
-                        "which suggests network concentration risk."
+                        "Transaction activity is concentrated across a narrow set of counterparties, "
+                        "which suggests counterparty concentration risk."
                     ),
-                    pattern="Fan-in" if incoming >= outgoing else "Fan-out",
+                    pattern="Counterparty concentration risk",
                     focus_point=(
                         "Review whether multiple counterparties are funneling funds into one account."
                         if incoming >= outgoing
@@ -193,10 +194,25 @@ class InterpretationService:
         sequence_flag = bool(features.get("has_incoming_and_outgoing_sequence"))
         if (0 <= in_out_delta <= 3600) or sequence_flag:
             return _Signal(
-                reason="Funds appear to move onward quickly after receipt, which is consistent with potential layering.",
-                pattern="Layering",
+                reason="Funds appear to be received and moved onward rapidly, which is consistent with a potential layering pattern.",
+                pattern="Potential layering",
                 focus_point="Check whether incoming funds were redistributed quickly without clear economic rationale.",
                 score=0.74,
+            )
+        return None
+
+    def _signal_circular(self, features: dict[str, Any], contributions: list[dict[str, Any]]) -> _Signal | None:
+        cycle_count = self._safe_float(features.get("cycle_count", features.get("circular_transactions_count")), default=0.0)
+        magnitude = max(
+            self._feature_magnitude(contributions, "cycle_count"),
+            self._feature_magnitude(contributions, "circular_transactions_count"),
+        )
+        if cycle_count >= 1 or magnitude >= 0.12:
+            return _Signal(
+                reason="Circular movement of funds may indicate transactional cycling and warrants review.",
+                pattern="Circular fund movement",
+                focus_point="Check whether funds return to related accounts or move in repeating loops.",
+                score=max(0.69, min(0.95, 0.69 + magnitude)),
             )
         return None
 
@@ -209,7 +225,7 @@ class InterpretationService:
                     "which suggests atypical activity and warrants review."
                 ),
                 pattern=None,
-                focus_point="Review transaction context and customer profile before assigning typology.",
+                focus_point="Review transaction context, counterparties, and customer profile before assigning typology.",
                 score=0.58,
             )
         return _Signal(
@@ -283,6 +299,9 @@ class InterpretationService:
         layering = self._signal_layering(safe_features)
         if layering is not None:
             signals.append(layering)
+        circular = self._signal_circular(safe_features, contributions)
+        if circular is not None:
+            signals.append(circular)
         if not signals:
             signals.append(self._fallback_signal(contributions))
 
@@ -310,20 +329,39 @@ class InterpretationService:
                 compact_text = text.rstrip(".")
                 compact.append(compact_text[0].lower() + compact_text[1:] if compact_text else compact_text)
             summary_text = (
-                "This alert is prioritized because it shows "
+                "This alert is prioritized because "
                 + "; ".join(compact)
-                + ". These indicators may indicate atypical activity and warrants review."
+                + ". This activity may indicate atypical fund movement and warrants review."
             )
         else:
             summary_text = (
                 "This alert is prioritized because model signals suggest atypical activity that warrants review."
             )
 
+        confidence_score = self._confidence_score(safe_payload, ranked, contributions)
+        if confidence_score is None:
+            confidence_level = "Low"
+        elif confidence_score >= 0.82:
+            confidence_level = "High"
+        elif confidence_score >= 0.67:
+            confidence_level = "Medium"
+        else:
+            confidence_level = "Low"
+
+        technical_details = {
+            **safe_payload,
+            "features": safe_features,
+            "normalized_contributions": contributions,
+        }
+
         return {
             "summary_text": summary_text,
+            "key_risk_drivers": key_reasons[:5],
             "key_reasons": key_reasons[:5],
             "aml_patterns": aml_patterns[:3],
+            "analyst_next_steps": analyst_focus_points[:5],
             "analyst_focus_points": analyst_focus_points[:5],
-            "confidence_score": self._confidence_score(safe_payload, ranked, contributions),
-            "technical_details": safe_payload,
+            "confidence_level": confidence_level,
+            "confidence_score": confidence_score,
+            "technical_details": technical_details,
         }

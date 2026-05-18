@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from datetime import datetime
 from typing import Optional
 
 import numpy as np
@@ -12,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from core.access_control import filter_visible_alerts, require_alert_access
 from core.observability import record_copilot_generation, record_integration_error
 from core.security import get_authenticated_tenant_id, require_permissions
+from services.scoring_service import build_score_contract, derive_risk_band
 
 router = APIRouter(tags=["alerts"])
 logger = logging.getLogger("althea.alerts")
@@ -75,13 +77,65 @@ def _make_json_serializable(val):
 
 
 def _sanitize_record(record: dict) -> dict:
-    return {key: _make_json_serializable(value) for key, value in record.items()}
+    sanitized = {key: _make_json_serializable(value) for key, value in record.items()}
+    sanitized.pop("evaluation_label_is_sar", None)
+    return sanitized
+
+
+def _parse_timestamp(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _title_case(value: str) -> str:
+    cleaned = str(value or "").strip().replace("_", " ").replace("-", " ")
+    return " ".join(part.capitalize() for part in cleaned.split())
+
+
+def _short_reason(record: dict) -> str:
+    typology = str(record.get("typology") or "").strip().lower()
+    if typology:
+        return f"Pattern is consistent with possible {_title_case(typology).lower()} activity and warrants review."
+
+    top_features = record.get("top_features") or []
+    if isinstance(top_features, list) and top_features:
+        first = str(top_features[0] or "").strip().lower()
+        if "time_gap" in first:
+            return "Rapid movement of funds may indicate unusual velocity and warrants review."
+        if "amount" in first:
+            return "Transaction size differs from expected activity and warrants review."
+        if "counterparty" in first:
+            return "Counterparty pattern may indicate concentration or dispersal risk and warrants review."
+
+    rules_raw = _parse_json_field(record.get("rules_json"), [], field_name="rules_json")
+    if isinstance(rules_raw, list) and rules_raw:
+        return "Triggered rule activity may indicate elevated AML risk and warrants review."
+    return "Prioritized for elevated risk and analyst review."
+
+
+def _rank_queue(queue: pd.DataFrame) -> pd.DataFrame:
+    ranked = queue.copy()
+    if ranked.empty:
+        ranked["priority_rank"] = []
+        return ranked
+    score_series = pd.to_numeric(ranked.get("priority_score", ranked.get("risk_score", 0.0)), errors="coerce").fillna(0.0)
+    risk_series = pd.to_numeric(ranked.get("risk_score", 0.0), errors="coerce").fillna(0.0)
+    ranked = ranked.assign(_priority_score=score_series, _risk_score=risk_series)
+    ranked = ranked.sort_values(["_priority_score", "_risk_score"], ascending=[False, False], kind="mergesort")
+    ranked["priority_rank"] = range(1, len(ranked) + 1)
+    return ranked.drop(columns=["_priority_score", "_risk_score"])
 
 
 def _apply_scoring_api_fields(record: dict) -> dict:
-    out = dict(record)
+    out = build_score_contract(dict(record))
     score = float(out.get("risk_score", 0.0) or 0.0)
-    risk_band = str(out.get("risk_band", "") or "").lower()
+    risk_band = str(out.get("risk_band", "") or derive_risk_band(score)).lower()
     out["score"] = score
     out["priority"] = str(out.get("priority") or risk_band or "low")
     top_features = _parse_json_field(out.get("top_features_json"), [], field_name="top_features_json")
@@ -112,37 +166,86 @@ def _apply_scoring_api_fields(record: dict) -> dict:
         out["explanation_status"] = "unknown"
         out["explanation_warning"] = None
         out["explanation_warning_code"] = None
+    out["short_reason"] = _short_reason(out)
     return out
 
 
 def _project_queue_record(record: dict) -> dict:
-    # Lightweight list projection for queue views to avoid sending large nested payloads.
-    allowed_keys = {
-        "alert_id",
-        "run_id",
-        "risk_score",
-        "risk_prob",
-        "risk_band",
-        "priority",
-        "status",
-        "governance_status",
-        "suppression_reason",
-        "suppression_code",
-        "in_queue",
-        "user_id",
-        "segment",
-        "typology",
-        "country",
-        "created_at",
-        "timestamp",
-        "model_version",
-        "explanation_method",
-        "explanation_status",
-        "explanation_warning",
-        "explanation_warning_code",
-        "top_features",
+    created_at = record.get("created_at") or record.get("timestamp")
+    return {
+        "alert_id": record.get("alert_id"),
+        "priority_rank": record.get("priority_rank"),
+        "risk_score": record.get("risk_score"),
+        "risk_score_normalized": record.get("risk_score_normalized"),
+        "risk_band": record.get("risk_band"),
+        "short_reason": record.get("short_reason"),
+        "typology": record.get("typology"),
+        "account_count": int(record.get("account_count") or (1 if record.get("user_id") or record.get("account_id") else 0)),
+        "transaction_count": int(record.get("transaction_count") or record.get("num_transactions") or 0),
+        "status": record.get("status") or record.get("governance_status") or "open",
+        "assigned_to": record.get("assigned_to"),
+        "created_at": created_at,
+        "source_system": record.get("source_system"),
+        "user_id": record.get("user_id"),
+        "account_id": record.get("account_id"),
+        "segment": record.get("segment"),
+        "governance_status": record.get("governance_status"),
+        "model_version": record.get("model_version"),
     }
-    return {key: record.get(key) for key in allowed_keys if key in record}
+
+
+def _build_detail_sections(record: dict) -> dict:
+    transactions = _parse_json_field(record.get("transactions_json"), [], field_name="transactions_json")
+    if not isinstance(transactions, list):
+        transactions = []
+    transactions = sorted(
+        [item for item in transactions if isinstance(item, dict)],
+        key=lambda item: str(item.get("timestamp") or item.get("created_at") or ""),
+    )
+    entities = _parse_json_field(record.get("entities_json"), [], field_name="entities_json")
+    if not isinstance(entities, list):
+        entities = []
+    timeline = _parse_json_field(record.get("timeline_json"), transactions, field_name="timeline_json")
+    if not isinstance(timeline, list):
+        timeline = transactions
+    timeline = sorted(
+        [item for item in timeline if isinstance(item, dict)],
+        key=lambda item: str(item.get("timestamp") or item.get("created_at") or ""),
+    )
+    workflow = {
+        "status": record.get("status") or record.get("governance_status") or "open",
+        "assigned_to": record.get("assigned_to"),
+        "available_actions": ["open_case", "assign", "add_note", "change_status"],
+    }
+    return {
+        "risk": {
+            "risk_score": record.get("risk_score"),
+            "risk_band": record.get("risk_band"),
+            "priority_rank": record.get("priority_rank"),
+            "score_method": record.get("score_method"),
+            "score_version": record.get("score_version"),
+        },
+        "investigation_summary": record.get("short_reason"),
+        "why_prioritized": {
+            "summary_text": record.get("short_reason"),
+            "key_risk_drivers": [],
+            "aml_patterns": [],
+            "analyst_next_steps": [],
+        },
+        "entities": entities,
+        "transactions": transactions,
+        "timeline": timeline,
+        "workflow": workflow,
+        "audit_activity": [],
+        "technical_details": {
+            "risk_explain_json": _parse_json_field(record.get("risk_explain_json"), {}, field_name="risk_explain_json"),
+            "top_feature_contributions_json": _parse_json_field(
+                record.get("top_feature_contributions_json"),
+                [],
+                field_name="top_feature_contributions_json",
+            ),
+        },
+    }
 
 
 def _generate_alert_summary(row_dict: dict) -> str:
@@ -201,6 +304,8 @@ def get_alerts(
     min_risk: float = 0,
     typology: str = "All",
     segment: str = "All",
+    risk_band: str = "All",
+    workflow_status: str = "All",
     search: str = "",
     limit: int = 50,
     offset: int = 0,
@@ -232,16 +337,36 @@ def get_alerts(
             queue = queue[queue["in_queue"] == False]
     if min_risk > 0 and "risk_score" in queue.columns:
         queue = queue[queue["risk_score"] >= min_risk]
+    normalized_risk_band = str(risk_band or "All").strip()
+    if normalized_risk_band not in {"All", "High", "Medium", "Low"}:
+        raise HTTPException(status_code=400, detail="Invalid risk_band filter. Use All, High, Medium, or Low.")
+    if normalized_risk_band != "All":
+        queue = queue[
+            queue.get("risk_band", pd.Series("", index=queue.index)).astype(str).str.lower() == normalized_risk_band.lower()
+        ]
+    normalized_workflow_status = str(workflow_status or "All").strip()
+    allowed_statuses = {"All", "open", "in_review", "escalated", "closed", "eligible", "suppressed"}
+    if normalized_workflow_status not in allowed_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid workflow_status filter. Use All, open, in_review, escalated, closed, eligible, or suppressed.",
+        )
+    if normalized_workflow_status != "All":
+        status_series = queue.get("status", queue.get("governance_status", pd.Series("", index=queue.index))).astype(str)
+        queue = queue[status_series.str.lower() == normalized_workflow_status.lower()]
     if segment != "All" and "segment" in queue.columns:
         queue = queue[queue["segment"].astype(str) == segment]
     if typology != "All" and "typology" in queue.columns:
         queue = queue[queue["typology"].astype(str) == typology]
     if search:
         term = search.lower()
-        mask = queue["user_id"].astype(str).str.lower().str.contains(term, na=False) | queue["alert_id"].astype(str).str.lower().str.contains(term, na=False)
+        mask = (
+            queue["user_id"].astype(str).str.lower().str.contains(term, na=False)
+            | queue["alert_id"].astype(str).str.lower().str.contains(term, na=False)
+            | queue.get("account_id", pd.Series("", index=queue.index)).astype(str).str.lower().str.contains(term, na=False)
+        )
         queue = queue[mask]
-    if "risk_score" in queue.columns:
-        queue = queue.sort_values("risk_score", ascending=False)
+    queue = _rank_queue(queue)
     safe_limit = max(1, min(int(limit), 500))
     safe_offset = max(0, int(offset))
     total_available = int(len(queue))
@@ -272,7 +397,21 @@ def list_runs(request: Request, tenant_id: str = Depends(get_authenticated_tenan
 def get_alert(alert_id: str, request: Request, tenant_id: str = Depends(get_authenticated_tenant_id)):
     run_id = _active_run_id(request, tenant_id)
     payload = require_alert_access(request, tenant_id, _request_user(request, tenant_id), str(alert_id), run_id)
-    return _sanitize_record(_apply_scoring_api_fields(payload))
+    enriched = _apply_scoring_api_fields(payload)
+    enriched.update(_build_detail_sections(enriched))
+    explain_service = getattr(request.app.state, "explain_service", None)
+    if explain_service is not None and run_id:
+        explanation = explain_service.explain_alert(tenant_id=tenant_id, alert_id=alert_id, run_id=run_id) or {}
+        human = explanation.get("human_interpretation") or explanation.get("human_explanation") or {}
+        if isinstance(human, dict) and human:
+            enriched["why_prioritized"] = {
+                "summary_text": human.get("summary_text", enriched["why_prioritized"]["summary_text"]),
+                "key_risk_drivers": list(human.get("key_risk_drivers") or human.get("key_reasons") or []),
+                "aml_patterns": list(human.get("aml_patterns") or []),
+                "analyst_next_steps": list(human.get("analyst_next_steps") or human.get("analyst_focus_points") or []),
+            }
+            enriched["investigation_summary"] = human.get("summary_text", enriched.get("investigation_summary"))
+    return _sanitize_record(enriched)
 
 
 @router.get("/api/alerts/{alert_id}/explain")

@@ -218,6 +218,7 @@ export const api = {
   getHealth: async () => normalizeHealthResponse(await req('GET', '/health')),
   getRunInfo: () => req('GET', '/run-info'),
   getQueueMetrics: () => req('GET', '/queue-metrics'),
+  getPilotSummary: () => req('GET', '/pilot/summary'),
   getAlerts: (params) => {
     const clean = Object.fromEntries(Object.entries(params || {}).filter(([, v]) => v !== undefined && v !== null))
     const q = new URLSearchParams(clean).toString()

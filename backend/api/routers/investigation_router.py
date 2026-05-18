@@ -377,6 +377,9 @@ def get_time_estimate(
 def get_work_queue(
     request: Request,
     queue_view: str | None = None,
+    risk_band: str | None = None,
+    status: str | None = None,
+    search: str | None = None,
     limit: int | None = None,
     offset: int = 0,
     user: dict = Depends(require_any_permission("view_assigned_alerts", "view_all_alerts")),
@@ -444,6 +447,13 @@ def get_work_queue(
                 "alert_id": alert_id,
                 "priority": record.get("priority"),
                 "risk_score": record.get("risk_score"),
+                "risk_band": record.get("risk_band"),
+                "priority_rank": record.get("priority_rank"),
+                "short_reason": record.get("short_reason")
+                or f"Risk score suggests this alert warrants review.",
+                "typology": record.get("typology"),
+                "account_count": int(record.get("account_count") or (1 if record.get("user_id") else 0)),
+                "transaction_count": int(record.get("transaction_count") or record.get("num_transactions") or 0),
                 "assigned_to": assignment.get("assigned_to") if assignment else None,
                 "status": assignment.get("status") if assignment else "open",
                 "case_id": case_id,
@@ -452,8 +462,31 @@ def get_work_queue(
                 "alert_age_hours": alert_age_hours,
                 "assignment_age_hours": assignment_age_hours,
                 "overdue_review": overdue_review,
+                "source_system": record.get("source_system"),
             }
         )
+    if risk_band:
+        normalized_band = str(risk_band).strip().lower()
+        if normalized_band not in {"high", "medium", "low"}:
+            raise HTTPException(status_code=400, detail="Invalid risk_band filter")
+        records = [row for row in records if str(row.get("risk_band") or "").strip().lower() == normalized_band]
+    if status:
+        normalized_status = str(status).strip().lower()
+        if normalized_status not in {"open", "in_review", "escalated", "closed"}:
+            raise HTTPException(status_code=400, detail="Invalid status filter")
+        records = [row for row in records if str(row.get("status") or "").strip().lower() == normalized_status]
+    if search:
+        term = str(search).strip().lower()
+        records = [
+            row for row in records
+            if term in str(row.get("alert_id") or "").lower()
+        ]
+    records.sort(
+        key=lambda row: (
+            int(row.get("priority_rank") or 10**9),
+            -float(row.get("risk_score") or 0.0),
+        )
+    )
     safe_offset = max(0, int(offset or 0))
     if limit is None:
         page_records = records[safe_offset:]

@@ -159,8 +159,9 @@ class ExplainabilityService:
         confidence_score = interpretation.get("confidence_score")
         ui_view = {
             "headline": str(interpretation.get("summary_text") or ""),
-            "reasons": list(interpretation.get("key_reasons") or [])[:3],
+            "reasons": list(interpretation.get("key_risk_drivers") or interpretation.get("key_reasons") or [])[:3],
             "patterns": list(interpretation.get("aml_patterns") or [])[:3],
+            "next_steps": list(interpretation.get("analyst_next_steps") or interpretation.get("analyst_focus_points") or [])[:3],
         }
 
         return {
@@ -185,9 +186,12 @@ class ExplainabilityService:
             "human_interpretation_view": ui_view,
             # Compatibility aliases for consumers expecting flattened fields.
             "summary_text": interpretation.get("summary_text", ""),
+            "key_risk_drivers": interpretation.get("key_risk_drivers", interpretation.get("key_reasons", [])),
             "key_reasons": interpretation.get("key_reasons", []),
             "aml_patterns": interpretation.get("aml_patterns", []),
+            "analyst_next_steps": interpretation.get("analyst_next_steps", interpretation.get("analyst_focus_points", [])),
             "analyst_focus_points": interpretation.get("analyst_focus_points", []),
+            "confidence_level": interpretation.get("confidence_level", "Low"),
             "confidence_score": confidence_score,
             "technical_details": interpretation.get("technical_details", {}),
             "human_explanation": interpretation,

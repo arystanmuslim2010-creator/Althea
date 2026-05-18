@@ -16,6 +16,7 @@ vi.mock('../services/api', () => ({
   api: {
     getAlerts: vi.fn(),
     getQueueMetrics: vi.fn(),
+    getPilotSummary: vi.fn(),
     getRunInfo: vi.fn(),
     getAlert: vi.fn(),
     getAiSummary: vi.fn(),
@@ -50,6 +51,7 @@ describe('AlertQueue', () => {
     const { api } = await import('../services/api')
     api.getAlerts.mockReset()
     api.getQueueMetrics.mockReset()
+    api.getPilotSummary.mockReset()
     api.getRunInfo.mockReset()
     api.getAlert.mockReset()
     api.getAiSummary.mockReset()
@@ -73,6 +75,12 @@ describe('AlertQueue', () => {
       in_queue: 240,
       suppressed: 0,
       high_risk: 240,
+    })
+    api.getPilotSummary.mockResolvedValue({
+      high_priority_alerts: 120,
+      average_risk_score: 78.2,
+      alerts_with_explanations: 240,
+      evaluation_summary: 'ALTHEA captured 80% of suspicious alerts in the top 20% of the queue.',
     })
     api.getRunInfo.mockResolvedValue({ run_id: 'run-1' })
     api.getAiSummary.mockResolvedValue({ summary: null })

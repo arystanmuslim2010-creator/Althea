@@ -232,7 +232,10 @@ export function normalizeInvestigationContext(payload) {
   return {
     alert_id: context.alert_id ?? null,
     investigation_summary: toSafeObject(context.investigation_summary),
+    investigation_summary_text: String(context.investigation_summary_text ?? ''),
+    why_prioritized: toSafeObject(context.why_prioritized),
     risk_explanation: toSafeObject(context.risk_explanation),
+    human_explanation: toSafeObject(context.human_explanation),
     network_graph: normalizeNetworkGraph(context.network_graph),
     investigation_steps: toSafeObject(context.investigation_steps),
     sar_draft: toSafeObject(context.sar_draft),
@@ -248,6 +251,7 @@ export function normalizeInvestigationContext(payload) {
     geography_payment_summary: normalizeGeographyPaymentSummary(context.geography_payment_summary),
     screening_summary: normalizeScreeningSummary(context.screening_summary),
     data_availability: normalizeDataAvailability(context.data_availability),
+    detail_view: toSafeObject(context.detail_view),
     assembled_at: context.assembled_at ?? null,
     assembly_latency_seconds: toNumber(context.assembly_latency_seconds, 0),
   }

@@ -31,6 +31,7 @@ from services.ingestion_service import EnterpriseIngestionService
 from services.job_queue_service import JobQueueService
 from services.model_monitoring_service import ModelMonitoringService
 from services.rollout_evaluator import RolloutEvaluator
+from services.scoring_service import build_score_contract
 from storage.postgres_repository import EnterpriseRepository
 
 logger = logging.getLogger("althea.pipeline")
@@ -630,6 +631,23 @@ class PipelineService:
             alerts_df,
             stabilize_for_demo=self._is_demo_source(run_source),
         )
+        ranking_order = governed.sort_values(
+            by=["priority_score", "risk_score"],
+            ascending=[False, False],
+            kind="mergesort",
+        ).index.tolist()
+        priority_rank_map = {row_index: position for position, row_index in enumerate(ranking_order, start=1)}
+        scored_records = []
+        score_created_at = datetime.now(timezone.utc).isoformat()
+        for row_index, row in governed.iterrows():
+            scored_records.append(
+                build_score_contract(
+                    row.to_dict(),
+                    priority_rank=priority_rank_map.get(row_index),
+                    score_created_at=score_created_at,
+                )
+            )
+        governed = pd.DataFrame(scored_records, index=governed.index)
 
         # Step 5: Persist
         resolved_run_id = run_id or f"run_{uuid.uuid4().hex[:16]}"

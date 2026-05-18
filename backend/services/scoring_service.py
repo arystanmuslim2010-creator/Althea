@@ -15,6 +15,7 @@ with ``anomaly_score`` for any callers that haven't migrated yet.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
@@ -24,6 +25,68 @@ from models.ml_model_service import MLModelService
 from services.time_scoring_service import TimeScoringService
 
 logger = logging.getLogger("althea.services.scoring")
+
+RISK_BAND_THRESHOLDS: tuple[tuple[str, float], ...] = (
+    ("High", 0.85),
+    ("Medium", 0.60),
+    ("Low", 0.0),
+)
+
+
+def normalize_risk_score(value: Any) -> float:
+    raw = float(value or 0.0)
+    normalized = raw / 100.0 if raw > 1.0 else raw
+    return float(np.clip(normalized, 0.0, 1.0))
+
+
+def derive_risk_band(value: Any) -> str:
+    normalized = normalize_risk_score(value)
+    for label, threshold in RISK_BAND_THRESHOLDS:
+        if normalized >= threshold:
+            return label
+    return "Low"
+
+
+def derive_score_method(model_version: Any, explicit_method: Any = None) -> str:
+    requested = str(explicit_method or "").strip().lower()
+    if requested in {"heuristic", "baseline_ml", "production_model"}:
+        return requested
+
+    version = str(model_version or "").strip().lower()
+    if not version or version in {"none", "unknown"}:
+        return "heuristic"
+    if any(token in version for token in ("baseline", "bootstrap", "fallback", "dev")):
+        return "baseline_ml"
+    return "production_model"
+
+
+def build_score_contract(
+    record: dict[str, Any],
+    *,
+    priority_rank: int | None = None,
+    score_created_at: str | None = None,
+) -> dict[str, Any]:
+    out = dict(record or {})
+    risk_score = float(out.get("risk_score", 0.0) or 0.0)
+    out["risk_score"] = risk_score
+    out["risk_score_normalized"] = normalize_risk_score(risk_score)
+    out["risk_band"] = str(out.get("risk_band") or derive_risk_band(risk_score))
+    out["priority_rank"] = priority_rank if priority_rank is not None else out.get("priority_rank")
+    out["score_version"] = str(
+        out.get("score_version")
+        or out.get("model_version")
+        or out.get("time_model_version")
+        or "unknown"
+    )
+    out["score_method"] = derive_score_method(out.get("model_version"), out.get("score_method"))
+    out["score_created_at"] = str(
+        out.get("score_created_at")
+        or score_created_at
+        or out.get("created_at")
+        or out.get("timestamp")
+        or datetime.now(timezone.utc).isoformat()
+    )
+    return out
 
 
 class EnterpriseScoringService:

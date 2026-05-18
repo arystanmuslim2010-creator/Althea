@@ -440,9 +440,12 @@ def test_interpretation_output_format_contract() -> None:
 
     assert set(out.keys()) == {
         "summary_text",
+        "key_risk_drivers",
         "key_reasons",
         "aml_patterns",
+        "analyst_next_steps",
         "analyst_focus_points",
+        "confidence_level",
         "confidence_score",
         "technical_details",
     }

@@ -34,7 +34,8 @@ def test_numeric_fallback_payload_is_handled_conservatively() -> None:
 
     assert "may indicate" in out["summary_text"].lower()
     assert "confirmed" not in out["summary_text"].lower()
-    assert out["aml_patterns"] == ["Velocity spike"]
+    assert out["aml_patterns"] == ["Rapid fund movement"]
+    assert out["confidence_level"] in {"High", "Medium", "Low"}
     assert out["confidence_score"] is not None
     assert out["confidence_score"] < 0.95
 
@@ -47,7 +48,7 @@ def test_missing_contributions_uses_feature_driven_reasoning() -> None:
     out = service.build_human_explanation(payload, features)
 
     assert out["key_reasons"]
-    assert "High-value anomaly" in out["aml_patterns"]
+    assert "Activity differs from expected account behavior" in out["aml_patterns"]
     assert len(out["key_reasons"]) <= 5
     assert len(out["aml_patterns"]) <= 3
 
@@ -74,7 +75,7 @@ def test_duplicated_raw_features_are_deduplicated() -> None:
 
     out = service.build_human_explanation(payload, features)
 
-    assert out["aml_patterns"] == ["Velocity spike"]
+    assert out["aml_patterns"] == ["Rapid fund movement"]
     assert len(out["key_reasons"]) == 1
 
 
@@ -87,7 +88,7 @@ def test_unsupported_feature_names_do_not_crash_and_use_generic_reasoning() -> N
 
     assert out["summary_text"]
     assert out["key_reasons"]
-    assert "mystery_feature_xyz" in out["technical_details"]["contributions"][0]["feature"]
+    assert "mystery_feature_xyz" in out["technical_details"]["normalized_contributions"][0]["feature"]
     assert "warrants review" in out["summary_text"].lower()
 
 
@@ -102,8 +103,8 @@ def test_high_risk_velocity_example_maps_to_velocity_pattern() -> None:
 
     out = service.build_human_explanation(payload, features)
 
-    assert "Velocity spike" in out["aml_patterns"]
-    assert any("rapid transaction burst" in item.lower() for item in out["key_reasons"])
+    assert "Rapid fund movement" in out["aml_patterns"]
+    assert any("rapid outgoing movement" in item.lower() for item in out["key_reasons"])
 
 
 def test_structuring_like_example_maps_to_structuring_pattern() -> None:
@@ -117,7 +118,7 @@ def test_structuring_like_example_maps_to_structuring_pattern() -> None:
 
     out = service.build_human_explanation(payload, features)
 
-    assert "Structuring" in out["aml_patterns"]
+    assert "Possible structuring" in out["aml_patterns"]
     assert any("structuring" in item.lower() for item in out["key_reasons"])
     assert len(out["aml_patterns"]) <= 3
 
@@ -182,9 +183,12 @@ def test_explain_service_returns_raw_and_human_interpretation_layers() -> None:
     assert "human_interpretation" in result
     human = result["human_interpretation"]
     assert "summary_text" in human
+    assert "key_risk_drivers" in human
     assert "key_reasons" in human
     assert "aml_patterns" in human
+    assert "analyst_next_steps" in human
     assert "analyst_focus_points" in human
+    assert "confidence_level" in human
     assert "technical_details" in human
 
     # UI-ready flattened format.
@@ -192,4 +196,4 @@ def test_explain_service_returns_raw_and_human_interpretation_layers() -> None:
     assert "headline" in result["human_interpretation_view"]
     assert "reasons" in result["human_interpretation_view"]
     assert "patterns" in result["human_interpretation_view"]
-
+    assert "next_steps" in result["human_interpretation_view"]

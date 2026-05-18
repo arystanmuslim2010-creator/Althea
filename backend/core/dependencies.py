@@ -40,6 +40,7 @@ from models.ml_model_service import MLModelService
 from models.model_registry import ModelRegistry
 from services.case_service import CaseWorkflowService
 from services.counterparty_intelligence_service import CounterpartyIntelligenceService
+from services.evaluation_service import EvaluationService
 from services.explain_service import ExplainabilityService
 from services.alert_ingestion_service import AlertIngestionService
 from services.feature_adapter import AlertFeatureAdapter
@@ -63,6 +64,7 @@ from services.job_queue_service import JobQueueService
 from services.model_monitoring_service import ModelMonitoringService
 from services.ops_service import OpsService
 from services.pipeline_service import PipelineService
+from services.pilot_metrics_service import PilotMetricsService
 from services.scoring_service import EnterpriseScoringService
 from services.time_scoring_service import TimeScoringService
 from storage.object_storage import ObjectStorage
@@ -306,6 +308,11 @@ def get_case_service() -> CaseWorkflowService:
 
 
 @lru_cache(maxsize=1)
+def get_evaluation_service() -> EvaluationService:
+    return EvaluationService(get_repository())
+
+
+@lru_cache(maxsize=1)
 def get_explain_service() -> ExplainabilityService:
     return ExplainabilityService(get_repository())
 
@@ -404,6 +411,11 @@ def get_pipeline_service() -> PipelineService:
 @lru_cache(maxsize=1)
 def get_ops_service() -> OpsService:
     return OpsService()
+
+
+@lru_cache(maxsize=1)
+def get_pilot_metrics_service() -> PilotMetricsService:
+    return PilotMetricsService(get_repository(), get_evaluation_service())
 
 
 @lru_cache(maxsize=1)
@@ -542,6 +554,7 @@ def build_app_state() -> dict:
         "feature_materialization_service": get_feature_materialization_service(),
         "scoring_service": get_scoring_service(),
         "case_service": get_case_service(),
+        "evaluation_service": get_evaluation_service(),
         "explain_service": get_explain_service(),
         "governance_explainability_service": get_governance_explainability_service(),
         "model_governance_lifecycle": get_model_governance_lifecycle(),
@@ -557,6 +570,7 @@ def build_app_state() -> dict:
         "ml_service": get_ml_service(),
         "model_monitoring_service": get_model_monitoring_service(),
         "ops_service": get_ops_service(),
+        "pilot_metrics_service": get_pilot_metrics_service(),
         "metrics": get_metrics_registry(),
         # Investigation Intelligence
         "investigation_summary_service": get_investigation_summary_service(),
