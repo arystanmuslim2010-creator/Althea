@@ -3,6 +3,7 @@
  */
 import {
   mapCaseStatusForUpdate,
+  normalizeCounterpartyIntelligence,
   normalizeHealthResponse,
   normalizeInvestigationContext,
   normalizeNarrativeDraft,
@@ -264,6 +265,7 @@ export const api = {
   bulkAssignAlerts: (alertIds, assignedTo) => req('POST', '/alerts/bulk-assign', { alert_ids: alertIds, assigned_to: assignedTo }),
   bulkUpdateAlertStatus: (alertIds, status) => req('POST', '/alerts/bulk-status', { alert_ids: alertIds, status }),
   getInvestigationContext: async (alertId) => normalizeInvestigationContext(await req('GET', `/alerts/${alertId}/investigation-context`)),
+  getCounterpartyIntelligence: async (alertId) => normalizeCounterpartyIntelligence(await req('GET', `/alerts/${alertId}/counterparty-intelligence`)),
   getNetworkGraph: async (alertId) => normalizeNetworkGraph(await req('GET', `/alerts/${alertId}/network-graph`)),
   getNarrativeDraft: async (alertId) => normalizeNarrativeDraft(await req('GET', `/alerts/${alertId}/narrative-draft`), alertId),
   getAlertOutcome: (alertId) => req('GET', `/alerts/${alertId}/outcome`),

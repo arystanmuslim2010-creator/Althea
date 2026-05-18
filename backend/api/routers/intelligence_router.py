@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 from core.access_control import require_alert_access, require_governance_access
 from core.observability import record_narrative_generation, record_narrative_generation_failure
 from core.security import get_authenticated_tenant_id, require_permissions
+from services.counterparty_intelligence_service import CounterpartyIntelligenceService
 from workflows.alert_workflow_service import apply_alert_assignment_transition
 
 router = APIRouter(prefix="/api", tags=["intelligence"])
@@ -376,6 +377,39 @@ def get_global_signals(
         min_tenant_count=min_tenant_count,
     )
     return {"alert_id": alert_id, "global_signals": signals, "total": len(signals)}
+
+
+@router.get("/alerts/{alert_id}/counterparty-intelligence")
+def get_counterparty_intelligence(
+    alert_id: str,
+    request: Request,
+    lookback_days: int = Query(default=90, ge=1, le=365),
+    linked_alert_window_days: int = Query(default=30, ge=1, le=180),
+    run_id: Optional[str] = None,
+    tenant_id: str = Depends(get_authenticated_tenant_id),
+) -> dict[str, Any]:
+    """Return bank-data-only counterparty context for human investigation support."""
+    rid = run_id or _active_run_id(request, tenant_id)
+    require_alert_access(request, tenant_id, _request_user(request, tenant_id), alert_id, rid)
+    service = getattr(request.app.state, "counterparty_intelligence_service", None)
+    if service is None:
+        service = CounterpartyIntelligenceService(
+            repository=request.app.state.repository,
+            enrichment_repository=getattr(request.app.state, "enrichment_repository", None),
+        )
+    try:
+        payload = service.get_counterparty_intelligence(
+            tenant_id=tenant_id,
+            alert_id=alert_id,
+            lookback_days=lookback_days,
+            linked_alert_window_days=linked_alert_window_days,
+        )
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    except Exception:
+        logger.exception("Counterparty intelligence failed", extra={"alert_id": alert_id})
+        raise HTTPException(status_code=500, detail="Counterparty intelligence unavailable")
+    return {"counterparty_intelligence": payload}
 
 
 # ── Investigation Workflow (assign / escalate / close) ────────────────────────

@@ -90,4 +90,36 @@ describe('api client contracts', () => {
     expect(draft.sections.activity_summary).toBe('summary')
     expect(draft.source_signals.reason_codes).toEqual(['R1'])
   })
+
+  it('calls counterparty intelligence endpoint and returns normalized payload', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse({
+          counterparty_intelligence: {
+            alert_id: 'A1',
+            summary: { total_counterparties: 2, fan_out_detected: true, counterparty_concentration: 'high' },
+            top_counterparties: [{ counterparty_id: 'CP-1', direction: 'outbound', transaction_count: 3, volume_share: 0.8 }],
+            signals: [{ type: 'fan_out', severity: 'medium', label: 'Outgoing fan-out pattern', explanation: 'Requires analyst review.' }],
+          },
+        }),
+      ),
+    )
+
+    const payload = await api.getCounterpartyIntelligence('A1')
+    expect(payload.alert_id).toBe('A1')
+    expect(payload.summary.total_counterparties).toBe(2)
+    expect(payload.summary.fan_out_detected).toBe(true)
+    expect(payload.top_counterparties[0].counterparty_id).toBe('CP-1')
+    expect(payload.signals[0].label).toBe('Outgoing fan-out pattern')
+  })
+
+  it('sanitizes raw backend errors for counterparty intelligence requests', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({ detail: 'Traceback C:\\secret\\stack sqlalchemy token' }, 500)),
+    )
+
+    await expect(api.getCounterpartyIntelligence('A1')).rejects.toThrow('Request failed. Please try again or contact an administrator.')
+  })
 })

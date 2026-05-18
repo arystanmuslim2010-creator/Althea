@@ -97,7 +97,8 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(IngestionError)
     def ingestion_exception_handler(request, exc: IngestionError):
-        response = JSONResponse(status_code=400, content={"detail": str(exc)})
+        logger.warning("Ingestion request rejected", exc_info=exc)
+        response = JSONResponse(status_code=400, content={"detail": "Invalid request"})
         request_id = str(getattr(request.state, "request_id", "") or "").strip()
         if request_id:
             response.headers["X-Request-ID"] = request_id

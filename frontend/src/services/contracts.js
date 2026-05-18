@@ -59,6 +59,16 @@ function toStringArray(value) {
   return toSafeArray(value).map((item) => String(item ?? '')).filter(Boolean)
 }
 
+function normalizeSignal(payload) {
+  const signal = toSafeObject(payload)
+  return {
+    type: String(signal.type ?? ''),
+    severity: String(signal.severity ?? 'low'),
+    label: String(signal.label ?? 'Linked-pattern signal'),
+    explanation: String(signal.explanation ?? ''),
+  }
+}
+
 function normalizeCustomerProfile(payload) {
   const profile = toSafeObject(payload)
   return {
@@ -240,6 +250,58 @@ export function normalizeInvestigationContext(payload) {
     data_availability: normalizeDataAvailability(context.data_availability),
     assembled_at: context.assembled_at ?? null,
     assembly_latency_seconds: toNumber(context.assembly_latency_seconds, 0),
+  }
+}
+
+export function normalizeCounterpartyIntelligence(payload) {
+  const source = toSafeObject(payload?.counterparty_intelligence ?? payload)
+  const summary = toSafeObject(source.summary)
+  return {
+    alert_id: source.alert_id ?? null,
+    tenant_id: source.tenant_id ?? null,
+    lookback_days: toNumber(source.lookback_days, 90),
+    linked_alert_window_days: toNumber(source.linked_alert_window_days, 30),
+    summary: {
+      total_counterparties: toNumber(summary.total_counterparties, 0),
+      new_counterparties: toNumber(summary.new_counterparties, 0),
+      recurring_counterparties: toNumber(summary.recurring_counterparties, 0),
+      new_counterparty_share: toNullableNumber(summary.new_counterparty_share),
+      recurring_counterparty_share: toNullableNumber(summary.recurring_counterparty_share),
+      top_counterparty_volume_share: toNullableNumber(summary.top_counterparty_volume_share),
+      top_3_counterparty_volume_share: toNullableNumber(summary.top_3_counterparty_volume_share),
+      counterparty_concentration: String(summary.counterparty_concentration ?? 'low'),
+      inbound_counterparty_count: toNumber(summary.inbound_counterparty_count, 0),
+      outbound_counterparty_count: toNumber(summary.outbound_counterparty_count, 0),
+      shared_counterparty_alerts: toNumber(summary.shared_counterparty_alerts, 0),
+      linked_escalated_cases: toNumber(summary.linked_escalated_cases, 0),
+      fan_in_detected: Boolean(summary.fan_in_detected),
+      fan_out_detected: Boolean(summary.fan_out_detected),
+    },
+    top_counterparties: toSafeArray(source.top_counterparties).map((item) => {
+      const row = toSafeObject(item)
+      return {
+        counterparty_id: String(row.counterparty_id ?? ''),
+        direction: String(row.direction ?? 'unknown'),
+        transaction_count: toNumber(row.transaction_count, 0),
+        total_amount: toNumber(row.total_amount, 0),
+        currency_count: toNumber(row.currency_count, 0),
+        first_seen_at: row.first_seen_at ?? null,
+        last_seen_at: row.last_seen_at ?? null,
+        is_new: Boolean(row.is_new),
+        linked_alert_count: toNumber(row.linked_alert_count, 0),
+        linked_escalated_case_count: toNumber(row.linked_escalated_case_count, 0),
+        volume_share: toNullableNumber(row.volume_share),
+      }
+    }).filter((item) => item.counterparty_id),
+    linked_alerts: toSafeArray(source.linked_alerts).map((item) => toSafeObject(item)),
+    signals: toSafeArray(source.signals).map((item) => normalizeSignal(item)),
+    analyst_takeaway: String(source.analyst_takeaway ?? ''),
+    data_quality: {
+      partial: Boolean(toSafeObject(source.data_quality).partial),
+      missing_fields: toStringArray(toSafeObject(source.data_quality).missing_fields),
+      warnings: toStringArray(toSafeObject(source.data_quality).warnings),
+    },
+    graph_preview: toSafeObject(source.graph_preview),
   }
 }
 

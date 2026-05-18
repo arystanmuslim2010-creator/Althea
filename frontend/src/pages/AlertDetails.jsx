@@ -208,6 +208,14 @@ function workflowBadgeClass(status) {
   return `${base} bg-[var(--surface2)] text-[var(--muted)]`
 }
 
+function signalBadgeClass(severity) {
+  const value = String(severity || '').toLowerCase()
+  const base = 'inline-flex items-center rounded-full px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-wide'
+  if (value === 'high') return `${base} bg-red-500/15 text-red-700 dark:text-red-300`
+  if (value === 'medium') return `${base} bg-amber-500/15 text-amber-700 dark:text-amber-300`
+  return `${base} bg-blue-500/15 text-blue-700 dark:text-blue-300`
+}
+
 function SectionCard({ title, subtitle = '', actions = null, children }) {
   return (
     <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-md">
@@ -295,6 +303,9 @@ export function AlertDetails() {
   const [queueItem, setQueueItem] = useState(null)
   const [caseInfo, setCaseInfo] = useState(null)
   const [context, setContext] = useState(null)
+  const [counterpartyIntel, setCounterpartyIntel] = useState(null)
+  const [counterpartyLoading, setCounterpartyLoading] = useState(false)
+  const [counterpartyError, setCounterpartyError] = useState('')
   const [networkGraph, setNetworkGraph] = useState(null)
   const [graphLoading, setGraphLoading] = useState(false)
   const [graphError, setGraphError] = useState('')
@@ -376,17 +387,20 @@ export function AlertDetails() {
 
   const load = async () => {
     setLoading(true)
+    setCounterpartyLoading(true)
+    setCounterpartyError('')
     setError('')
     setWarnings([])
 
     try {
-      const [alertResult, explainResult, notesResult, queueResult, contextResult, outcomeResult] = await Promise.allSettled([
+      const [alertResult, explainResult, notesResult, queueResult, contextResult, outcomeResult, counterpartyResult] = await Promise.allSettled([
         api.getAlert(id),
         api.getAlertExplain(id),
         api.getAlertNotes(id),
         api.getWorkQueue({ limit: 500 }),
         api.getInvestigationContext(id),
         api.getAlertOutcome(id),
+        api.getCounterpartyIntelligence(id),
       ])
 
       if (alertResult.status !== 'fulfilled') {
@@ -399,12 +413,14 @@ export function AlertDetails() {
       const queuePayload = queueResult.status === 'fulfilled' ? (queueResult.value || { queue: [] }) : { queue: [] }
       const contextPayload = contextResult.status === 'fulfilled' ? (contextResult.value || null) : null
       const outcomePayload = outcomeResult.status === 'fulfilled' ? (outcomeResult.value || null) : null
+      const counterpartyPayload = counterpartyResult.status === 'fulfilled' ? (counterpartyResult.value || null) : null
 
       setAlert(alertPayload)
       setExplain(explainPayload)
       setNotes(toArray(notesPayload.notes))
       setContext(contextPayload)
       setOutcome(outcomePayload)
+      setCounterpartyIntel(counterpartyPayload)
 
       const matchedQueueItem = toArray(queuePayload.queue).find((item) => String(item?.alert_id) === String(id)) || null
       setQueueItem(matchedQueueItem)
@@ -439,6 +455,10 @@ export function AlertDetails() {
       if (outcomeResult.status === 'rejected' && !/no outcome recorded/i.test(outcomeErrorMessage)) {
         loadWarnings.push('Recorded outcome details could not be loaded.')
       }
+      if (counterpartyResult.status === 'rejected') {
+        setCounterpartyIntel(null)
+        setCounterpartyError('Counterparty intelligence is temporarily unavailable.')
+      }
       setWarnings(loadWarnings)
 
       const embeddedGraph = contextPayload?.network_graph
@@ -466,11 +486,14 @@ export function AlertDetails() {
       setQueueItem(null)
       setCaseInfo(null)
       setContext(null)
+      setCounterpartyIntel(null)
+      setCounterpartyError('')
       setOutcome(null)
       setNetworkGraph(null)
       setNarrativeDraft(null)
     } finally {
       setLoading(false)
+      setCounterpartyLoading(false)
     }
   }
 
@@ -565,6 +588,14 @@ export function AlertDetails() {
   const modelMetadata = useMemo(() => toObject(context?.model_metadata), [context])
   const sarDraft = useMemo(() => toObject(context?.sar_draft), [context])
   const recordedOutcome = useMemo(() => toObject(outcome || context?.outcome), [context, outcome])
+  const counterpartyIntelSummary = useMemo(() => toObject(counterpartyIntel?.summary), [counterpartyIntel])
+  const counterpartyIntelRows = useMemo(() => toArray(counterpartyIntel?.top_counterparties), [counterpartyIntel])
+  const counterpartyIntelSignals = useMemo(() => toArray(counterpartyIntel?.signals), [counterpartyIntel])
+  const counterpartyDataQuality = useMemo(() => toObject(counterpartyIntel?.data_quality), [counterpartyIntel])
+  const hasCounterpartyIntel = useMemo(
+    () => Number(counterpartyIntelSummary.total_counterparties || 0) > 0 || counterpartyIntelRows.length > 0 || counterpartyIntelSignals.length > 0,
+    [counterpartyIntelRows, counterpartyIntelSignals, counterpartyIntelSummary],
+  )
 
   const caseId = cleanText(caseInfo?.case_id || queueItem?.case_id)
   const caseStatus = cleanText(caseInfo?.status || queueItem?.case_status || null)
@@ -927,6 +958,87 @@ export function AlertDetails() {
         </SectionCard>
       </div>
 
+      <SectionCard
+        title="Counterparty Intelligence"
+        subtitle="Counterparty context and linked-pattern signals for investigation support. Human review required."
+      >
+        {counterpartyLoading ? (
+          <p className="m-0 text-sm text-[var(--muted)]">Loading counterparty intelligence...</p>
+        ) : counterpartyError ? (
+          <p className="m-0 text-sm text-amber-700 dark:text-amber-300">{counterpartyError}</p>
+        ) : hasCounterpartyIntel ? (
+          <div className="space-y-4">
+            {counterpartyDataQuality.partial ? (
+              <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+                Some fields are unavailable because the pilot dataset does not include full counterparty metadata.
+              </div>
+            ) : null}
+
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Metric label="Total Counterparties" value={formatDisplayValue(counterpartyIntelSummary.total_counterparties)} />
+              <Metric label="New Counterparties" value={formatDisplayValue(counterpartyIntelSummary.new_counterparties)} />
+              <Metric label="Recurring Counterparties" value={formatDisplayValue(counterpartyIntelSummary.recurring_counterparties)} />
+              <Metric label="Concentration" value={formatStatus(counterpartyIntelSummary.counterparty_concentration)} />
+              <Metric label="Shared Alerts" value={formatDisplayValue(counterpartyIntelSummary.shared_counterparty_alerts)} />
+              <Metric label="Linked Cases" value={formatDisplayValue(counterpartyIntelSummary.linked_escalated_cases)} />
+              <Metric label="Fan-In" value={formatBooleanState(counterpartyIntelSummary.fan_in_detected, ['Not detected', 'Detected'])} />
+              <Metric label="Fan-Out" value={formatBooleanState(counterpartyIntelSummary.fan_out_detected, ['Not detected', 'Detected'])} />
+            </div>
+
+            <div className="overflow-x-auto rounded-lg border border-[var(--border)]">
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr>
+                    <th className="border-b border-[var(--border)] px-3 py-2 text-left text-[0.72rem] uppercase tracking-wide text-[var(--muted)]">Counterparty</th>
+                    <th className="border-b border-[var(--border)] px-3 py-2 text-left text-[0.72rem] uppercase tracking-wide text-[var(--muted)]">Direction</th>
+                    <th className="border-b border-[var(--border)] px-3 py-2 text-left text-[0.72rem] uppercase tracking-wide text-[var(--muted)]">Tx Count</th>
+                    <th className="border-b border-[var(--border)] px-3 py-2 text-left text-[0.72rem] uppercase tracking-wide text-[var(--muted)]">Volume Share</th>
+                    <th className="border-b border-[var(--border)] px-3 py-2 text-left text-[0.72rem] uppercase tracking-wide text-[var(--muted)]">New/Recurring</th>
+                    <th className="border-b border-[var(--border)] px-3 py-2 text-left text-[0.72rem] uppercase tracking-wide text-[var(--muted)]">Linked Alerts</th>
+                    <th className="border-b border-[var(--border)] px-3 py-2 text-left text-[0.72rem] uppercase tracking-wide text-[var(--muted)]">Escalated Links</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {counterpartyIntelRows.map((row) => (
+                    <tr key={row.counterparty_id}>
+                      <td className="border-b border-[var(--border)] px-3 py-2 font-medium text-[var(--text)]">{formatDisplayValue(row.counterparty_id)}</td>
+                      <td className="border-b border-[var(--border)] px-3 py-2 text-[var(--text)]">{formatStatus(row.direction)}</td>
+                      <td className="border-b border-[var(--border)] px-3 py-2 text-[var(--text)]">{formatDisplayValue(row.transaction_count)}</td>
+                      <td className="border-b border-[var(--border)] px-3 py-2 text-[var(--text)]">{formatPercent(row.volume_share)}</td>
+                      <td className="border-b border-[var(--border)] px-3 py-2 text-[var(--text)]">{row.is_new ? 'New' : 'Recurring'}</td>
+                      <td className="border-b border-[var(--border)] px-3 py-2 text-[var(--text)]">{formatDisplayValue(row.linked_alert_count)}</td>
+                      <td className="border-b border-[var(--border)] px-3 py-2 text-[var(--text)]">{formatDisplayValue(row.linked_escalated_case_count)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {counterpartyIntelSignals.length ? (
+              <div className="space-y-2">
+                <div className="text-[0.72rem] font-semibold uppercase tracking-wide text-[var(--muted)]">Linked-Pattern Signals</div>
+                {counterpartyIntelSignals.map((signal, index) => (
+                  <div key={`${signal.type || 'signal'}-${index}`} className="rounded-lg border border-[var(--border)] bg-[var(--surface2)] px-4 py-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={signalBadgeClass(signal.severity)}>{formatStatus(signal.severity, 'Low')}</span>
+                      <span className="text-sm font-semibold text-[var(--text)]">{formatDisplayValue(signal.label, 'Linked-pattern signal')}</span>
+                    </div>
+                    <p className="mb-0 mt-2 text-sm text-[var(--text)]">{formatDisplayValue(signal.explanation, 'Investigation context available.')}</p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 px-4 py-3 text-sm text-[var(--text)]">
+              <div className="text-[0.72rem] font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">Investigation Context</div>
+              <p className="mb-0 mt-2">{formatDisplayValue(counterpartyIntel?.analyst_takeaway, 'Counterparty context is available for analyst review.')}</p>
+            </div>
+          </div>
+        ) : (
+          <p className="m-0 text-sm text-[var(--muted)]">No counterparty intelligence available for this alert.</p>
+        )}
+      </SectionCard>
+
       <div className="grid gap-5 lg:grid-cols-2">
         <SectionCard
           title="Counterparty & Geography"
@@ -1278,6 +1390,7 @@ export function AlertDetails() {
         <div className="space-y-3">
           <RawJsonDisclosure label="View raw explanation" payload={normalizedExplanation} />
           <RawJsonDisclosure label="View raw intelligence payload" payload={context} />
+          <RawJsonDisclosure label="View raw counterparty intelligence" payload={counterpartyIntel} />
           <RawJsonDisclosure label="View raw alert payload" payload={alert} />
           <RawJsonDisclosure label="View raw graph payload" payload={networkGraph} />
           <RawJsonDisclosure label="View raw narrative draft JSON" payload={narrativeDraft} />

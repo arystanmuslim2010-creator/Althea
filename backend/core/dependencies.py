@@ -39,6 +39,7 @@ from models.inference_service import InferenceService
 from models.ml_model_service import MLModelService
 from models.model_registry import ModelRegistry
 from services.case_service import CaseWorkflowService
+from services.counterparty_intelligence_service import CounterpartyIntelligenceService
 from services.explain_service import ExplainabilityService
 from services.alert_ingestion_service import AlertIngestionService
 from services.feature_adapter import AlertFeatureAdapter
@@ -504,6 +505,14 @@ def get_analyst_workspace_enrichment_service() -> AnalystWorkspaceEnrichmentServ
     )
 
 
+@lru_cache(maxsize=1)
+def get_counterparty_intelligence_service() -> CounterpartyIntelligenceService:
+    return CounterpartyIntelligenceService(
+        repository=get_repository(),
+        enrichment_repository=get_enrichment_repository(),
+    )
+
+
 def build_app_state() -> dict:
     settings = get_settings()
     repository = get_repository()
@@ -559,6 +568,7 @@ def build_app_state() -> dict:
         "feedback_service": get_feedback_service(),
         "global_pattern_service": get_global_pattern_service(),
         "analyst_workspace_enrichment_service": get_analyst_workspace_enrichment_service(),
+        "counterparty_intelligence_service": get_counterparty_intelligence_service(),
         "investigation_time_service": get_investigation_time_service(),
         "time_scoring_service": get_time_scoring_service(),
         "training_run_service": get_training_run_service(),

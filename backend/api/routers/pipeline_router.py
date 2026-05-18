@@ -945,6 +945,9 @@ def get_training_run(
     """Fetch the full record for a single training run including metadata_json."""
     from sqlalchemy import text
 
+    require_governance_access(user, write=False)
+    full = str(user.get("role") or "").lower() in {"admin", "governance"} or "manage_model_governance" in set(user.get("permissions") or [])
+
     try:
         with request.app.state.repository.session(tenant_id=tenant_id) as session:
             row = session.execute(
@@ -1050,6 +1053,7 @@ def get_performance_report(
     user: dict = Depends(get_current_user),
 ) -> dict:
     """Return PR-AUC, precision@k, capture rate and breakdown by typology."""
+    require_governance_access(user, write=False)
     monitoring_service = getattr(request.app.state, "model_monitoring_service", None)
     if monitoring_service is None:
         raise HTTPException(status_code=503, detail="Monitoring service not configured")
@@ -1069,6 +1073,7 @@ def get_calibration_report(
     user: dict = Depends(get_current_user),
 ) -> dict:
     """Return ECE, reliability diagram, and calibration drift."""
+    require_governance_access(user, write=False)
     monitoring_service = getattr(request.app.state, "model_monitoring_service", None)
     if monitoring_service is None:
         raise HTTPException(status_code=503, detail="Monitoring service not configured")
@@ -1088,6 +1093,7 @@ def get_business_report(
     user: dict = Depends(get_current_user),
 ) -> dict:
     """Return queue compression, analyst hours, human-recorded SAR/STR capture rate, and typology breakdown."""
+    require_governance_access(user, write=False)
     monitoring_service = getattr(request.app.state, "model_monitoring_service", None)
     if monitoring_service is None:
         raise HTTPException(status_code=503, detail="Monitoring service not configured")
@@ -1096,8 +1102,6 @@ def get_business_report(
         model_version=model_version,
         lookback_days=lookback_days,
     )
-    require_governance_access(user, write=False)
-    full = str(user.get("role") or "").lower() in {"admin", "governance"} or "manage_model_governance" in set(user.get("permissions") or [])
     require_governance_access(user, write=True)
     require_governance_access(user, write=False)
     require_governance_access(user, write=False)

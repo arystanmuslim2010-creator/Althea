@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   mapCaseStatusForUpdate,
+  normalizeCounterpartyIntelligence,
   normalizeExplanationPayload,
   normalizeInvestigationContext,
   normalizeNarrativeDraft,
@@ -37,6 +38,22 @@ describe('contracts mappers', () => {
     expect(graph.edges[0].type).toBe('transaction')
     expect(graph.summary.node_count).toBe(1)
     expect(graph.summary.edge_count).toBe(1)
+  })
+
+  it('normalizes counterparty intelligence response shape', () => {
+    const payload = normalizeCounterpartyIntelligence({
+      counterparty_intelligence: {
+        alert_id: 'A1',
+        summary: { total_counterparties: '2', fan_in_detected: true },
+        top_counterparties: [{ counterparty_id: 'CP-1', transaction_count: '3', volume_share: '0.5' }],
+        signals: [{ label: 'Linked-pattern signal', explanation: 'Requires analyst review.' }],
+      },
+    })
+    expect(payload.alert_id).toBe('A1')
+    expect(payload.summary.total_counterparties).toBe(2)
+    expect(payload.summary.fan_in_detected).toBe(true)
+    expect(payload.top_counterparties[0].transaction_count).toBe(3)
+    expect(payload.signals[0].label).toBe('Linked-pattern signal')
   })
 
   it('normalizes narrative draft fallback fields', () => {

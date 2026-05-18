@@ -28,6 +28,7 @@ vi.mock('../services/api', () => ({
     getAlertNotes: vi.fn(),
     getWorkQueue: vi.fn(),
     getInvestigationContext: vi.fn(),
+    getCounterpartyIntelligence: vi.fn(),
     getNetworkGraph: vi.fn(),
     getNarrativeDraft: vi.fn(),
     getAlertOutcome: vi.fn(),
@@ -201,6 +202,43 @@ describe('AlertDetails', () => {
       case_status: { case_id: 'CASE-1', status: 'under_review', assigned_to: 'u1' },
       model_metadata: { model_version: 'model-v1', approval_state: 'approved' },
     })
+    api.getCounterpartyIntelligence.mockResolvedValue({
+      alert_id: 'A1',
+      summary: {
+        total_counterparties: 3,
+        new_counterparties: 2,
+        recurring_counterparties: 1,
+        new_counterparty_share: 0.67,
+        recurring_counterparty_share: 0.33,
+        top_counterparty_volume_share: 0.72,
+        counterparty_concentration: 'high',
+        shared_counterparty_alerts: 2,
+        linked_escalated_cases: 1,
+        fan_in_detected: false,
+        fan_out_detected: true,
+      },
+      top_counterparties: [
+        {
+          counterparty_id: 'CP-ALPHA',
+          direction: 'outbound',
+          transaction_count: 4,
+          volume_share: 0.72,
+          is_new: true,
+          linked_alert_count: 2,
+          linked_escalated_case_count: 1,
+        },
+      ],
+      signals: [
+        {
+          type: 'counterparty_concentration',
+          severity: 'high',
+          label: 'Counterparty concentration',
+          explanation: '72% of recent volume is concentrated in the top counterparty, a linked-pattern signal for investigation context.',
+        },
+      ],
+      analyst_takeaway: 'Counterparty context includes high-severity linked-pattern signals; prioritize human review before any workflow decision.',
+      data_quality: { partial: false, missing_fields: [], warnings: [] },
+    })
     api.getAlertOutcome.mockResolvedValue(null)
     api.getNetworkGraph.mockResolvedValue({
       alert_id: 'A1',
@@ -238,6 +276,9 @@ describe('AlertDetails', () => {
     expect(screen.queryByText('Create Case')).toBeNull()
     expect(screen.getByText('Customer & Account Profile')).not.toBeNull()
     expect(screen.getByText('Behavior vs Baseline')).not.toBeNull()
+    expect(screen.getByText('Counterparty Intelligence')).not.toBeNull()
+    expect(screen.getByText('CP-ALPHA')).not.toBeNull()
+    expect(screen.getByText('Counterparty concentration')).not.toBeNull()
     expect(screen.getByText('Counterparty & Geography')).not.toBeNull()
     expect(screen.getByText('Screening & Data Coverage')).not.toBeNull()
     expect(screen.getByText('Recommended Next Steps')).not.toBeNull()
@@ -256,6 +297,9 @@ describe('AlertDetails', () => {
     expect(screen.getByText((content) => content.includes('feature_attribution'))).not.toBeNull()
     expect(api.getNetworkGraph).not.toHaveBeenCalled()
     expect(api.getNarrativeDraft).not.toHaveBeenCalled()
+    expect(screen.queryByText(/criminal network/i)).toBeNull()
+    expect(screen.queryByText(/confirmed laundering/i)).toBeNull()
+    expect(screen.queryByText(/SAR required/i)).toBeNull()
   })
 
   it('shows scoped fallback messages when graph and narrative data remain unavailable', async () => {
@@ -292,6 +336,42 @@ describe('AlertDetails', () => {
     expect(screen.getByText('Narrative draft is temporarily unavailable.')).not.toBeNull()
     expect(screen.getByText('Screening data unavailable')).not.toBeNull()
     expect(screen.queryByText('Some investigation context is temporarily unavailable.')).toBeNull()
+  })
+
+  it('renders empty state when no counterparty intelligence is available', async () => {
+    const { api } = await import('../services/api')
+    api.getCounterpartyIntelligence.mockResolvedValueOnce({
+      alert_id: 'A1',
+      summary: { total_counterparties: 0 },
+      top_counterparties: [],
+      signals: [],
+      analyst_takeaway: 'No counterparty intelligence is available from the current pilot data for this alert.',
+      data_quality: { partial: true, missing_fields: ['transactions'], warnings: [] },
+    })
+
+    render(
+      <MemoryRouter>
+        <AlertDetails />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('Counterparty Intelligence')).not.toBeNull())
+    expect(screen.getByText('No counterparty intelligence available for this alert.')).not.toBeNull()
+  })
+
+  it('shows safe counterparty intelligence API error message', async () => {
+    const { api } = await import('../services/api')
+    api.getCounterpartyIntelligence.mockRejectedValueOnce(new Error('Traceback C:\\secret\\stack'))
+
+    render(
+      <MemoryRouter>
+        <AlertDetails />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('Counterparty intelligence is temporarily unavailable.')).not.toBeNull())
+    expect(screen.queryByText(/Traceback/)).toBeNull()
+    expect(screen.queryByText(/secret/)).toBeNull()
   })
 
   it('renders model-based explanation messaging for SHAP payloads', async () => {

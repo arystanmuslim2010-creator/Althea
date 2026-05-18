@@ -697,6 +697,35 @@ def test_metrics_endpoint_requires_view_system_logs_permission(client: TestClien
     assert forbidden.status_code == 403
 
 
+def test_training_run_detail_requires_governance_access_for_analyst(client: TestClient):
+    client.app.dependency_overrides[get_current_user] = lambda: {
+        "user_id": "u1",
+        "id": "u1",
+        "role": "analyst",
+        "permissions": ["view_assigned_alerts"],
+        "tenant_id": "tenant-a",
+    }
+    res = client.get("/api/ml/training-runs/run-1")
+    assert res.status_code == 403
+
+
+def test_monitoring_endpoints_require_governance_access_for_analyst(client: TestClient):
+    client.app.dependency_overrides[get_current_user] = lambda: {
+        "user_id": "u1",
+        "id": "u1",
+        "role": "analyst",
+        "permissions": ["view_assigned_alerts"],
+        "tenant_id": "tenant-a",
+    }
+    for path in (
+        "/api/ml/monitoring/performance",
+        "/api/ml/monitoring/calibration",
+        "/api/ml/monitoring/business",
+    ):
+        res = client.get(path)
+        assert res.status_code == 403
+
+
 def test_internal_ml_predict_passes_runtime_enrichment_context(client: TestClient):
     captured: dict[str, object] = {}
 
